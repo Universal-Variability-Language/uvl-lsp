@@ -478,7 +478,7 @@ impl FileGraph {
                         let path = self.parse_path(source, ctx)?;
                         self.references.push(Reference {
                             path,
-                            ty: Type::Number,
+                            ty: Type::Feature,
                         });
                         let id = Symbol::Reference(self.references.len() as u32 - 1);
 
@@ -486,14 +486,14 @@ impl FileGraph {
                             op,
                             context: Some(id),
                             query: self
-                                .parse_path(source, node.child_by_field_name("attribs").unwrap())?,
+                                .parse_path(source, node.child_by_field_name("query").unwrap())?,
                         })
                     } else {
                         Some(Numeric::Aggregate {
                             op,
                             context: None,
                             query: self
-                                .parse_path(source, node.child_by_field_name("attribs").unwrap())?,
+                                .parse_path(source, node.child_by_field_name("query").unwrap())?,
                         })
                     }
                 } else {
