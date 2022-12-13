@@ -283,7 +283,7 @@ impl FileState {
                     })
                 }
                 if i.range.start.line - i.range.end.line > 2 {
-                    for l in i.range.start.line + 1..i.range.end.line - 1 {
+                    for l in i.range.start.line + 1..i.range.end.line {
                         filtered.push(SemanticToken {
                             delta_line: 1,
                             delta_start: 0,
