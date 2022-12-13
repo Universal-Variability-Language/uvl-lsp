@@ -99,14 +99,7 @@ pub enum CompletionEnv {
 impl CompletionEnv {
     fn is_relevant(&self, kind: CompletionKind) -> bool {
         match self {
-            Self::Numeric => matches!(
-                kind,
-                CompletionKind::AttributeNumber
-                    | CompletionKind::AttributeAttributes
-                    | CompletionKind::Folder
-                    | CompletionKind::File
-            ),
-            Self::Constraint | Self::Feature => matches!(
+            Self::Feature => matches!(
                 kind,
                 CompletionKind::Feature | CompletionKind::Folder | CompletionKind::File
             ),
@@ -251,7 +244,7 @@ struct CompletionQuery {
     postfix: CompactString,
     postfix_range: Range,
     env: CompletionEnv,
-    is_continous: bool,
+    offset: CompletionOffset,
 }
 impl CompletionQuery {
     fn text_edit(&self, text: TextOP) -> TextEdit {
@@ -268,17 +261,26 @@ fn node_at(node: Node, pos: tree_sitter::Point) -> Node {
     next.column += 1;
     node.named_descendant_for_point_range(pos, next).unwrap()
 }
-
-fn position_to_node<'a>(source: &Rope, tree: &'a Tree, pos: &Position) -> (bool, Node<'a>) {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CompletionOffset {
+    Continous,
+    SameLine,
+    Cut,
+}
+fn position_to_node<'a>(
+    source: &Rope,
+    tree: &'a Tree,
+    pos: &Position,
+) -> (CompletionOffset, Node<'a>) {
     let line = source.line(pos.line as usize);
     let rel_char = line.utf16_cu_to_char(pos.character as usize);
     if rel_char == 0 {
-        (false, tree.root_node())
+        (CompletionOffset::SameLine, tree.root_node())
     } else {
         let base_offset = source.line_to_char(pos.line as usize);
         if !source.char(base_offset + rel_char - 1).is_whitespace() {
             (
-                true,
+                CompletionOffset::Continous,
                 node_at(
                     tree.root_node(),
                     Point {
@@ -291,7 +293,7 @@ fn position_to_node<'a>(source: &Rope, tree: &'a Tree, pos: &Position) -> (bool,
             for i in (0..rel_char - 1).rev() {
                 if !source.char(base_offset + i).is_whitespace() {
                     return (
-                        false,
+                        CompletionOffset::SameLine,
                         node_at(
                             tree.root_node(),
                             Point {
@@ -308,7 +310,7 @@ fn position_to_node<'a>(source: &Rope, tree: &'a Tree, pos: &Position) -> (bool,
                     .is_whitespace()
                 {
                     return (
-                        false,
+                        CompletionOffset::Cut,
                         node_at(
                             tree.root_node(),
                             Point {
@@ -321,7 +323,7 @@ fn position_to_node<'a>(source: &Rope, tree: &'a Tree, pos: &Position) -> (bool,
             }
 
             (
-                false,
+                CompletionOffset::Cut,
                 node_at(
                     tree.root_node(),
                     Point {
@@ -337,13 +339,14 @@ fn position_to_node<'a>(source: &Rope, tree: &'a Tree, pos: &Position) -> (bool,
 fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
     match draft {
         Draft::Tree { source, tree, .. } => {
-            let (is_continous, edit_node) = position_to_node(source, tree, pos);
+            let (offset, edit_node) = position_to_node(source, tree, pos);
             info!("Completion for: {:?}", edit_node);
-            if let (Some((path, path_node)), true) = (longest_path(edit_node, source), is_continous)
+            if let (Some((path, path_node)), CompletionOffset::Continous) =
+                (longest_path(edit_node, source), offset)
             {
                 if let Some(tail) = path_node.child_by_field_name("tail") {
                     Some(CompletionQuery {
-                        is_continous: true,
+                        offset,
                         postfix_range: lsp_range(tail.end_byte()..tail.end_byte(), source)?,
                         postfix: CompactString::new_inline(""),
                         perfix: path.names,
@@ -352,7 +355,7 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
                     })
                 } else {
                     Some(CompletionQuery {
-                        is_continous: true,
+                        offset,
                         postfix_range: lsp_range(path.spans.last()?.clone(), source)?,
                         postfix: path.names.last()?.as_str().into(),
                         perfix: path.names[..path.names.len() - 1].to_vec(),
@@ -362,8 +365,9 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
                 }
             } else {
                 Some(CompletionQuery {
-                    is_continous: false,
+                    offset,
                     perfix: Vec::new(),
+
                     postfix: "".into(),
                     postfix_range: Range {
                         start: pos.clone(),
@@ -777,12 +781,20 @@ pub fn compute_completions(
         let mut top: TopN<CompletionOpt> = TopN::new(MAX_N);
         let mut is_incomplete = false;
         match &ctx.env {
-            CompletionEnv::GroupMode => add_group_keywords(&ctx.postfix, &mut top, 2.0),
+            CompletionEnv::GroupMode => {
+
+                    add_group_keywords(&ctx.postfix, &mut top, 2.0);
+            }
             CompletionEnv::Toplevel => add_top_lvl_keywords(&ctx.postfix, &mut top, 2.0),
             CompletionEnv::SomeName => {}
             CompletionEnv::Constraint | CompletionEnv::Numeric | CompletionEnv::Feature => {
-                if ctx.env == CompletionEnv::Constraint && !ctx.is_continous {
+                if ctx.env == CompletionEnv::Constraint && ctx.offset != CompletionOffset::Continous
+                {
                     add_logic_op(&ctx.postfix, &mut top, 2.0);
+                }
+                if ctx.env == CompletionEnv::Feature{
+                    add_keywords(&ctx.postfix,&mut top,2.0,["cardinality".into()]);
+
                 }
                 completion_symbol(&snapshot, origin, &ctx, &mut top);
                 is_incomplete = true
@@ -855,6 +867,9 @@ pub fn compute_completions(
                             &ctx,
                         ))
                     }
+                }
+                if context.is_none() {
+                    completion_symbol(&snapshot, origin, &ctx, &mut top);
                 }
             }
             _ => {}

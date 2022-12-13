@@ -49,6 +49,7 @@ static EXTRACT_SYNTAX_HIGHLIGHTING_SRC: &str = r#"
  "constraint"
  "true"
  "false"
+ "cardinality"
  ]@keyword
 (comment) @comment
 (lang_lvl) @macro
@@ -117,7 +118,7 @@ static EXTRACT_DEPENDENCIES_SRC: &str = r#"
 
 static EXTRACT_SYMBOLES_SRC: &str = r#"
 (blk
-  header:[(features) (name) (group_mode)]
+  header:[(features) (name) (group_mode) (cardinality)]
   [(blk
     header: (name)
   )@feature
@@ -141,6 +142,15 @@ static EXTRACT_SYMBOLES_SRC: &str = r#"
 )
 (source_file
     (blk
+        header:(constraints)
+        (blk
+            header: [(name)@constraint (ref path:(_)@constraint)]
+
+         )
+    )
+ )
+(source_file
+    (blk
         header:(namespace name:(_)  @namespace))
 )
 
@@ -156,15 +166,6 @@ static EXTRACT_SYMBOLES_SRC: &str = r#"
     header:[(group_mode)@group (cardinality)@cardinality ]   )
 (attribute_value)@attrib
 (constraint)@constraint
-(source_file
-    (blk
-        header:(constraints)
-        (blk
-            header: [(name)@constraint (ref path:(_)@constraint)]
-
-         )
-    )
- )
 "#;
 
 pub struct Queries {
