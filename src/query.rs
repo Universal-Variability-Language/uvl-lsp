@@ -5,6 +5,7 @@ static CHECK_SYNTAX: &str = r#"
     tail:(_) 
 )@missing_name
 (ERROR 
+ [
     "|"
     "&"
     "=>"
@@ -17,7 +18,7 @@ static CHECK_SYNTAX: &str = r#"
     "-"
     "/"
     "!"
-    ".."
+    ".."]
  )@missing_op
 
 
