@@ -22,8 +22,8 @@ mod document;
 mod check;
 mod color;
 mod completion;
+mod filegraph;
 mod index;
-mod module;
 mod parse;
 mod query;
 mod semantic;
@@ -76,7 +76,7 @@ impl Backend {
 fn load_blocking(
     uri: Url,
     documents: &DashMap<Url, AsyncDraft>,
-    semantic:&Arc<semantic::Context>,
+    semantic: &Arc<semantic::Context>,
 ) {
     if !std::fs::File::open(uri.path())
         .and_then(|mut f| {
@@ -108,7 +108,7 @@ fn load_blocking(
                             data,
                             DocumentState::OwnedByOs(modified),
                             uri.clone(),
-                            semantic.clone()
+                            semantic.clone(),
                         ));
                     }
                 }
@@ -124,7 +124,7 @@ fn load_blocking(
 fn load_all_blocking(
     path: &Path,
     documents: Arc<DashMap<Url, AsyncDraft>>,
-    semantic:Arc<semantic::Context>
+    semantic: Arc<semantic::Context>,
 ) {
     for e in walkdir::WalkDir::new(path)
         .into_iter()
@@ -227,7 +227,7 @@ impl LanguageServer for Backend {
                 params.text_document.text,
                 DocumentState::OwnedByEditor,
                 params.text_document.uri,
-                self.semantic.clone()
+                self.semantic.clone(),
             ),
         );
 
@@ -237,7 +237,7 @@ impl LanguageServer for Backend {
         if let Some(mut doc) = self.documents.get_mut(&params.text_document.uri) {
             let uri = params.text_document.uri.clone();
             doc.update(params, self.semantic.clone());
-            self.client.publish_diagnostics(uri, vec![],None).await;
+            self.client.publish_diagnostics(uri, vec![], None).await;
         }
         info!("done did_change");
     }
@@ -247,13 +247,16 @@ impl LanguageServer for Backend {
             .sync_draft(
                 &params.text_document_position.text_document.uri,
                 DraftSync::Tree,
-                Some(Instant::now() + Duration::from_millis(200)),
+                Some(Instant::now() + Duration::from_millis(1000)), //We dont support, alternative
+                                                                    //completions for  big files yet, so we wait
             )
             .await
         {
             return Ok(Some(CompletionResponse::List(
                 completion::compute_completions(
-                    self.semantic.root.read().clone(),
+                    self.semantic
+                        .snapshot(&params.text_document_position.text_document.uri)
+                        .await,
                     &draft,
                     params.text_document_position,
                 ),
@@ -265,6 +268,7 @@ impl LanguageServer for Backend {
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
+        let root = self.semantic.snapshot(&params.text_document.uri).await;
         if let Some(draft) = self
             .sync_draft(&params.text_document.uri, DraftSync::Tree, None)
             .await
@@ -276,7 +280,7 @@ impl LanguageServer for Backend {
                         source,
                         tree,
                         revision,
-                    } => color.get(params.text_document.uri, tree, source),
+                    } => color.get(root,params.text_document.uri, tree, source),
                     _ => {
                         unimplemented!()
                     }
@@ -297,13 +301,15 @@ impl LanguageServer for Backend {
             .await
         {
             let color = self.coloring.clone();
+
+            let root = self.semantic.snapshot(&params.text_document.uri).await;
             return Ok(spawn(async move {
                 match draft {
                     Draft::Tree {
                         source,
                         tree,
                         revision,
-                    } => color.delta(params.text_document.uri, tree, source),
+                    } => color.delta(root, params.text_document.uri, tree, source),
                     _ => {
                         unimplemented!()
                     }
@@ -359,7 +365,7 @@ async fn main() {
         .expect("Log spec string broken")
         .log_to_file(
             FileSpec::default()
-                .directory("/tmp")
+                .directory(std::env::temp_dir())
                 .basename("UVLS")
                 .suppress_timestamp()
                 .suffix("log"),
@@ -372,7 +378,8 @@ async fn main() {
     let (service, socket) = LspService::new(|client| {
         let documents = Arc::new(DashMap::new());
         let shutdown = CancellationToken::new();
-        let semantic = semantic::create_handler(client.clone(), shutdown.clone(), documents.clone());
+        let semantic =
+            semantic::create_handler(client.clone(), shutdown.clone(), documents.clone());
         Backend {
             semantic,
             documents,

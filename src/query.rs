@@ -5,7 +5,19 @@ static CHECK_SYNTAX: &str = r#"
     tail:(_) 
 )@missing_name
 (ERROR 
-  (op)
+    "|"
+    "&"
+    "=>"
+    "<=>"
+    ">"
+    "<"
+    "=="
+    "+"
+    "*"
+    "-"
+    "/"
+    "!"
+    ".."
  )@missing_op
 
 
@@ -19,28 +31,7 @@ static CHECK_SYNTAX: &str = r#"
   (blk
         header:(_)@root)
 )
-
 [(incomplete_namespace) (incomplete_ref)]@incomplete
-
-
-(attribute_constraint
-    (expr)@constraint_expr
-)
-
-(attribute_constraints
-    (expr)@constraint_expr
-)
-(attrib_expr)@value_expr
-(blk
-    header:(constraints)
-    (blk
-        header:[(expr) (name) (ref)]@constraint_expr
-     )
-)
-(blk
-    header:(_)@attrib_owner
-    (attributes)
-)
 "#;
 static CHECK_SANITY: &str = r#"
 (blk
@@ -55,6 +46,8 @@ static EXTRACT_SYNTAX_HIGHLIGHTING_SRC: &str = r#"
  "namespace"
  "as"
  "constraint"
+ "true"
+ "false"
  ]@keyword
 (comment) @comment
 (lang_lvl) @macro
@@ -63,7 +56,6 @@ static EXTRACT_SYNTAX_HIGHLIGHTING_SRC: &str = r#"
 
 (int) @number
 
-(bool) @keyword
 
 (number) @number
 
@@ -76,60 +68,40 @@ static EXTRACT_SYNTAX_HIGHLIGHTING_SRC: &str = r#"
 ] @keyword
 
 [
-    (op)
+    "|"
+    "&"
+    "=>"
+    "<=>"
+    ">"
+    "<"
+    "=="
+    "+"
+    "*"
+    "-"
+    "/"
+    "!"
+    ".."
 ] @operator
 [
-    (func)
+    "avg"
+    "sum"
 ]@function
 
 (attribute_value name:(_)@enumMember)
+(ref alias:(_)@parameter)
 
-(attribute_value name:(_)@enum value:(attributes))
 
-
-[(blk
-    header: [(name)] @class)
 (blk
-    header: (ref path:(_) @namespace))]
-(source_file
-    (blk
-        header:(imports)
-        [(blk
-            header: (ref path:(_)@namespace alias:(_)?@interface))
-         (blk
-            header:(name)@namespace
-          )
-
-        ]
-    )
-)
-(source_file
-    (blk
-        header:(namespace name:(_) @namespace)
-        )
-)
-(constraint
-  (path)@namespace
-)
-(equation
-  (path)@enumMember
-)
-(numeric
-  (path)@enumMember
-)
+    header: [(name)] @parameter)
+(path)@some_path
 "#;
 
 static EXTRACT_DEPENDENCIES_SRC: &str = r#"
 (blk 
-    header:(group_mode)
-    ( blk
-        header:[(name)]     
-    )@inner
-)@group
-(expr)@constraint
+    (blk)@inner
+)@outer
 
 (blk
-    header:[(name)]
     (attributes
       (attribute_value)@child
     )
@@ -146,9 +118,10 @@ static EXTRACT_SYMBOLES_SRC: &str = r#"
 (blk
   header:[(features) (name) (group_mode)]
   [(blk
-    header: [(name) ] @feature
-  )(blk
-    header: (ref path:(_) @ref) 
+    header: (name)
+  )@feature
+  (blk
+    header: (ref path:(_) @feature_ref) 
   )]
 )
 (source_file
@@ -163,30 +136,25 @@ static EXTRACT_SYMBOLES_SRC: &str = r#"
 
         ]
     )
+
 )
 (source_file
     (blk
-        header:(namespace name:(_)  @namespace)
+        header:(namespace name:(_)  @namespace))
+)
+
+(source_file
+    (blk
+        header:(include)
+        (blk
+            header:(lang_lvl)@lang_lvl
         )
-)
-(constraint
-  (path)@expr_ref
-)
-(equation
-  (path)@expr_ref
-)
-(numeric
-  (path)@expr_ref
-)
-(nested_expr
-  (path)@expr_ref
-)
-(expr
-  (path)@expr_ref
+    )
 )
 (blk 
-    header:(group_mode)@group)
+    header:[(group_mode)@group (cardinality)@cardinality ]   )
 (attribute_value)@attrib
+(constraint)@constraint
 "#;
 
 pub struct Queries {
@@ -194,7 +162,7 @@ pub struct Queries {
     pub extract_dependencies: Query,
     pub highlight: Query,
     pub check_sanity: Query,
-    pub check_syntax:Query,
+    pub check_syntax: Query,
 }
 impl Queries {
     pub fn new(lang: &Language) -> Queries {
@@ -203,7 +171,7 @@ impl Queries {
             extract_dependencies: Query::new(lang.clone(), EXTRACT_DEPENDENCIES_SRC).unwrap(),
             highlight: Query::new(lang.clone(), EXTRACT_SYNTAX_HIGHLIGHTING_SRC).unwrap(),
             check_sanity: Query::new(lang.clone(), CHECK_SANITY).unwrap(),
-            check_syntax: Query::new(lang.clone(),CHECK_SYNTAX).unwrap(),
+            check_syntax: Query::new(lang.clone(), CHECK_SYNTAX).unwrap(),
         }
     }
 }

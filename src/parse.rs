@@ -1,12 +1,11 @@
-use crate::semantic::{Expr, Path, Span, SymbolID, SymbolSpan, TS};
+use crate::filegraph::{Path, Span, SymbolSpan, TS};
 
 use log::info;
 use ropey::Rope;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use tokio::time::Instant;
-use ustr::Ustr;
 use tree_sitter::*;
+use ustr::Ustr;
 thread_local! {
     static PARSER:RefCell<Parser> = RefCell::new(Parser::new())
 }
@@ -15,7 +14,7 @@ pub fn parse(src: &Rope, old_tree: Option<&Tree>) -> Tree {
     let tree = PARSER
         .with(|parser| {
             if parser.borrow().language().is_none() {
-                parser.borrow_mut().set_language(TS.lang.clone());
+                let _ = parser.borrow_mut().set_language(TS.lang.clone());
             }
 
             parser.borrow_mut().parse_with(
@@ -33,7 +32,6 @@ pub fn parse(src: &Rope, old_tree: Option<&Tree>) -> Tree {
     info!("Parsed in {:?}", t.elapsed());
     tree
 }
-
 
 pub trait SymbolSlice: Copy {
     fn slice(self, node: Node) -> Ustr {
@@ -66,7 +64,7 @@ pub fn parse_name<S: SymbolSlice>(node: Node, source: S) -> Option<SymbolSpan> {
         })
     } else {
         match node.kind() {
-            "name"=> Some(SymbolSpan {
+            "name" => Some(SymbolSpan {
                 name: source.slice(node),
                 span: node.byte_range(),
             }),
@@ -81,7 +79,7 @@ pub fn parse_path<S: SymbolSlice>(node: Node, source: S) -> Option<Path> {
             names: vec![name.name],
             spans: vec![name.span],
         })
-    } else if node.kind() == "path"{
+    } else if node.kind() == "path" {
         let mut cursor = node.walk();
         cursor.goto_first_child();
         let mut path = Path::default();
@@ -99,7 +97,7 @@ pub fn parse_path<S: SymbolSlice>(node: Node, source: S) -> Option<Path> {
         None
     }
 }
-pub fn parse_lang_lvl<S:SymbolSlice>(node: Node,source: S)->Option<SymbolSpan>{
+pub fn parse_lang_lvl<S: SymbolSlice>(node: Node, source: S) -> Option<SymbolSpan> {
     if node.is_missing() {
         Some(SymbolSpan {
             name: Ustr::from("__MISSING_NAME__"),
@@ -107,7 +105,7 @@ pub fn parse_lang_lvl<S:SymbolSlice>(node: Node,source: S)->Option<SymbolSpan>{
         })
     } else {
         match node.kind() {
-            "major_lvl"|"minor_lvl"|"name"=> Some(SymbolSpan {
+            "major_lvl" | "minor_lvl" | "name" => Some(SymbolSpan {
                 name: source.slice(node),
                 span: node.byte_range(),
             }),
@@ -115,13 +113,13 @@ pub fn parse_lang_lvl<S:SymbolSlice>(node: Node,source: S)->Option<SymbolSpan>{
         }
     }
 }
-pub fn parse_lang_lvl_path<S:SymbolSlice>(node: Node,source: S)->Option<Path>{
+pub fn parse_lang_lvl_path<S: SymbolSlice>(node: Node, source: S) -> Option<Path> {
     if let Some(name) = parse_lang_lvl(node, source) {
         Some(Path {
             names: vec![name.name],
             spans: vec![name.span],
         })
-    } else if node.kind()=="lang_lvl"{
+    } else if node.kind() == "lang_lvl" {
         let mut cursor = node.walk();
         cursor.goto_first_child();
         let mut path = Path::default();
@@ -138,8 +136,4 @@ pub fn parse_lang_lvl_path<S:SymbolSlice>(node: Node,source: S)->Option<Path>{
     } else {
         None
     }
-}
-
-pub fn parse_expr(node: Node, ts2sym: &HashMap<usize, SymbolID>, source: &str) -> Option<Expr> {
-    None
 }

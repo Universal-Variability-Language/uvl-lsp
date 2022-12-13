@@ -1,22 +1,14 @@
-use dashmap::{DashMap, DashSet};
-use futures::FutureExt;
 use log::info;
-use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::sync::{mpsc, oneshot, watch, OwnedRwLockReadGuard, RwLock};
-use tokio::time::{Duration, Instant, Interval};
+use tokio::sync::watch;
+use tokio::time::Instant;
 use tokio::{select, spawn};
 use tower_lsp::lsp_types::*;
-use tower_lsp::Client;
 use tree_sitter::{InputEdit, Tree};
-use ustr::Ustr;
 
-use crate::{check, parse, semantic};
+use crate::{ parse, semantic};
 
 use ropey::Rope;
 
@@ -50,28 +42,27 @@ pub fn update_text(
 
             let start_byte = source.char_to_byte(start_char);
             let end_byte = source.char_to_byte(end_char);
-
             source.remove(start_char..end_char);
             source.insert(start_char, &e.text);
-
+            let start_col_byte = start_byte-source.line_to_byte(start_line);
+            let end_col_byte = end_byte-source.line_to_byte(end_line);
             let new_end_line = source.byte_to_line(start_byte + e.text.len());
-            let new_end_col =
-                source.byte_to_char(start_byte + e.text.len()) - source.line_to_char(new_end_line);
+            let new_end_col_byte = (start_byte + e.text.len())-source.line_to_byte(new_end_line);
             tree.edit(&InputEdit {
-                start_byte: start_byte,
+                start_byte,
                 old_end_byte: end_byte,
                 new_end_byte: start_byte + e.text.len(),
                 start_position: tree_sitter::Point {
                     row: start_line,
-                    column: start_col,
+                    column: start_col_byte,
                 },
                 old_end_position: tree_sitter::Point {
                     row: end_line,
-                    column: end_col,
+                    column: end_col_byte,
                 },
                 new_end_position: tree_sitter::Point {
                     row: new_end_line,
-                    column: new_end_col,
+                    column: new_end_col_byte,
                 },
             });
         } else {
@@ -176,12 +167,15 @@ impl AsyncDraft {
             tree: tree.clone(),
             source: source.clone(),
         });
-        semantic.tx_draft_updates.send(semantic::DraftUpdate::Put {
-            uri,
-            tree,
-            source,
-            timestamp: revision,
-        }).await;
+        semantic
+            .tx_draft_updates
+            .send(semantic::DraftUpdate::Put {
+                uri,
+                tree,
+                source,
+                timestamp: revision,
+            })
+            .await;
         info!("opened in {:?}", t.elapsed());
     }
     pub fn open(
@@ -192,7 +186,7 @@ impl AsyncDraft {
     ) -> Self {
         let revision = Instant::now();
         let (tx, rx) = watch::channel(Draft::Unavailable { revision });
-        semantic.revison_counter.fetch_add(1,Ordering::SeqCst);
+        semantic.revison_counter.fetch_add(1, Ordering::SeqCst);
         spawn(Self::open_raw(tx, revision, text, uri, semantic));
 
         Self { state, content: rx }
@@ -206,15 +200,13 @@ impl AsyncDraft {
         let (tx, rx) = watch::channel(Draft::Unavailable { revision });
         let mut old = std::mem::replace(&mut self.content, rx);
         let uri = params.text_document.uri.clone();
-        semantic.revison_counter.fetch_add(1,Ordering::SeqCst);
+        semantic.revison_counter.fetch_add(1, Ordering::SeqCst);
         spawn(async move {
             let t = Instant::now();
             let old = Self::wait_for(&mut old, DraftSync::Tree).await;
             info!("waiting {:?} for reparse", t.elapsed());
             let (mut source, mut old_tree) = match old.unwrap() {
-                Draft::Tree { source, tree, .. } => {
-                    (source, tree)
-                }
+                Draft::Tree { source, tree, .. } => (source, tree),
                 _ => {
                     panic!("internal error");
                 }
@@ -231,12 +223,15 @@ impl AsyncDraft {
                 source: source.clone(),
             });
 
-            semantic.tx_draft_updates.send(semantic::DraftUpdate::Put {
-                uri,
-                tree,
-                source,
-                timestamp: revision,
-            }).await;
+            semantic
+                .tx_draft_updates
+                .send(semantic::DraftUpdate::Put {
+                    uri,
+                    tree,
+                    source,
+                    timestamp: revision,
+                })
+                .await;
             info!("Updated  in {:?}", t.elapsed());
         });
     }

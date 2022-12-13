@@ -1,9 +1,7 @@
 use ropey::Rope;
-
-use tree_sitter::{Language,Node};
-
+use tree_sitter::{Language, Node};
 use crate::query::Queries;
-use tower_lsp::lsp_types::{Range,Position};
+use tower_lsp::lsp_types::{Position, Range};
 
 pub struct ParseConstants {
     pub queries: Queries,
@@ -25,17 +23,8 @@ pub fn node_source<'a>(source: &'a Rope) -> impl tree_sitter::TextProvider<'a> {
             .map(|i: &str| i.as_bytes())
     }
 }
-pub fn node_range(node: Node) -> Range {
-    Range {
-        start: tower_lsp::lsp_types::Position {
-            line: node.start_position().row as u32,
-            character: node.start_position().column as u32,
-        },
-        end: tower_lsp::lsp_types::Position {
-            line: node.end_position().row as u32,
-            character: node.end_position().column as u32,
-        },
-    }
+pub fn node_range(node: Node, rope: &Rope) -> Range {
+    lsp_range(node.byte_range(),rope).unwrap()
 }
 
 pub fn lsp_position(byte: usize, source: &Rope) -> Option<Position> {
@@ -62,3 +51,13 @@ pub fn lsp_range(span: std::ops::Range<usize>, source: &Rope) -> Option<Range> {
         .flatten()
 }
 
+pub fn containing_blk(mut node: Node) -> Option<Node> {
+    node = node.parent()?;
+    while node.kind() != "blk" {
+        node = node.parent()?
+    }
+    Some(node)
+}
+pub fn header_kind(node: Node) -> &str {
+    node.child_by_field_name("header").unwrap().kind()
+}

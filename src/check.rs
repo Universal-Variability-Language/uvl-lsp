@@ -1,30 +1,28 @@
 use itertools::Itertools;
 use log::info;
-use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
-use tokio::sync::mpsc;
-
-use rayon::prelude::*;
-use tokio::time::{Duration, Instant};
-use tokio::{select, spawn};
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, PublishDiagnosticsParams, Range, Url};
+use crate::filegraph::{Symbol, Type, TS};
+use tokio::time::Instant;
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Range, Url};
 use tower_lsp::Client;
-use tree_sitter::{Node, Query, QueryCapture, QueryCursor, QueryMatch, TreeCursor};
+use tree_sitter::{Node, QueryCursor};
 
-use crate::{module, semantic, util::*};
+use crate::util::header_kind;
+use crate::{semantic, util::*};
 use ustr::Ustr;
 
-use crate::semantic::{FileGraph, RootGraph, RootSymbolID, SymbolID, SymbolRef, Type, TS};
+use crate::filegraph::{FileGraph, SymbolKind};
+use crate::semantic::RootGraph;
 
 #[derive(Clone, Debug)]
-struct ErrorInfo {
-    location: Range,
-    severity: DiagnosticSeverity,
-    weight: u32,
-    msg: String,
+pub struct ErrorInfo {
+    pub location: Range,
+    pub severity: DiagnosticSeverity,
+    pub weight: u32,
+    pub msg: String,
 }
 
 impl ErrorInfo {
@@ -98,7 +96,7 @@ fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
                     if ok_lines.iter().find(|k| **k == i).is_none() {
                         error.push(ErrorInfo {
                             weight: 100,
-                            location: node_range(node),
+                            location: node_range(node, &file.rope),
                             severity: DiagnosticSeverity::ERROR,
                             msg: "Line breaks are only allowed inside parenthesis".to_string(),
                         });
@@ -109,7 +107,7 @@ fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
             if node.start_position().row != node.end_position().row {
                 error.push(ErrorInfo {
                     weight: 100,
-                    location: node_range(node),
+                    location: node_range(node, &file.rope),
                     severity: DiagnosticSeverity::ERROR,
                     msg: "Line breaks are only allowed inside parenthesis".to_string(),
                 });
@@ -117,7 +115,7 @@ fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
             if lines.insert(node.start_position().row, node).is_some() {
                 error.push(ErrorInfo {
                     weight: 100,
-                    location: node_range(node),
+                    location: node_range(node, &file.rope),
                     severity: DiagnosticSeverity::ERROR,
                     msg: "Features have to be in diffrent lines".to_string(),
                 });
@@ -126,7 +124,7 @@ fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
             if node.start_position().row != node.end_position().row {
                 error.push(ErrorInfo {
                     weight: 100,
-                    location: node_range(node),
+                    location: node_range(node, &file.rope),
                     severity: DiagnosticSeverity::ERROR,
                     msg: "multiline strings are not supported".to_string(),
                 });
@@ -145,124 +143,98 @@ enum DeclContext {
     Value,
     Root,
 }
-fn get_context(node: Node) -> DeclContext {
-    match node.kind() {
-        "source_file" => DeclContext::Root,
-        "features" => DeclContext::Feature,
-        "include" => DeclContext::Include,
-        "constraints" => DeclContext::Include,
-        "value" => DeclContext::Value,
-        _ => get_context(node.parent().unwrap()),
-    }
+struct Template {
+    valid_children: Vec<SymbolKind>,
+    allow_card: bool,
+    allow_attribs: bool,
 }
-
-//A set of logic rules to detect sytax errors in the green tree
-fn check_blk_types(parent: Node, child: Node, file: &FileGraph) -> Option<ErrorInfo> {
-    let has_children = child
-        .parent()
-        .unwrap()
-        .child_by_field_name("child")
-        .is_some();
-    let has_attributes = child
-        .parent()
-        .unwrap()
-        .child_by_field_name("attribs")
-        .is_some();
-    match (parent.kind(), child.kind()) {
-        ("constraints", sub) if sub != "expr" && sub != "ref" && sub != "name" => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "only constraints are allowed here".to_string(),
-        }),
-        ("constraints", sub) if has_children || has_attributes => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "constraints may not have any children or attributes".to_string(),
-        }),
-        ("imports", sub) if sub != "name" && sub != "ref" => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "only imports are allowed here".to_string(),
-        }),
-        ("imports", sub) if has_children || has_attributes => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "imports may not have any children or attributes".to_string(),
-        }),
-        ("include", sub) if sub != "lang_lvl" => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "only language levels are allowed here".to_string(),
-        }),
-        ("include", sub) if has_children || has_attributes => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "includes may not have any children or attributes".to_string(),
-        }),
-        (root, "lang_lvl") if root != "include" => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "language levels are only allowed inside a include block".to_string(),
-        }),
-        (_, "namespace")
-        | (_, "constraints")
-        | (_, "features")
-        | (_, "include")
-        | (_, "imports") => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: format!("{} block only allowed at document root", child.kind()),
-        }),
-        ("group_mode", "group_mode") => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "expected a feature".to_string(),
-        }),
-
-        (_, "group_mode") if has_attributes || has_attributes => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "groups may not have any children or attributes".to_string(),
-        }),
-        ("name", "name") | ("ref", "name") | ("name", "ref") | ("ref", "ref") => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "features have to be seperated by a group".to_string(),
-        }),
-        (root, "ref") if child.child_by_field_name("alias").is_some() && root != "imports" => {
-            Some(ErrorInfo {
-                location: node_range(child),
-                severity: DiagnosticSeverity::ERROR,
-                weight: 20,
-                msg: "alias only allowed inside a import block".to_string(),
-            })
+fn blk_template(blk: Node, file: &FileGraph) -> Template {
+    if let Some(sym) = file.ts2sym.get(&blk.id()) {
+        match sym.into() {
+            SymbolKind::Feature => Template {
+                valid_children: vec![SymbolKind::Group],
+                allow_card: true,
+                allow_attribs: true,
+            },
+            SymbolKind::Group => Template {
+                valid_children: vec![SymbolKind::Feature, SymbolKind::Reference],
+                allow_card: false,
+                allow_attribs: false,
+            },
+            _ => Template {
+                valid_children: vec![],
+                allow_card: false,
+                allow_attribs: false,
+            },
         }
-        (root, "expr") if root != "constraints" => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "constrainst are only allowed inside a constraint block".to_string(),
-        }),
-        ("namespace", _) => Some(ErrorInfo {
-            location: node_range(child),
-            severity: DiagnosticSeverity::ERROR,
-            weight: 20,
-            msg: "namespace may not have any children".to_string(),
-        }),
-        _ => None,
+    } else {
+        match header_kind(blk) {
+            "include" => Template {
+                valid_children: vec![SymbolKind::LangLvl],
+                allow_card: false,
+                allow_attribs: false,
+            },
+            "imports" => Template {
+                valid_children: vec![SymbolKind::Import],
+                allow_card: false,
+                allow_attribs: false,
+            },
+            "features" => Template {
+                valid_children: vec![SymbolKind::Feature, SymbolKind::Reference],
+                allow_card: false,
+                allow_attribs: false,
+            },
+            "constraints" => Template {
+                valid_children: vec![SymbolKind::Constraint],
+                allow_card: false,
+                allow_attribs: false,
+            },
+            _ => Template {
+                valid_children: vec![],
+                allow_card: false,
+                allow_attribs: false,
+            },
+        }
     }
 }
+fn symbol_name(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Group => "group",
+        SymbolKind::Reference => "reference",
+        SymbolKind::LangLvl => "language level",
+        SymbolKind::Constraint => "constraint",
+        SymbolKind::Dir => "directory",
+        SymbolKind::Bool => "bool",
+        SymbolKind::Feature => "feature",
+        SymbolKind::Import => "import",
+        SymbolKind::Void => "void",
+        SymbolKind::Number => "number",
+        SymbolKind::String => "string",
+        SymbolKind::Attributes => "attributes",
+        SymbolKind::Root => "root",
+        SymbolKind::Vector => "list",
+    }
+}
+fn blk_name<'a>(blk: Node<'a>, file: &FileGraph) -> &'a str {
+    if let Some(sym) = file.ts2sym.get(&blk.id()) {
+        symbol_name(sym.into())
+    } else {
+        blk.child_by_field_name("header").unwrap().kind()
+    }
+}
+fn blk_kind(blk: Node, file: &FileGraph) -> SymbolKind {
+    if let Some(sym) = file.ts2sym.get(&blk.id()) {
+        sym.into()
+    } else {
+        match header_kind(blk) {
+            "ref" => SymbolKind::Reference,
+            "name" => SymbolKind::Feature,
+            "constraint" => SymbolKind::Constraint,
+            _ => SymbolKind::Void,
+        }
+    }
+}
+
 fn check_root_blk<'a>(
     node: Node<'a>,
     history: &mut Vec<Node<'a>>,
@@ -272,7 +244,7 @@ fn check_root_blk<'a>(
         "namespace" | "features" | "include" | "imports" | "constraints" => {
             if let Some(other) = history.iter().find(|i| i.kind() == node.kind()) {
                 Some(ErrorInfo {
-                    location: node_range(node),
+                    location: node_range(node, &file.rope),
                     severity: DiagnosticSeverity::ERROR,
                     weight: 30,
                     msg: format!("duplicate {}", node.kind()),
@@ -283,7 +255,7 @@ fn check_root_blk<'a>(
             }
         }
         _ => Some(ErrorInfo {
-            location: node_range(node),
+            location: node_range(node, &file.rope),
             severity: DiagnosticSeverity::ERROR,
             weight: 30,
             msg: "only namespace, features, imports, include and constraints are allowed here"
@@ -304,25 +276,21 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
     ) {
         match m.pattern_index {
             0 => err.push(ErrorInfo {
-                location: node_range(m.captures[0].node),
+                location: node_range(m.captures[0].node, &file.rope),
                 severity: DiagnosticSeverity::WARNING,
                 weight: 1,
                 msg: "tailing dots are not supported".to_string(),
             }),
             1 => {
                 err.push(ErrorInfo {
-                    location: node_range(m.captures[0].node),
+                    location: node_range(m.captures[0].node, &file.rope),
                     severity: DiagnosticSeverity::ERROR,
                     weight: 50,
                     msg: "Missing LHS or RHS argument".to_string(),
                 });
                 error_nodes.insert(m.captures[0].node);
             }
-            2 => {
-                if let Some(e) = check_blk_types(m.captures[0].node, m.captures[1].node, file) {
-                    err.push(e);
-                }
-            }
+            2 => {}
             3 => {
                 if let Some(e) = check_root_blk(m.captures[0].node, &mut root_blks, file) {
                     err.push(e)
@@ -330,7 +298,7 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
             }
             4 => {
                 err.push(ErrorInfo {
-                    location: node_range(m.captures[0].node),
+                    location: node_range(m.captures[0].node, &file.rope),
                     severity: DiagnosticSeverity::ERROR,
                     weight: 60,
                     msg: if m.captures[0].node.kind() == "incomplete_ref" {
@@ -347,19 +315,64 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
     for i in tree_sitter_traversal::traverse_tree(&file.tree, tree_sitter_traversal::Order::Pre) {
         if i.is_missing() {
             err.push(ErrorInfo {
-                location: node_range(i),
-                severity: DiagnosticSeverity::WARNING,
+                location: node_range(i, &file.rope),
+                severity: DiagnosticSeverity::ERROR,
                 weight: 80,
                 msg: format!("missing {}", i.kind()),
             })
         }
         if i.is_error() && !error_nodes.contains(&i) {
             err.push(ErrorInfo {
-                location: node_range(i),
+                location: node_range(i, &file.rope),
                 severity: DiagnosticSeverity::ERROR,
                 weight: 80,
                 msg: "unknown syntax error".into(),
             });
+        }
+        if i.kind() == "blk" {
+            let template = blk_template(i, file);
+            if i.child_by_field_name("cardinality").is_some() && !template.allow_card {
+                err.push(ErrorInfo {
+                    location: node_range(i.child_by_field_name("cardinality").unwrap(), &file.rope),
+                    severity: DiagnosticSeverity::ERROR,
+                    weight: 80,
+                    msg: format!("{} may not have cardinality", blk_name(i, file)),
+                });
+            }
+            if i.child_by_field_name("attribs").is_some() && !template.allow_card {
+                err.push(ErrorInfo {
+                    location: node_range(i.child_by_field_name("attribs").unwrap(), &file.rope),
+                    severity: DiagnosticSeverity::ERROR,
+                    weight: 40,
+                    msg: format!("{} may not have attributes", blk_name(i, file)),
+                });
+            }
+            if let Some(parent_blk) =
+                i.parent()
+                    .and_then(|p| if p.kind() == "blk" { Some(p) } else { None })
+            {
+                let parent_template = blk_template(parent_blk, file);
+
+                if !parent_template.valid_children.contains(&blk_kind(i, file)) {
+                    err.push(ErrorInfo {
+                        location: node_range(i, &file.rope),
+                        severity: DiagnosticSeverity::ERROR,
+                        weight: 40,
+                        msg: if parent_template.valid_children.is_empty() {
+                            format!("{} may not have any children", blk_name(parent_blk, file))
+                        } else {
+                            format!(
+                                "expected {}",
+                                parent_template
+                                    .valid_children
+                                    .iter()
+                                    .map(|sym| symbol_name(*sym))
+                                    .join(" or ")
+                            )
+                        },
+                    });
+                }
+            }
         }
     }
     let root_order = &["namespace", "include", "imports", "features", "constraints"];
@@ -374,7 +387,7 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
             .unwrap();
         if pi > ni {
             err.push(ErrorInfo {
-                location: node_range(root_blks[i]),
+                location: node_range(root_blks[i], &file.rope),
                 severity: DiagnosticSeverity::ERROR,
                 weight: 35,
                 msg: format!(
@@ -384,6 +397,9 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
                 ),
             });
         }
+    }
+    for i in file.parse_errors.iter() {
+        err.push(i.clone());
     }
     info!("checked syntax in {:?}", time.elapsed());
     err
@@ -459,44 +475,38 @@ pub fn check_document(file: &FileGraph) -> DocumentState {
 
 fn check_references(file: &FileGraph, root: &RootGraph) -> Vec<ErrorInfo> {
     let mut err = Vec::new();
-    for i in file.store.references.iter() {
+    for i in file.references() {
         enum ErrState {
             NotFound,
-            WrongAttribKind(Type),
+            WrongAttribKind(SymbolKind),
             FoundFeature,
             FoundAttrib,
             Success,
         }
         let mut state = ErrState::NotFound;
-        root.resolve(file.name, &i.path.names, |sym| match sym {
-            RootSymbolID::Symbol(tgt, tgt_id) => {
-                match root.files[&tgt].store.get(tgt_id).unwrap() {
-                    SymbolRef::Feature(_) => {
-                        if i.ty == Type::Feature {
-                            state = ErrState::Success;
-                            Some(())
-                        } else {
-                            state = ErrState::FoundFeature;
-                            None
-                        }
+        for r in root.resolve(file.name, &i.path.names) {
+            match r.sym {
+                Symbol::Feature(..) => {
+                    if i.ty == Type::Feature {
+                        state = ErrState::Success;
+                        break;
+                    } else {
+                        state = ErrState::FoundFeature;
                     }
-                    SymbolRef::Attribute(attrib) => {
-                        if attrib.ty != Type::Number {
-                            state = ErrState::WrongAttribKind(attrib.ty);
-                            None
-                        } else if i.ty == Type::Feature {
-                            state = ErrState::FoundAttrib;
-                            None
-                        } else {
-                            state = ErrState::Success;
-                            Some(())
-                        }
-                    }
-                    _ => None,
                 }
+                Symbol::Number(..) => {
+                    if i.ty == Type::Feature {
+                        state = ErrState::FoundAttrib;
+                    } else {
+                        state = ErrState::Success;
+                        break;
+                    }
+                }
+                _ if r.sym.is_value() => state = ErrState::WrongAttribKind(r.sym.into()),
+
+                _ => {}
             }
-            _ => None,
-        });
+        }
         match state {
             ErrState::NotFound => {
                 err.push(ErrorInfo {
@@ -527,30 +537,41 @@ fn check_references(file: &FileGraph, root: &RootGraph) -> Vec<ErrorInfo> {
                     location: lsp_range(i.path.range(), &file.rope).unwrap(),
                     severity: DiagnosticSeverity::ERROR,
                     weight: 9,
-                    msg: format!("wrong attribute type {:?}", kind),
+                    msg: format!("wrong attribute type {}", symbol_name(kind)),
                 });
             }
             _ => {}
         }
     }
-    for i in file.store.imports.iter() {
+    for i in file.imports() {
         if root
-            .resolve(file.name, &i.path.names, |sym| match sym {
-                RootSymbolID::Symbol(..) => None,
-                RootSymbolID::Module(m) => match &root.modules[m] {
-                    module::Content::File(..) => Some(()),
-                    _ => None,
-                },
-            })
+            .fs
+            .imports(file.name)
+            .find(|(sym, _)| sym == &i)
             .is_none()
         {
             err.push(ErrorInfo {
-                location: lsp_range(i.path.range(), &file.rope).unwrap(),
+                location: lsp_range(file.range(i), &file.rope).unwrap(),
                 severity: DiagnosticSeverity::ERROR,
                 weight: 11,
                 msg: format!("unresolved import"),
             });
         }
+    }
+    for (a,b) in file.duplicate_symboles() {
+
+        err.push(ErrorInfo {
+            location: lsp_range(file.range(a), &file.rope).unwrap(),
+            severity: DiagnosticSeverity::ERROR,
+            weight: 7,
+            msg: format!("duplicate {}",symbol_name(b.into())),
+        });
+        err.push(ErrorInfo {
+            location: lsp_range(file.range(b), &file.rope).unwrap(),
+            severity: DiagnosticSeverity::ERROR,
+            weight: 7,
+            msg: format!("duplicate {}",symbol_name(b.into())),
+        });
     }
     err
 }

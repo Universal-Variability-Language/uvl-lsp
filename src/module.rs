@@ -1,4 +1,4 @@
-use crate::semantic::{FileGraphs, RootGraph, RootSymbolID, SymbolID};
+use crate::semantic::{FileGraphs, RootGraph, RootSymbolID};
 use log::info;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::*;
@@ -102,14 +102,14 @@ impl ModuleGraph {
         for (_, file) in files.iter() {
             let (dir, file_node) = graph.trace_file(&file.path, file.name);
             file2node.insert(file.name, file_node);
-            let inner_namespace = graph.trace_namespace(file_node, &file.namespace());
+            //let inner_namespace = graph.trace_namespace(file_node, &file.namespace());
             let content = graph.add(Content::FileRoot(file.name));
             graph.content.insert(file.name, content);
-            graph.add_edge(inner_namespace, content, "".into());
+            graph.add_edge(file_node, content, "".into());
             graph.add_edge(content, dir, "#".into());
         }
         for (_, src) in files.iter() {
-            for i in src.store.imports.iter() {
+            for i in src.imports() {
                 if let Some(imorted_name) =
                     graph.resolve(src.name, &i.path.names, files, |sym| match sym {
                         RootSymbolID::Module(id) => {
@@ -133,28 +133,11 @@ impl ModuleGraph {
                         let dst = graph.content[&dst.name];
                         graph.add_edge(src, dst, alias.name);
                     } else {
-                        let src_namespace = src.namespace();
-                        let dst_namespace = dst.namespace();
-                        match (src_namespace.len(), dst_namespace.len()) {
-                            (.., 0) | (0, ..) => {
-                                let src_id = graph.content[&src.name];
-                                let dst_id = file2node[&dst.name];
-                                graph.add_edge(src_id, dst_id, "".into());
-                            }
-                            (_, _) => {
-                                let src_id = graph.content[&src.name];
-                                let mut dst_id = file2node[&dst.name];
-                                let shared_prefix = src_namespace
-                                    .iter()
-                                    .zip(dst_namespace.iter())
-                                    .take_while(|(i, k)| i == k)
-                                    .count();
-                                for i in 0..shared_prefix {
-                                    dst_id = graph.get(dst_id, dst_namespace[i]).next().unwrap();
-                                }
-                                graph.add_edge(src_id, dst_id, "".into());
-                            }
-                        }
+                        let path = crate::completion::make_path(i.path.names.iter()).as_str().into();
+                        let src = graph.content[&src.name];
+                        let dst = graph.content[&dst.name];
+                        graph.add_edge(src, dst, path);
+
                     }
                 } else {
                     info!("cant resolve {:?} in {}", &i.path.names, &src.name);
