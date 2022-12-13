@@ -1,6 +1,6 @@
 use crate::check::ErrorInfo;
 use crate::parse::{parse_name, parse_path};
-use crate::util::{self, node_range};
+use crate::util::{self, containing_blk, node_range};
 use enum_kinds;
 use itertools::{Either, Itertools};
 use lazy_static::lazy_static;
@@ -38,6 +38,16 @@ where
         old.push(v)
     } else {
         map.insert(k, vec![v]);
+    }
+}
+fn containing_node(node: Node) -> Node {
+    match node.kind() {
+        "attribute_value"
+        | "attribute_constraints"
+        | "attribute_constraint"
+        | "blk"
+        | "source_file" => node,
+        _ => containing_node(node.parent().unwrap()),
     }
 }
 pub type Span = std::ops::Range<usize>;
@@ -449,7 +459,7 @@ impl FileGraph {
     }
     fn parse_numeric(&mut self, source: &String, node: Node) -> Option<Numeric> {
         match node.kind() {
-            "path" => Some(Numeric::Ref(self.add_reference(source, node, Type::Number))),
+            "path" | "name" => Some(Numeric::Ref(self.add_reference(source, node, Type::Number))),
             "number" => Some(Numeric::Number(source[node.byte_range()].parse().unwrap())),
             "binary_expr" => {
                 if let Some(op) = NumericOP::parse(node.child_by_field_name("op").unwrap().kind()) {
@@ -519,7 +529,8 @@ impl FileGraph {
     }
     fn parse_constraint(&mut self, source: &String, node: Node) -> Option<Constraint> {
         match node.kind() {
-            "path" => Some(Constraint::Ref(self.add_reference(
+            "constraint"=>self.parse_constraint(source,node.named_child(0)?),
+            "path" | "name" => Some(Constraint::Ref(self.add_reference(
                 source,
                 node,
                 Type::Feature,
@@ -641,17 +652,17 @@ impl FileGraph {
                     let feature = self.parse_feature(n, source);
                     self.features.push(feature);
                     let sym = Symbol::Feature(self.features.len() as u32 - 1);
-                    self.ts2sym.insert(n.id(), sym);
+                    self.ts2sym.insert(containing_node(n).id(), sym);
                 }
                 "feature_ref" => {
                     let id = self.add_reference(source, n, Type::Feature);
-                    self.ts2sym.insert(n.parent().unwrap().id(), id);
+                    self.ts2sym.insert(containing_node(n).id(), id);
                 }
                 "import_name" => {
                     let path = parse_path(n, source).unwrap();
                     self.imports.push(Import { path, alias: None });
                     self.ts2sym.insert(
-                        n.parent().unwrap().id(),
+                        containing_node(n).id(),
                         Symbol::Import(self.imports.len() as u32 - 1),
                     );
                 }
@@ -663,7 +674,7 @@ impl FileGraph {
                         .flatten();
                     self.imports.push(Import { path, alias });
                     self.ts2sym.insert(
-                        n.parent().unwrap().id(),
+                        containing_node(n).id(),
                         Symbol::Import(self.imports.len() as u32 - 1),
                     );
                 }
@@ -683,7 +694,7 @@ impl FileGraph {
                     };
                     self.groups.push(Group { mode });
                     self.ts2sym.insert(
-                        n.parent().unwrap().id(),
+                        containing_node(n).id(),
                         Symbol::Group(self.groups.len() as u32 - 1),
                     );
                 }
@@ -693,7 +704,7 @@ impl FileGraph {
                         mode: GroupMode::Cardinality(card),
                     });
                     self.ts2sym.insert(
-                        n.parent().unwrap().id(),
+                        containing_node(n).id(),
                         Symbol::Group(self.groups.len() as u32 - 1),
                     );
                 }
@@ -737,16 +748,17 @@ impl FileGraph {
                     };
                     let sym = attrib.symbol(self.attributes.len());
                     self.attributes.push(attrib);
-                    self.ts2sym.insert(n.id(), sym);
+                    self.ts2sym.insert(containing_node(n).id(), sym);
                 }
                 "constraint" => {
                     if let Some(constraint) =
-                        self.parse_constraint(source, n.named_child(0).unwrap())
+                        self.parse_constraint(source, n)
                     {
                         self.constraints.push(constraint);
 
+                        //info!("{:?} err {:?}", n, self.parse_errors);
                         self.ts2sym.insert(
-                            n.id(),
+                            containing_node(n).id(),
                             Symbol::Constraint(self.constraints.len() as u32 - 1),
                         );
                     }
@@ -757,7 +769,7 @@ impl FileGraph {
                         minor: vec![],
                     }); //TODO: parse
                     self.ts2sym.insert(
-                        n.parent().unwrap().id(),
+                        containing_node(n).id(),
                         Symbol::LangLvl(self.lang_lvls.len() as u32 - 1),
                     );
                 }

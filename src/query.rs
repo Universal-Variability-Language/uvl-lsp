@@ -156,6 +156,15 @@ static EXTRACT_SYMBOLES_SRC: &str = r#"
     header:[(group_mode)@group (cardinality)@cardinality ]   )
 (attribute_value)@attrib
 (constraint)@constraint
+(source_file
+    (blk
+        header:(constraints)
+        (blk
+            header: [(name)@constraint (ref path:(_)@constraint)]
+
+         )
+    )
+ )
 "#;
 
 pub struct Queries {
