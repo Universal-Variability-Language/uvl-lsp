@@ -97,3 +97,43 @@ pub fn parse_path<S: SymbolSlice>(node: Node, source: S) -> Option<Path> {
         None
     }
 }
+pub fn parse_lang_lvl<S: SymbolSlice>(node: Node, source: S) -> Option<SymbolSpan> {
+    if node.is_missing() {
+        Some(SymbolSpan {
+            name: Ustr::from("__MISSING_NAME__"),
+            span: node.byte_range(),
+        })
+    } else {
+        match node.kind() {
+            "major_lvl" | "minor_lvl" | "name" => Some(SymbolSpan {
+                name: source.slice(node),
+                span: node.byte_range(),
+            }),
+            _ => None,
+        }
+    }
+}
+pub fn parse_lang_lvl_path<S: SymbolSlice>(node: Node, source: S) -> Option<Path> {
+    if let Some(name) = parse_lang_lvl(node, source) {
+        Some(Path {
+            names: vec![name.name],
+            spans: vec![name.span],
+        })
+    } else if node.kind() == "lang_lvl" {
+        let mut cursor = node.walk();
+        cursor.goto_first_child();
+        let mut path = Path::default();
+        loop {
+            if let Some(name) = parse_lang_lvl(cursor.node(), source) {
+                path.names.push(name.name);
+                path.spans.push(name.span);
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+        Some(path)
+    } else {
+        None
+    }
+}

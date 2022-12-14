@@ -183,6 +183,7 @@ impl FileState {
         //Keep track of non ascii lines, only perform byte->utf8->utf16 transformation when needed
         //61ms->34ms performance improvment!
         //TODO make a better uniform byte->utf16 provider as ropey is to slow
+        //or just use more threads
         let mut utf16_line = HashSet::new();
         for (i, line) in source.lines().enumerate() {
             for c in line.chars() {
