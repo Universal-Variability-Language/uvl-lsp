@@ -526,6 +526,8 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
             ">".into(),
             "<".into(),
             "==".into(),
+            "sum".into(),
+            "avg".into()
         ],
     );
 }

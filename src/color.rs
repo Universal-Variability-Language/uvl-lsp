@@ -33,6 +33,7 @@ pub fn token_types() -> Vec<SemanticTokenType> {
         SemanticTokenType::FUNCTION,
         SemanticTokenType::MACRO,
         SemanticTokenType::PARAMETER,
+        SemanticTokenType::NUMBER
     ]
 }
 fn token_index(name: &str) -> u32 {
@@ -48,6 +49,7 @@ fn token_index(name: &str) -> u32 {
         "function" => 8,
         "macro" => 9,
         "parameter" => 10,
+        "number"=>11,
         _ => 0,
     }
 }
