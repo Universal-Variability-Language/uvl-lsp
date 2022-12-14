@@ -193,7 +193,7 @@ pub fn estimate_constraint_env(node: Node, origin: Option<Node>, source: &Rope) 
     }
 }
 fn estimate_env(node: Node, source: &Rope, edit_line: u32) -> Option<CompletionEnv> {
-    if node.is_extra()&&!node.is_error() {
+    if node.is_extra()&&!node.is_error() {//Comment?
         return None;
     }
     let section = find_section(node);
@@ -460,7 +460,7 @@ fn add_keywords<const I: usize>(
         top.push(CompletionOpt {
             op: TextOP::Put(word.clone()),
             lable: word.clone(),
-            rank: strsim::jaro_winkler(query, word.as_str()) as f32 * w,
+            rank: if query.is_empty() {w}  else {strsim::jaro_winkler(query, word.as_str()) as f32 * w},
             name: word.as_str().into(),
             kind: CompletionKind::Keyword,
         });
@@ -512,7 +512,7 @@ fn add_lang_lvl_minor_keyword(query: &str, top: &mut TopN<CompletionOpt>, w: f32
 }
 
 fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(
+   add_keywords(
         query,
         top,
         w,
@@ -788,15 +788,16 @@ pub fn compute_completions(
             CompletionEnv::Toplevel => add_top_lvl_keywords(&ctx.postfix, &mut top, 2.0),
             CompletionEnv::SomeName => {}
             CompletionEnv::Constraint | CompletionEnv::Numeric | CompletionEnv::Feature => {
-                if ctx.env == CompletionEnv::Constraint && ctx.offset != CompletionOffset::Continous
-                {
-                    add_logic_op(&ctx.postfix, &mut top, 2.0);
-                }
                 if ctx.env == CompletionEnv::Feature{
                     add_keywords(&ctx.postfix,&mut top,2.0,["cardinality".into()]);
-
+                }
+                if (ctx.env == CompletionEnv::Constraint ||ctx.env == CompletionEnv::Numeric) && ctx.offset != CompletionOffset::Continous
+                    
+                {
+                    add_logic_op(&ctx.postfix, &mut top, 6.1);
                 }
                 completion_symbol(&snapshot, origin, &ctx, &mut top);
+
                 is_incomplete = true
             }
             CompletionEnv::Import => {
@@ -876,7 +877,7 @@ pub fn compute_completions(
         }
 
         let mut comp = top.into_sorted_vec();
-        info!("Completions in {:?}", timer.elapsed());
+        info!("Completions {:#?} in {:?}",&comp, timer.elapsed());
         let items = comp
             .drain(0..)
             .filter(|opt| opt.kind != CompletionKind::DontCare)
