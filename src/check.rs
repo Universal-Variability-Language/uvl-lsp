@@ -1,24 +1,24 @@
+use crate::filegraph::{FileGraph, SymbolKind};
+use crate::filegraph::{Symbol, Type, TS};
+use crate::semantic::RootGraph;
+use crate::util::header_kind;
+use crate::{semantic, util::*};
 use itertools::Itertools;
 use log::info;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use crate::filegraph::{Symbol, Type, TS};
 use tokio::time::Instant;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Range, Url};
 use tower_lsp::Client;
 use tree_sitter::{Node, QueryCursor};
-use crate::util::header_kind;
-use crate::{semantic, util::*};
 use ustr::Ustr;
-use crate::filegraph::{FileGraph, SymbolKind};
-use crate::semantic::RootGraph;
 /*
  * Most error checking happens in here.
  * Files are checked in three phases if one phase failes checking is stopped.
- * Phase1. Check Sanity: Here we check if the file is ambiguous, 
- * this happens for example if there is a missing opperand at line break 
- * Phase2. Check Syntax: Check if the treesitter tree matches the UVL grammer spec. 
+ * Phase1. Check Sanity: Here we check if the file is ambiguous,
+ * this happens for example if there is a missing opperand at line break
+ * Phase2. Check Syntax: Check if the treesitter tree matches the UVL grammer spec.
  * Phase3. Check References: When all files have correct syntax we check if pathes are valid and
  * have the correct type
  *
@@ -44,7 +44,7 @@ impl ErrorInfo {
         }
     }
 }
-//Walk the syntax tree and only go "down" if F is true 
+//Walk the syntax tree and only go "down" if F is true
 fn ts_filterd_visit<F: FnMut(Node) -> bool>(root: Node, mut f: F) {
     let mut reached_root = false;
     let mut cursor = root.walk();
@@ -116,7 +116,8 @@ fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
                     }
                 }
             }
-        } else if i.pattern_index == 0 {//Header
+        } else if i.pattern_index == 0 {
+            //Header
             if node.start_position().row != node.end_position().row {
                 error.push(ErrorInfo {
                     weight: 100,
@@ -133,7 +134,8 @@ fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
                     msg: "Features have to be in diffrent lines".to_string(),
                 });
             }
-        } else {//check name or string since quoted names allow line breaks
+        } else {
+            //check name or string since quoted names allow line breaks
             if node.start_position().row != node.end_position().row {
                 error.push(ErrorInfo {
                     weight: 100,
@@ -317,13 +319,15 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
                 });
             }
             4 => {
-                err.push(ErrorInfo {
-                    location: node_range(m.captures[0].node, &file.rope),
-                    severity: DiagnosticSeverity::ERROR,
-                    weight: 50,
-                    msg: "to many arguments".to_string(),
-                });
-                error_nodes.insert(m.captures[0].node);
+                if m.captures[0].node.parent().map(|n| n.kind() == "aggregate").unwrap_or(false) {
+                    err.push(ErrorInfo {
+                        location: node_range(m.captures[0].node, &file.rope),
+                        severity: DiagnosticSeverity::ERROR,
+                        weight: 50,
+                        msg: "to many arguments".to_string(),
+                    });
+                    error_nodes.insert(m.captures[0].node);
+                }
             }
 
             _ => {}
@@ -579,18 +583,18 @@ fn check_references(file: &FileGraph, root: &RootGraph) -> Vec<ErrorInfo> {
         }
     }
     //Symbols are sorted in their prefix to easily check for duplicates
-    for (a,b) in file.duplicate_symboles() {
+    for (a, b) in file.duplicate_symboles() {
         err.push(ErrorInfo {
             location: lsp_range(file.range(a), &file.rope).unwrap(),
             severity: DiagnosticSeverity::ERROR,
             weight: 7,
-            msg: format!("duplicate {}",symbol_name(b.into())),
+            msg: format!("duplicate {}", symbol_name(b.into())),
         });
         err.push(ErrorInfo {
             location: lsp_range(file.range(b), &file.rope).unwrap(),
             severity: DiagnosticSeverity::ERROR,
             weight: 7,
-            msg: format!("duplicate {}",symbol_name(b.into())),
+            msg: format!("duplicate {}", symbol_name(b.into())),
         });
     }
     err

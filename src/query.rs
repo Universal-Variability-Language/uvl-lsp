@@ -1,5 +1,6 @@
 use ropey::Rope;
 use tree_sitter::{Language, Query};
+//Error cases
 static CHECK_SYNTAX: &str = r#"
 (path
     tail:(_) 
@@ -50,12 +51,12 @@ static EXTRACT_SYNTAX_HIGHLIGHTING_SRC: &str = r#"
  "cardinality"
  ]@keyword
 (comment) @comment
+
 (lang_lvl) @macro
 
 (string) @string
 
 (int) @number
-
 
 (number) @number
 
@@ -82,17 +83,19 @@ static EXTRACT_SYNTAX_HIGHLIGHTING_SRC: &str = r#"
     "!"
     ".."
 ] @operator
+
 (aggregate op:(_) @function)
 
 (attribute_value name:(_)@enumMember)
-(ref alias:(_)@parameter)
 
+(ref alias:(_)@parameter)
 
 (blk
     header: [(name)] @parameter)
+
 (path)@some_path
 "#;
-
+//Link those symboles
 static EXTRACT_DEPENDENCIES_SRC: &str = r#"
 (blk 
     (blk)@inner
@@ -110,7 +113,7 @@ static EXTRACT_DEPENDENCIES_SRC: &str = r#"
     )
 )@parent
 "#;
-
+//Transform the syntax tree into symboles
 static EXTRACT_SYMBOLES_SRC: &str = r#"
 (blk
   header:[(features) (name) (group_mode) (cardinality)]
@@ -121,6 +124,7 @@ static EXTRACT_SYMBOLES_SRC: &str = r#"
     header: (ref path:(_) @feature_ref) 
   )]
 )
+
 (source_file
     (blk
         header:(imports)
@@ -144,6 +148,7 @@ static EXTRACT_SYMBOLES_SRC: &str = r#"
          )
     )
  )
+
 (source_file
     (blk
         header:(namespace name:(_)  @namespace))
@@ -157,9 +162,12 @@ static EXTRACT_SYMBOLES_SRC: &str = r#"
         )
     )
 )
+
 (blk 
     header:[(group_mode)@group (cardinality)@cardinality ]   )
+
 (attribute_value)@attrib
+
 (constraint)@constraint
 "#;
 

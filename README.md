@@ -29,5 +29,7 @@ Because the tree-sitter grammar is more relaxed than the original UVL-grammar an
 we can capture many incorrect expression and provide decent error messages in most cases.
 Tree-sitter queries allow for easy symbol extraction and are used to transform the tree-sitter tree into a more compact graph.
 This graph is then used for further analysis.
+Queries are also used for syntax highlighting as tree-sitter was originally intended for that.
+
 
 

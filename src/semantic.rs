@@ -50,7 +50,7 @@ impl FSNode {
         }
     }
 }
-
+//Simple virtual filesystem for fast completions, resolve and namespaces
 #[derive(Debug, Clone)]
 pub struct FileSystem {
     graph: Graph<FSNode, FSEdge>,
@@ -61,6 +61,7 @@ impl FileSystem {
         let mut graph = Graph::new();
         let mut file2node = HashMap::new();
         let root = graph.add_node(FSNode::Dir);
+        //create file system
         for (n, f) in files.iter() {
             let mut dir = root;
             for i in f.path[0..f.path.len() - 1].iter() {
@@ -79,7 +80,7 @@ impl FileSystem {
             graph.add_edge(dir, id, FSEdge::Path(*f.path.last().unwrap()));
             file2node.insert(*n, id);
         }
-
+        //resolve imports
         for (n, f) in files.iter() {
             for i in f.imports() {
                 let path = f.import_path(i);
@@ -111,6 +112,7 @@ impl FileSystem {
         }
         Self { graph, file2node }
     }
+    //Check an import between a and b
     pub fn imports_connecting<'a>(&'a self, a: Ustr, b: Ustr) -> impl Iterator<Item = Symbol> + 'a {
         self.graph
             .edges_connecting(self.file2node[&a], self.file2node[&b])
@@ -119,6 +121,7 @@ impl FileSystem {
                 _ => None,
             })
     }
+    //all imports from a
     pub fn imports<'a>(&'a self, a: Ustr) -> impl Iterator<Item = (Symbol, Ustr)> + 'a {
         self.graph.edges(self.file2node[&a]).filter_map(|e| {
             match (e.weight(), &self.graph[e.target()]) {
@@ -127,6 +130,7 @@ impl FileSystem {
             }
         })
     }
+    //all subfiles from origin under path
     pub fn sub_files<'a>(
         &'a self,
         origin: Ustr,
@@ -181,6 +185,7 @@ pub struct RootGraph {
     pub fs: Arc<FileSystem>,
 }
 impl RootGraph {
+    //find all symbols from origin under path
     pub fn resolve<'a>(
         &'a self,
         origin: Ustr,
@@ -234,6 +239,7 @@ pub enum DraftUpdate {
         timestamp: Instant,
     },
 }
+//Central synchronisation provider
 pub struct Context {
     pub root: RwLock<RootGraph>,
     pub revison_counter: AtomicU64,
@@ -264,6 +270,8 @@ impl Context {
         }
     }
 }
+//Semantic analysis happens we currently only output diagnostics this runs inside its one task
+//seperat to the rest of the server
 struct State {
     files: im::HashMap<Ustr, FileGraph>,
     changes: Vec<DraftUpdate>,
@@ -273,6 +281,7 @@ struct State {
     check_state: HashMap<Ustr, check::DocumentState>,
 }
 impl State {
+    //apply updates
     async fn update(&mut self, change: DraftUpdate, ctx: &Arc<Context>) {
         self.changes.push(change);
         self.revision_counter += 1;
@@ -293,12 +302,12 @@ impl State {
         let update_timestamp = ctx
             .revison_counter
             .load(std::sync::atomic::Ordering::SeqCst);
+        //keep only the newest changes
         self.changes.sort_by_key(|e| match e {
             DraftUpdate::Put { timestamp, .. } => *timestamp,
             DraftUpdate::Delete { timestamp, .. } => *timestamp,
         });
         let mut to_create = HashMap::new();
-
         for i in self.changes.drain(0..).rev() {
             match i {
                 DraftUpdate::Put {
@@ -334,6 +343,7 @@ impl State {
                 }
             }
         }
+        //create new file graphs
         let (dirty, mut new_graphs): (Vec<_>, Vec<_>) = to_create
             .par_drain()
             .map(|(key, (url, timestamp, tree, rope))| {
@@ -344,12 +354,9 @@ impl State {
         for i in new_graphs.drain(..) {
             self.files.insert(i.name, i);
         }
+        //update root graph 
         *ctx.root.write() = RootGraph::new(self.files.clone());
-        let mut new_check_state: Vec<check::DocumentState> = dirty
-            .par_iter()
-            .map(|fname| check::check_document(&self.files[fname]))
-            .collect();
-
+        //cancel if there is a newer version
         if update_timestamp
             != ctx
                 .revison_counter
@@ -357,10 +364,22 @@ impl State {
         {
             return;
         }
+        //check for syntax errors
+        let mut new_check_state: Vec<check::DocumentState> = dirty
+            .par_iter()
+            .map(|fname| check::check_document(&self.files[fname]))
+            .collect();
         for (i, state) in new_check_state.drain(..).enumerate() {
             self.check_state.insert(dirty[i], state);
         }
-
+        if update_timestamp
+            != ctx
+                .revison_counter
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        //check for sematic errors
         tokio::spawn(check::fininalize(
             ctx.root.read().clone(),
             self.check_state.clone(),
