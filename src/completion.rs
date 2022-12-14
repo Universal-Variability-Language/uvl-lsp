@@ -1,33 +1,42 @@
 use crate::document::Draft;
-
-use itertools::Either;
-use tokio::time::Instant;
-
 use crate::filegraph::*;
-use crate::symboles::*;
 use crate::util::*;
 use crate::{parse, semantic::*};
 use compact_str::CompactString;
+use itertools::Either;
 use log::info;
 use ropey::Rope;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ops::Add;
-
+use tokio::time::Instant;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionList, CompletionTextEdit, Position, Range,
     TextDocumentPositionParams, TextEdit,
 };
 use tree_sitter::{Node, Point, Tree};
 use ustr::Ustr;
+/*
+ * All things completion related happen in here, the proccess roughly as follows:
+ * 1. Find the current context using the latest draft and editor position
+ * 2. Find good completions in this context
+ *
+ * The completion context inculdes:
+ *  - Meta information on the cursor position eg. Are we currently in a path an empty line etc.
+ *  - The semantic context eg. do we need a Constraint or a number
+ *  - A optional path prefix and suffix. The suffix is used as a weight for completions using the jaro
+ *    winkler distance, the prefix is filter restricting possible completions.
+ *
+ *  To weigh completions we use a simple weight function with hand picked weights for parameters
+ *  like lenght or type correctness
+ * */
 static MAX_N: usize = 30;
 static W_PREFIX: f32 = 2.;
 static W_TYPE: f32 = 2.;
 static W_LEN: f32 = 3.0;
 static AVG_WEIGHT_THRESHOLD: f32 = 0.2;
 static MIN_WEIGHT: f32 = 0.1;
-
 struct TopN<V> {
     buffer: min_max_heap::MinMaxHeap<V>,
     max: usize,
@@ -69,6 +78,14 @@ where
     }
 }
 
+pub fn starts_with<T: PartialEq>(path: &[T], prefix: &[T]) -> bool {
+    if path.len() < prefix.len() {
+        false
+    } else {
+        path.iter().zip(prefix).all(|(i, k)| i == k)
+    }
+}
+
 pub fn make_path<T: AsRef<str>, I: Iterator<Item = T>>(i: I) -> CompactString {
     let mut out = CompactString::new_inline("");
     for i in i.filter(|i| i.as_ref().len() > 0) {
@@ -97,21 +114,29 @@ pub enum CompletionEnv {
     Aggregate { context: Option<Path> },
 }
 impl CompletionEnv {
+    //FIlter completions according to kind
     fn is_relevant(&self, kind: CompletionKind) -> bool {
         match self {
             Self::Feature => matches!(
                 kind,
-                CompletionKind::Feature |CompletionKind::Import| CompletionKind::Folder | CompletionKind::File
+                CompletionKind::Feature
+                    | CompletionKind::Import
+                    | CompletionKind::Folder
+                    | CompletionKind::File
             ),
             Self::Aggregate { .. } => matches!(
                 kind,
-                CompletionKind::Feature |CompletionKind::Import| CompletionKind::Folder | CompletionKind::File
+                CompletionKind::Feature
+                    | CompletionKind::Import
+                    | CompletionKind::Folder
+                    | CompletionKind::File
             ),
             _ => true, //Just pick anything
         }
     }
 }
 
+//Top level document section
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Section {
     Imports,
@@ -268,10 +293,13 @@ fn node_at(node: Node, pos: tree_sitter::Point) -> Node {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum CompletionOffset {
-    Continous,
-    SameLine,
-    Cut,
+    Continous, // We are in path
+    Dot,       //We are in open path ending with a dot
+    SameLine,  // We are in a unfinished line
+    Cut,       //We are in a empty line
 }
+//Search for context in the vicinity of the cursor
+//first search on char back, then inside the line, then in the previous line etc.
 fn position_to_node<'a>(
     source: &Rope,
     tree: &'a Tree,
@@ -340,7 +368,7 @@ fn position_to_node<'a>(
         }
     }
 }
-//"Smart" completion
+//"Smart" completion, find context arround the cursor
 fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
     match draft {
         Draft::Tree { source, tree, .. } => {
@@ -351,7 +379,7 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
             {
                 if let Some(tail) = path_node.child_by_field_name("tail") {
                     Some(CompletionQuery {
-                        offset,
+                        offset: CompletionOffset::Dot,
                         postfix_range: lsp_range(tail.end_byte()..tail.end_byte(), source)?,
                         postfix: CompactString::new_inline(""),
                         perfix: path.names,
@@ -416,7 +444,7 @@ impl From<Symbol> for CompletionKind {
 enum TextOP {
     Put(CompactString),
 }
-
+//A completion option send to the editor
 #[derive(PartialEq, Debug)]
 struct CompletionOpt {
     rank: f32,
@@ -506,18 +534,21 @@ fn add_group_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
 fn add_lang_lvl_major_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(query, top, w, ["SMT-level".into(), "SAT-level".into()]);
 }
-fn add_lang_lvl_minor_keyword(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+fn add_lang_lvl_smt(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(
         query,
         top,
         w,
         [
-            "group-cardinality".into(),
             "feature-cardinality".into(),
             "aggregate-function".into(),
             "*".into(),
         ],
     );
+}
+
+fn add_lang_lvl_sat(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+    add_keywords(query, top, w, ["group-cardinality".into(), "*".into()]);
 }
 
 fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
@@ -533,10 +564,12 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
             ">".into(),
             "<".into(),
             "==".into(),
-            "sum".into(),
-            "avg".into(),
         ],
     );
+}
+
+fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+    add_keywords(query, top, w, ["sum".into(), "avg".into()]);
 }
 fn make_relativ_path(path: &[CompactString], origin: &[CompactString]) -> Option<CompactString> {
     if path.len() > origin.len() {
@@ -550,7 +583,7 @@ fn make_relativ_path(path: &[CompactString], origin: &[CompactString]) -> Option
         }
     }
 }
-
+//weight function
 fn completion_weight(
     query: &str,
     to_match: &str,
@@ -574,7 +607,7 @@ fn completion_weight(
         strsim::jaro_winkler(&query, &to_match) as f32 * w2 * w1
     }
 }
-
+//measure text distance for paths
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ModulePath {
     len: usize,
@@ -617,34 +650,7 @@ impl pathfinding::num_traits::Zero for ModulePath {
         self.word == 0 && self.len == 0
     }
 }
-
-fn edit<'a>(prefix: &'a str, path: &'a str) -> Option<&'a str> {
-    if path.len() > prefix.len() + 1 && prefix == &path[0..prefix.len()] {
-        if prefix.len() == 0 || path[prefix.len()..].starts_with(".") {
-            return Some(&path[prefix.len() + 1..]);
-        }
-    }
-    None
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ModuleBind {
-    prefix: CompactString,
-    depth: usize,
-    name: Ustr,
-}
-
-impl Ord for ModuleBind {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.depth
-            .cmp(&other.depth)
-            .then_with(|| self.prefix.len().cmp(&other.prefix.len()))
-    }
-}
-impl PartialOrd for ModuleBind {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+//find completions in a document under a prefix
 fn completion_symbol_local(
     snapshot: &RootGraph,
     origin: Ustr,
@@ -662,7 +668,10 @@ fn completion_symbol_local(
         if sym_prefix.is_empty() || !query.env.is_relevant(sym.into()) {
             continue;
         }
-        if query.env == CompletionEnv::Feature && root.file == origin && matches!(sym, Symbol::Feature(..)) {
+        if query.env == CompletionEnv::Feature
+            && root.file == origin
+            && matches!(sym, Symbol::Feature(..))
+        {
             continue;
         }
         let text = make_path(prefix.iter().chain(sym_prefix.iter()));
@@ -679,16 +688,20 @@ fn completion_symbol_local(
 fn path_len(path: &[Ustr]) -> usize {
     path.iter().map(|i| i.len()).sum()
 }
+//find completions in all related documents
 fn completion_symbol(
     snapshot: &RootGraph,
     origin: Ustr,
     query: &CompletionQuery,
     top: &mut TopN<CompletionOpt>,
 ) {
-    let mut modules: HashMap<_, &[Ustr]> = HashMap::new();
-    let mut visited = HashSet::new();
+    let mut modules: HashMap<_, &[Ustr]> = HashMap::new(); //Store reachable documents under the
+                                                           //search perfix under a secondary prefix
+    let mut visited = HashSet::new(); //Needed for circular references?
 
     for i in snapshot.resolve(origin, &query.perfix) {
+        //Find all possible continuations for the
+        //search prefix
         visited.insert(i.file);
         match &i.sym {
             Symbol::Root => {
@@ -714,7 +727,7 @@ fn completion_symbol(
             _ => completion_symbol_local(snapshot, origin, i, &[], query, top),
         }
     }
-    let root = Ustr::from("");
+    let root = Ustr::from(""); //Perform nn from all reachable documents to all other
     let pred = pathfinding::directed::dijkstra::dijkstra_all(&root, |node| {
         if node == &root {
             Either::Left(modules.iter().map(|(k, v)| (*k, ModulePath::from(*v))))
@@ -731,6 +744,7 @@ fn completion_symbol(
     for &i in pred.keys() {
         let mut next = i;
         let mut path = Vec::new();
+        //reconstruct the shortest prefix to document i and provide completions under it
         while let Some((parent, _)) = pred.get(&next) {
             if *parent == root {
                 for i in modules[&next].iter().rev() {
@@ -801,16 +815,25 @@ pub fn compute_completions(
             CompletionEnv::Toplevel => add_top_lvl_keywords(&ctx.postfix, &mut top, 2.0),
             CompletionEnv::SomeName => {}
             CompletionEnv::Constraint | CompletionEnv::Numeric | CompletionEnv::Feature => {
-                if ctx.env == CompletionEnv::Feature {
-                    add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
+                match (&ctx.env, &ctx.offset) {//Switch to provide nearly correct prediction, to
+                                               //make it more accurate we need to respect
+                                               //parenthesis
+                    (CompletionEnv::Feature, CompletionOffset::SameLine) => {
+                        add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
+                    }
+                    (CompletionEnv::Constraint|CompletionEnv::Numeric, CompletionOffset::SameLine) => {
+                        add_logic_op(&ctx.postfix, &mut top, 6.1);
+                        add_function_keywords(&ctx.postfix, &mut top, 4.0);
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    }
+                    (CompletionEnv::Constraint|CompletionEnv::Numeric, CompletionOffset::Cut|CompletionOffset::Continous)  => {
+                        add_function_keywords(&ctx.postfix, &mut top, 4.0);
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    }
+                    _ => {
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    }
                 }
-                if (ctx.env == CompletionEnv::Constraint || ctx.env == CompletionEnv::Numeric)
-                    && ctx.offset != CompletionOffset::Continous
-                {
-                    add_logic_op(&ctx.postfix, &mut top, 6.1);
-                }
-                completion_symbol(&snapshot, origin, &ctx, &mut top);
-
                 is_incomplete = true
             }
             CompletionEnv::Import => {
@@ -832,7 +855,11 @@ pub fn compute_completions(
             }
             CompletionEnv::Include => {
                 if ctx.perfix.len() > 0 {
-                    add_lang_lvl_minor_keyword(&ctx.postfix, &mut top, 2.0)
+                    match ctx.perfix[0].as_str() {
+                        "SAT-level" => add_lang_lvl_sat(&ctx.postfix, &mut top, 2.0),
+                        "SMT-level" => add_lang_lvl_smt(&ctx.postfix, &mut top, 2.0),
+                        _ => {}
+                    }
                 } else {
                     add_lang_lvl_major_keywords(&ctx.postfix, &mut top, 2.0);
                 }

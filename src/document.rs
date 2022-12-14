@@ -11,7 +11,7 @@ use tree_sitter::{InputEdit, Tree};
 use crate::{ parse, semantic};
 
 use ropey::Rope;
-
+//update the document text using text deltas form the editor
 pub fn update_text(
     source: &mut Rope,
     tree: &mut Tree,
@@ -20,8 +20,10 @@ pub fn update_text(
     let mut whole_file = false;
     for e in changes.content_changes.iter() {
         if let Some(range) = e.range {
+            info!("apply change");
             let start_line = range.start.line as usize;
             let end_line = range.end.line as usize;
+
 
             let start_col = range.start.character as usize;
             let end_col = range.end.character as usize;
@@ -42,10 +44,10 @@ pub fn update_text(
 
             let start_byte = source.char_to_byte(start_char);
             let end_byte = source.char_to_byte(end_char);
-            source.remove(start_char..end_char);
-            source.insert(start_char, &e.text);
             let start_col_byte = start_byte-source.line_to_byte(start_line);
             let end_col_byte = end_byte-source.line_to_byte(end_line);
+            source.remove(start_char..end_char);
+            source.insert(start_char, &e.text);
             let new_end_line = source.byte_to_line(start_byte + e.text.len());
             let new_end_col_byte = (start_byte + e.text.len())-source.line_to_byte(new_end_line);
             tree.edit(&InputEdit {
@@ -65,6 +67,8 @@ pub fn update_text(
                     column: new_end_col_byte,
                 },
             });
+
+            info!("done change");
         } else {
             whole_file = true;
             *source = Rope::from_str(&e.text);
@@ -72,7 +76,8 @@ pub fn update_text(
     }
     whole_file
 }
-
+//each parsed document can be in three states, wich allows for faster proccessing when the parse
+//tree is not needed 
 #[derive(Clone)]
 pub enum Draft {
     Unavailable {
@@ -103,7 +108,7 @@ pub enum DraftSync {
     Source,
     Tree,
 }
-
+//A document can be owned by the operating system orde opened in the editor
 #[derive(Clone, PartialEq, Eq, Copy)]
 pub enum DocumentState {
     OwnedByOs(SystemTime),
@@ -119,6 +124,7 @@ impl DocumentState {
         }
     }
 }
+//The states are proccessed asynchronously
 #[derive(Clone)]
 pub struct AsyncDraft {
     content: watch::Receiver<Draft>,
@@ -126,6 +132,7 @@ pub struct AsyncDraft {
 }
 
 impl AsyncDraft {
+    //Wait until a state is reached, or timeout
     pub async fn sync(&mut self, sync: DraftSync, deadline: tokio::time::Instant) -> Option<Draft> {
         select! {
             () = tokio::time::sleep_until(deadline) =>
@@ -167,7 +174,7 @@ impl AsyncDraft {
             tree: tree.clone(),
             source: source.clone(),
         });
-        semantic
+        _ = semantic
             .tx_draft_updates
             .send(semantic::DraftUpdate::Put {
                 uri,
@@ -223,7 +230,7 @@ impl AsyncDraft {
                 source: source.clone(),
             });
 
-            semantic
+            _ = semantic
                 .tx_draft_updates
                 .send(semantic::DraftUpdate::Put {
                     uri,

@@ -1,6 +1,6 @@
 use crate::check::ErrorInfo;
 use crate::parse::{parse_name, parse_path};
-use crate::util::{self, containing_blk, node_range};
+use crate::util::{self, node_range};
 use enum_kinds;
 use itertools::{Either, Itertools};
 use lazy_static::lazy_static;
@@ -9,12 +9,24 @@ use petgraph::prelude::*;
 use ropey::Rope;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::path::Component;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
-use tree_sitter::{Node, QueryCursor, Range, Tree};
+use tree_sitter::{Node, QueryCursor, Tree};
 use ustr::Ustr;
 
-use std::path::Component;
+/*
+ * Here we transform the loose tree-sitter syntax tree(Green tree) into a more fixed
+ * according to the UVL-grammar syntax tree
+ * This happens in two steps
+ * 1. Extract relevant symboles like features or imports using queries
+ * 2. Linke those symboles using a second set of queries
+ *
+ * We also parse constraints into a fixed format for easy postprocessing
+ * parse errors are stored for the later check pass.
+ *
+ * Additionally a index for all named nodes is created to provide esay look up for paths
+ * */
 lazy_static! {
     pub static ref TS: util::ParseConstants = util::ParseConstants::new();
 }
@@ -112,16 +124,20 @@ pub enum LanguageLevelMajor {
     SMT,
 }
 #[derive(Clone, Debug)]
-pub enum LanguageLevelMinor {
+pub enum LanguageLevelSMT {
     Any,
-    GroupCardinality,
     FeatureCardinality,
     Aggregate,
 }
 #[derive(Clone, Debug)]
-pub struct LanguageLevel {
-    major: LanguageLevelMajor,
-    minor: Vec<LanguageLevelMinor>,
+pub enum LanguageLevelSAT {
+    Any,
+    GroupCardinality,
+}
+#[derive(Clone, Debug)]
+pub enum LanguageLevel {
+    SAT(Vec<LanguageLevelSAT>),
+    SMT(Vec<LanguageLevelSMT>),
 }
 #[derive(Clone, Debug)]
 pub struct Feature {
@@ -284,8 +300,8 @@ pub enum AggregateOP {
 }
 
 impl AggregateOP {
-    fn parse(op: &str) -> Option<Self> {
-        match op {
+    fn parse(source: &String, op: Node) -> Option<Self> {
+        match &source[op.byte_range()] {
             "avg" => Some(AggregateOP::Avg),
             "sum" => Some(AggregateOP::Sum),
             _ => None,
@@ -375,6 +391,118 @@ pub struct FileGraph {
     pub timestamp: Instant,
 }
 impl FileGraph {
+    fn parse_lang_lvl(&mut self, node: Node) -> Option<LanguageLevel> {
+        if node.kind() != "lang_lvl" {
+            return None;
+        }
+        let mut cursor = node.walk();
+        cursor.goto_first_child();
+        let mut out = None;
+        loop {
+            if cursor.node().kind() == "major_lvl" {
+                if out.is_some() {
+                    self.parse_errors.push(ErrorInfo {
+                        location: node_range(cursor.node(), &self.rope),
+                        severity: DiagnosticSeverity::ERROR,
+                        weight: 30,
+                        msg: "duplicate major level, please pick a minor level".into(),
+                    });
+                    return None;
+                } else {
+                    cursor.goto_first_child();
+                    match cursor.node().kind() {
+                        "SMT-level" => out = Some(LanguageLevel::SMT(vec![])),
+                        "SAT-level" => out = Some(LanguageLevel::SAT(vec![])),
+                        _ => {
+                            self.parse_errors.push(ErrorInfo {
+                                location: node_range(cursor.node(), &self.rope),
+                                severity: DiagnosticSeverity::ERROR,
+                                weight: 30,
+                                msg: "unknown major language level".into(),
+                            });
+                            return None;
+                        }
+                    }
+                    cursor.goto_parent();
+                }
+            }
+            if cursor.node().kind() == "minor_lvl" {
+                if let Some(major) = out.as_mut() {
+                    cursor.goto_first_child();
+                    match major {
+                        LanguageLevel::SMT(v) => match cursor.node().kind() {
+                            "*" => v.push(LanguageLevelSMT::Any),
+                            "feature-cardinality" => v.push(LanguageLevelSMT::FeatureCardinality),
+                            "aggregate-function" => v.push(LanguageLevelSMT::Aggregate),
+                            "group-cardinality" => {
+                                self.parse_errors.push(ErrorInfo {
+                                    location: node_range(cursor.node(), &self.rope),
+                                    severity: DiagnosticSeverity::ERROR,
+                                    weight: 30,
+                                    msg: "not allowed under SMT".into(),
+                                });
+                                return None;
+                            }
+                            _ => {
+                                self.parse_errors.push(ErrorInfo {
+                                    location: node_range(cursor.node(), &self.rope),
+                                    severity: DiagnosticSeverity::ERROR,
+                                    weight: 30,
+                                    msg: "unknown SMT level".into(),
+                                });
+                                return None;
+                            }
+                        },
+                        LanguageLevel::SAT(v) => match cursor.node().kind() {
+                            "*" => v.push(LanguageLevelSAT::Any),
+                            "group-cardinality" => v.push(LanguageLevelSAT::GroupCardinality),
+                            "feature-cardinality" | "aggregate-function" => {
+                                self.parse_errors.push(ErrorInfo {
+                                    location: node_range(cursor.node(), &self.rope),
+                                    severity: DiagnosticSeverity::ERROR,
+                                    weight: 30,
+                                    msg: "not allowed under SAT".into(),
+                                });
+                                return None;
+                            }
+                            _ => {
+                                self.parse_errors.push(ErrorInfo {
+                                    location: node_range(cursor.node(), &self.rope),
+                                    severity: DiagnosticSeverity::ERROR,
+                                    weight: 30,
+                                    msg: "unknown SAT level".into(),
+                                });
+                                return None;
+                            }
+                        },
+                    }
+                    cursor.goto_parent();
+                } else {
+                    self.parse_errors.push(ErrorInfo {
+                        location: node_range(cursor.node(), &self.rope),
+                        severity: DiagnosticSeverity::ERROR,
+                        weight: 30,
+                        msg: "missing major level, please specify SMT or SAT level".into(),
+                    });
+                    return None;
+                }
+            }
+            if cursor.node().kind() == "name" {
+                self.parse_errors.push(ErrorInfo {
+                    location: node_range(cursor.node(), &self.rope),
+                    severity: DiagnosticSeverity::ERROR,
+                    weight: 30,
+                    msg: "unknown language level".into(),
+                });
+            }
+
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+        out
+    }
+
     fn parse_cardinality(&mut self, node: Node, source: &String) -> Cardinality {
         let begin = node.child_by_field_name("begin");
         let end = node.child_by_field_name("end");
@@ -482,7 +610,8 @@ impl FileGraph {
             }
 
             "aggregate" => {
-                if let Some(op) = AggregateOP::parse(node.child_by_field_name("op").unwrap().kind())
+                if let Some(op) =
+                    AggregateOP::parse(source, node.child_by_field_name("op").unwrap())
                 {
                     if let Some(ctx) = node.child_by_field_name("context") {
                         let path = self.parse_path(source, ctx)?;
@@ -507,7 +636,13 @@ impl FileGraph {
                         })
                     }
                 } else {
-                    panic!()
+                    self.parse_errors.push(ErrorInfo {
+                        location: node_range(node, &self.rope),
+                        severity: DiagnosticSeverity::ERROR,
+                        weight: 30,
+                        msg: "unknown aggregate function".into(),
+                    });
+                    None
                 }
             }
 
@@ -522,14 +657,12 @@ impl FileGraph {
                 None
             }
 
-            _ => {
-                panic!("unknown numeric kind  {}", node.kind());
-            }
+            _ => None,
         }
     }
     fn parse_constraint(&mut self, source: &String, node: Node) -> Option<Constraint> {
         match node.kind() {
-            "constraint"=>self.parse_constraint(source,node.named_child(0)?),
+            "constraint" => self.parse_constraint(source, node.named_child(0)?),
             "path" | "name" => Some(Constraint::Ref(self.add_reference(
                 source,
                 node,
@@ -636,6 +769,107 @@ impl FileGraph {
             _ => unimplemented!(),
         }
     }
+    //All attributes under root
+    pub fn children_attributes<'a>(
+        &'a self,
+        root: Symbol,
+    ) -> impl Iterator<Item = (&'a [Ustr], Symbol)> + 'a {
+        if matches!(root, Symbol::Root) {
+            Either::Left(
+                (0..self.attributes.len())
+                    .into_iter()
+                    .map(move |i| self.attributes[i].symbol(i))
+                    .filter_map(move |i| {
+                        let prefix = &self.prefix(i);
+                        if prefix.len() <= 1 {
+                            None
+                        } else {
+                            Some((&prefix[1..], i))
+                        }
+                    }),
+            )
+        } else {
+            let mut stack = vec![];
+            let base_len = 1;
+            for (_, b, _) in self.graph.edges(root) {
+                stack.push(b);
+            }
+            Either::Right(std::iter::from_fn(move || loop {
+                if let Some(sym) = stack.pop().map(|sym| {
+                    for (_, b, _) in self.graph.edges(sym) {
+                        stack.push(b);
+                    }
+                    sym
+                }) {
+                    if sym.is_value() {
+                        return Some((&self.prefix(sym)[base_len..], sym));
+                    }
+                } else {
+                    return None;
+                }
+            }))
+        }
+    }
+    pub fn children<'a>(&'a self, root: Symbol) -> impl Iterator<Item = (&'a [Ustr], Symbol)> + 'a {
+        if matches!(root, Symbol::Root) {
+            Either::Left(self.all_named_symboles().map(|sym| (self.prefix(sym), sym)))
+        } else {
+            let mut stack = vec![];
+            let base_len = self.prefix(root).len();
+            for (_, b, _) in self
+                .graph
+                .edges(root)
+                .filter(|(_, b, _)| self.prefix(*b).len() > base_len)
+            {
+                stack.push(b);
+            }
+            Either::Right(std::iter::from_fn(move || {
+                stack.pop().map(|sym| {
+                    for (_, b, _) in self
+                        .graph
+                        .edges(sym)
+                        .filter(|(_, b, _)| self.prefix(*b).len() > self.prefix(sym).len())
+                    {
+                        stack.push(b);
+                    }
+                    (&self.prefix(sym)[base_len..], sym)
+                })
+            }))
+        }
+    }
+    pub fn owner(&self, sym: Symbol) -> Symbol {
+        self.graph
+            .edges_directed(sym, Incoming)
+            .find_map(|e| {
+                if matches!(e.weight(), LocalEdge::Containes) {
+                    Some(e.source())
+                } else {
+                    None
+                }
+            })
+            .unwrap()
+    }
+
+    pub fn all_named_symboles<'a>(&'a self) -> impl Iterator<Item = Symbol> + 'a {
+        (0..self.imports.len())
+            .into_iter()
+            .map(|i| Symbol::Import(i as u32))
+            .chain(
+                (0..self.directories.len())
+                    .into_iter()
+                    .map(|i| Symbol::Dir(i as u32)),
+            )
+            .chain(
+                (0..self.features.len())
+                    .into_iter()
+                    .map(|i| Symbol::Feature(i as u32)),
+            )
+            .chain(
+                (0..self.attributes.len())
+                    .into_iter()
+                    .map(move |i| self.attributes[i].symbol(i)),
+            )
+    }
 
     fn build(&mut self, source: &String) {
         let mut cursor = QueryCursor::new();
@@ -681,7 +915,7 @@ impl FileGraph {
                 "namespace" => {
                     let name = parse_path(n, source).unwrap();
                     if self.namespace.is_none() {
-                        self.namespace = Some(name)
+                        self.namespace = Some(name);
                     }
                 }
                 "group" => {
@@ -751,9 +985,7 @@ impl FileGraph {
                     self.ts2sym.insert(containing_node(n).id(), sym);
                 }
                 "constraint" => {
-                    if let Some(constraint) =
-                        self.parse_constraint(source, n)
-                    {
+                    if let Some(constraint) = self.parse_constraint(source, n) {
                         self.constraints.push(constraint);
 
                         //info!("{:?} err {:?}", n, self.parse_errors);
@@ -764,16 +996,14 @@ impl FileGraph {
                     }
                 }
                 "lang_lvl" => {
-                    self.lang_lvls.push(LanguageLevel {
-                        major: LanguageLevelMajor::SAT,
-                        minor: vec![],
-                    }); //TODO: parse
-                    self.ts2sym.insert(
-                        containing_node(n).id(),
-                        Symbol::LangLvl(self.lang_lvls.len() as u32 - 1),
-                    );
+                    if let Some(l) = self.parse_lang_lvl(n) {
+                        self.lang_lvls.push(l); //TODO: parse
+                        self.ts2sym.insert(
+                            containing_node(n).id(),
+                            Symbol::LangLvl(self.lang_lvls.len() as u32 - 1),
+                        );
+                    }
                 }
-
                 _ => {}
             }
         }
@@ -871,107 +1101,11 @@ impl FileGraph {
         }
         //info!("{:#?}",self);
         self.path = uri_to_path(&self.uri).unwrap();
-    }
-    pub fn children_attributes<'a>(
-        &'a self,
-        root: Symbol,
-    ) -> impl Iterator<Item = (&'a [Ustr], Symbol)> + 'a {
-        if matches!(root, Symbol::Root) {
-            Either::Left(
-                (0..self.attributes.len())
-                    .into_iter()
-                    .map(move |i| self.attributes[i].symbol(i))
-                    .filter_map(move |i| {
-                        let prefix = &self.prefix(i);
-                        if prefix.len() <= 1 {
-                            None
-                        } else {
-                            Some((&prefix[1..], i))
-                        }
-                    }),
-            )
-        } else {
-            let mut stack = vec![];
-            let base_len = 1;
-            for (_, b, _) in self.graph.edges(root) {
-                stack.push(b);
-            }
-            Either::Right(std::iter::from_fn(move || loop {
-                if let Some(sym) = stack.pop().map(|sym| {
-                    for (_, b, _) in self.graph.edges(sym) {
-                        stack.push(b);
-                    }
-                    sym
-                }) {
-                    if sym.is_value() {
-                        return Some((&self.prefix(sym)[base_len..], sym));
-                    }
-                } else {
-                    return None;
-                }
-            }))
+        if let Some(ns) = self.namespace.as_ref() {
+            let len = self.path.len().saturating_sub(ns.names.len());
+            self.path.truncate(len);
+            self.path.extend_from_slice(&ns.names);
         }
-    }
-    pub fn children<'a>(&'a self, root: Symbol) -> impl Iterator<Item = (&'a [Ustr], Symbol)> + 'a {
-
-        if matches!(root, Symbol::Root) {
-            Either::Left(self.all_named_symboles().map(|sym| (self.prefix(sym), sym)))
-        } else {
-            let mut stack = vec![];
-            let base_len = self.prefix(root).len();
-            for (_, b, _) in self
-                .graph
-                .edges(root)
-                .filter(|(_, b, _)| self.prefix(*b).len() > base_len)
-            {
-                stack.push(b);
-            }
-            Either::Right(std::iter::from_fn(move || {
-                stack.pop().map(|sym| {
-                    for (_, b, _) in self
-                        .graph
-                        .edges(sym)
-                        .filter(|(_, b, _)| self.prefix(*b).len() > self.prefix(sym).len())
-                    {
-                        stack.push(b);
-                    }
-                    (&self.prefix(sym)[base_len..], sym)
-                })
-            }))
-        }
-    }
-    pub fn owner(&self, sym: Symbol) -> Symbol {
-        self.graph
-            .edges_directed(sym, Incoming)
-            .find_map(|e| {
-                if matches!(e.weight(), LocalEdge::Containes) {
-                    Some(e.source())
-                } else {
-                    None
-                }
-            })
-            .unwrap()
-    }
-
-    pub fn all_named_symboles<'a>(&'a self) -> impl Iterator<Item = Symbol> + 'a {
-        (0..self.imports.len())
-            .into_iter()
-            .map(|i| Symbol::Import(i as u32))
-            .chain(
-                (0..self.directories.len())
-                    .into_iter()
-                    .map(|i| Symbol::Dir(i as u32)),
-            )
-            .chain(
-                (0..self.features.len())
-                    .into_iter()
-                    .map(|i| Symbol::Feature(i as u32)),
-            )
-            .chain(
-                (0..self.attributes.len())
-                    .into_iter()
-                    .map(move |i| self.attributes[i].symbol(i)),
-            )
     }
     pub fn new(timestamp: Instant, tree: Tree, rope: Rope, uri: Url) -> FileGraph {
         let mut graph = DiGraphMap::new();

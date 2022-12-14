@@ -393,7 +393,7 @@ async fn handler_impl(ctx: Arc<Context>, mut rx: mpsc::Receiver<DraftUpdate>) {
 pub fn create_handler(
     client: Client,
     shutdown: CancellationToken,
-    drafts: Arc<DashMap<Url, AsyncDraft>>,
+    _: Arc<DashMap<Url, AsyncDraft>>,
 ) -> Arc<Context> {
     let (tx, rx) = mpsc::channel(1024);
     let ctx = Arc::new(Context {

@@ -1,16 +1,19 @@
-use log::info;
-use ropey::Rope;
-use std::collections::HashSet;
-use std::sync::Arc;
-use tokio::time::Instant;
-use tower_lsp::lsp_types::*;
-
 use crate::completion::{estimate_constraint_env, find_section, CompletionEnv, Section};
 use crate::parse::parse_path;
 use crate::semantic::RootGraph;
 use crate::util::node_range;
 use crate::{filegraph::*, util::lsp_range};
+use log::info;
+use ropey::Rope;
+use std::collections::HashSet;
+use tokio::time::Instant;
+use tower_lsp::lsp_types::*;
 use tree_sitter::{Node, QueryCursor, Tree};
+//Syntax highlight happens in here
+//we mainly use tree-sitter queries to extract token and serialize them
+//according to the lsp spec
+//TODO make use of incremental parsing and updates
+//this is fast enough for medium sized files but breaks at huge files
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbsToken {
@@ -33,7 +36,7 @@ pub fn token_types() -> Vec<SemanticTokenType> {
         SemanticTokenType::FUNCTION,
         SemanticTokenType::MACRO,
         SemanticTokenType::PARAMETER,
-        SemanticTokenType::NUMBER
+        SemanticTokenType::NUMBER,
     ]
 }
 fn token_index(name: &str) -> u32 {
@@ -49,7 +52,7 @@ fn token_index(name: &str) -> u32 {
         "function" => 8,
         "macro" => 9,
         "parameter" => 10,
-        "number"=>11,
+        "number" => 11,
         _ => 0,
     }
 }
@@ -82,8 +85,9 @@ fn fast_lsp_range(
 }
 
 impl FileState {
+    //calculate the diffrence of two states using a crude single change or all diff algorithm
     fn diff(&self, new: &FileState) -> SemanticTokensFullDeltaResult {
-        //todo use a proper diffing algorithm
+        //TODO use a proper diffing algorithm
         let prefix = self
             .state
             .iter()
@@ -131,10 +135,53 @@ impl FileState {
             }],
         })
     }
-    fn new(origin:& Url, tree: Tree, source: &ropey::Rope, root: &RootGraph) -> Self {
+    fn highlight_attribute_path(
+        source: &Rope,
+        root: &RootGraph,
+        token: &mut Vec<AbsToken>,
+        node: Node,
+        file: &FileGraph,
+        utf16_lines: &HashSet<usize>,
+    ) {
+        let path = parse_path(node, source).unwrap();
+        if let Some(attrib) = root
+            .resolve(file.name, &path.names)
+            .find(|node| matches!(node.sym, Symbol::Number(..)))
+        {
+            let mut sym = Some(attrib.sym);
+            for i in (0..path.names.len()).rev() {
+                if let Some(cur) = sym {
+                    token.push(AbsToken {
+                        range: lsp_range(path.spans[i].clone(), source).unwrap(),
+                        kind: token_index("enumMember"),
+                    });
+                    let next = root.files[&attrib.file].owner(cur);
+                    if next.is_value() {
+                        sym = Some(next);
+                    } else {
+                        sym = None;
+                    }
+                } else {
+                    //TODO this is slow since we need the whole byte to utf16 conversion path
+                    token.push(AbsToken {
+                        range: lsp_range(path.spans[i].clone(), source).unwrap(),
+                        kind: token_index("parameter"),
+                    });
+                }
+            }
+        } else {
+            token.push(AbsToken {
+                range: fast_lsp_range(node, source, utf16_lines),
+                kind: token_index("parameter"),
+            });
+        };
+    }
+    fn new(origin: &Url, tree: Tree, source: &ropey::Rope, root: &RootGraph) -> Self {
         let time = Instant::now();
         let mut cursor = QueryCursor::new();
         let mut token = vec![];
+        //Keep track of non ascii lines, only perform byte->utf8->utf16 transformation there
+        //61ms->34ms performance improvment!
         let mut utf16_line = HashSet::new();
         for (i, line) in source.lines().enumerate() {
             for c in line.chars() {
@@ -145,6 +192,7 @@ impl FileState {
         }
         let captures = TS.queries.highlight.capture_names();
         let file = &root.files[&origin.as_str().into()];
+        //iterate captures and provide colors kindes
         for i in cursor.matches(
             &TS.queries.highlight,
             tree.root_node(),
@@ -159,40 +207,18 @@ impl FileState {
                             let env = estimate_constraint_env(c.node, None, source);
                             match env {
                                 CompletionEnv::Numeric => {
-                                    let path = parse_path(c.node, source).unwrap();
-                                    if let Some(attrib) = root
-                                        .resolve(file.name, &path.names)
-                                        .find(|node| matches!(node.sym, Symbol::Number(..)))
-                                    {
-                                        let mut sym = Some(attrib.sym);
-                                        for i in (0..path.names.len()).rev() {
-                                            if let Some(cur) = sym {
-                                                token.push(AbsToken {
-                                                    range: lsp_range(path.spans[i].clone(),source).unwrap(),
-                                                    kind: token_index("enumMember"),
-                                                });
-                                                let next  = root.files[&attrib.file].owner(cur);
-                                                if next.is_value(){
-                                                    sym = Some(next);
-                                                }
-                                                else{
-                                                    sym = None;
-                                                }
-                                            } else {
-                                                token.push(AbsToken {
-                                                    range: lsp_range(path.spans[i].clone(),source).unwrap(),
-                                                    kind: token_index("parameter"),
-                                                });
-                                            }
-                                        }
-                                    } else {
-                                        token.push(AbsToken {
-                                            range: fast_lsp_range(c.node, source, &utf16_line),
-                                            kind: token_index("parameter"),
-                                        });
-                                    };
+                                    //Hard path we have to ananlyze the path
+                                    Self::highlight_attribute_path(
+                                        source,
+                                        root,
+                                        &mut token,
+                                        c.node,
+                                        file,
+                                        &utf16_line,
+                                    );
                                 }
                                 _ => {
+                                    //easy all segments have the same color
                                     token.push(AbsToken {
                                         range: fast_lsp_range(c.node, source, &utf16_line),
                                         kind: token_index("parameter"),
@@ -218,6 +244,7 @@ impl FileState {
         token.dedup();
         let mut filtered = Vec::new();
         let mut last: Option<AbsToken> = None;
+        //translate to relative lsp tokens
         for i in token.iter() {
             if let Some(last) = last.as_ref() {
                 if last.range.end.line > i.range.start.line {

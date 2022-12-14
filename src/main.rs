@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use color::ColorUpdate;
 use dashmap::DashMap;
 use document::{AsyncDraft, Draft, DraftSync};
 use flexi_logger::FileSpec;
@@ -27,9 +26,8 @@ mod index;
 mod parse;
 mod query;
 mod semantic;
-mod symboles;
 mod util;
-
+//The server core, request and respones handling happens here
 struct Backend {
     client: Client,
     coloring: Arc<color::State>,
@@ -72,7 +70,7 @@ impl Backend {
         });
     }
 }
-
+//load a file this is tricky because the editor can also load it at the same time
 fn load_blocking(
     uri: Url,
     documents: &DashMap<Url, AsyncDraft>,
@@ -120,7 +118,7 @@ fn load_blocking(
         info!("Failed to load file {}", uri);
     }
 }
-
+//load all files under given path
 fn load_all_blocking(
     path: &Path,
     documents: Arc<DashMap<Url, AsyncDraft>>,
@@ -148,6 +146,7 @@ fn load_all_blocking(
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
+        #[allow(deprecated)]
         let root_folder = init_params
             .root_path
             .as_ref()
@@ -276,11 +275,9 @@ impl LanguageServer for Backend {
             let color = self.coloring.clone();
             return Ok(spawn(async move {
                 match draft {
-                    Draft::Tree {
-                        source,
-                        tree,
-                        revision,
-                    } => color.get(root,params.text_document.uri, tree, source),
+                    Draft::Tree { source, tree, .. } => {
+                        color.get(root, params.text_document.uri, tree, source)
+                    }
                     _ => {
                         unimplemented!()
                     }
@@ -305,11 +302,9 @@ impl LanguageServer for Backend {
             let root = self.semantic.snapshot(&params.text_document.uri).await;
             return Ok(spawn(async move {
                 match draft {
-                    Draft::Tree {
-                        source,
-                        tree,
-                        revision,
-                    } => color.delta(root, params.text_document.uri, tree, source),
+                    Draft::Tree { source, tree, .. } => {
+                        color.delta(root, params.text_document.uri, tree, source)
+                    }
                     _ => {
                         unimplemented!()
                     }
@@ -330,7 +325,7 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "file closed!")
             .await;
-        self.remove(&params.text_document.uri, true);
+        self.remove(&params.text_document.uri, true).await;
         self.load(&params.text_document.uri);
     }
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
@@ -343,7 +338,7 @@ impl LanguageServer for Backend {
                     self.load(&i.uri);
                 }
                 FileChangeType::DELETED => {
-                    self.remove(&i.uri, false);
+                    self.remove(&i.uri, false).await;
                 }
                 _ => {}
             }

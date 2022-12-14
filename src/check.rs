@@ -3,19 +3,28 @@ use log::info;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
 use crate::filegraph::{Symbol, Type, TS};
 use tokio::time::Instant;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Range, Url};
 use tower_lsp::Client;
 use tree_sitter::{Node, QueryCursor};
-
 use crate::util::header_kind;
 use crate::{semantic, util::*};
 use ustr::Ustr;
-
 use crate::filegraph::{FileGraph, SymbolKind};
 use crate::semantic::RootGraph;
+/*
+ * Most error checking happens in here.
+ * Files are checked in there phases if one phase failes checking is stopped.
+ * Phase1. Check Sanity: Here we check if the fils is ambiguous, 
+ * this happens for example if there is a missing opperand at line break 
+ * Phase2. Check Syntax: Check if the treesitter tree matches the UVL grammer spec. 
+ * Phase3. Check References: When all files have correct syntax we check if pathes are valid and
+ * have the correct type
+ *
+ *
+ * All Erros have a artificial severity weight to mask consequential errors.
+*/
 
 #[derive(Clone, Debug)]
 pub struct ErrorInfo {
@@ -35,6 +44,7 @@ impl ErrorInfo {
         }
     }
 }
+//Walk the syntax tree and only go "down" if F is true 
 fn ts_filterd_visit<F: FnMut(Node) -> bool>(root: Node, mut f: F) {
     let mut reached_root = false;
     let mut cursor = root.walk();
@@ -66,6 +76,8 @@ fn ts_filterd_visit<F: FnMut(Node) -> bool>(root: Node, mut f: F) {
     }
 }
 //Check if line breaks are correct eg inside parenthesis
+//This is necessary because the treesitter grammer allows 2 features on the same line under certain
+//conditions.
 fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
     let time = Instant::now();
     let mut cursor = QueryCursor::new();
@@ -77,6 +89,7 @@ fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
         file.source.as_bytes(),
     ) {
         let node = i.captures[0].node;
+        //We have to check if line breaks in expression are contained by a parenthesis
         if node.kind() == "expr" {
             if node.start_position().row == node.end_position().row {
                 continue;
@@ -103,7 +116,7 @@ fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
                     }
                 }
             }
-        } else if i.pattern_index == 0 {
+        } else if i.pattern_index == 0 {//Header
             if node.start_position().row != node.end_position().row {
                 error.push(ErrorInfo {
                     weight: 100,
@@ -120,7 +133,7 @@ fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
                     msg: "Features have to be in diffrent lines".to_string(),
                 });
             }
-        } else {
+        } else {//check name or string since quoted names allow line breaks
             if node.start_position().row != node.end_position().row {
                 error.push(ErrorInfo {
                     weight: 100,
@@ -134,20 +147,13 @@ fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
     info!(" check sanity in {:?}", time.elapsed());
     error
 }
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum DeclContext {
-    Import,
-    Feature,
-    Include,
-    Constraints,
-    Value,
-    Root,
-}
 struct Template {
     valid_children: Vec<SymbolKind>,
     allow_card: bool,
     allow_attribs: bool,
 }
+//Here we define what kind how shape the syntax tree is allowed to have
+//each symbol has a set of child types and shape information.
 fn blk_template(blk: Node, file: &FileGraph) -> Template {
     if let Some(sym) = file.ts2sym.get(&blk.id()) {
         match sym.into() {
@@ -234,7 +240,7 @@ fn blk_kind(blk: Node, file: &FileGraph) -> SymbolKind {
         }
     }
 }
-
+//Check top level decalrations
 fn check_root_blk<'a>(
     node: Node<'a>,
     history: &mut Vec<Node<'a>>,
@@ -242,7 +248,7 @@ fn check_root_blk<'a>(
 ) -> Option<ErrorInfo> {
     match node.kind() {
         "namespace" | "features" | "include" | "imports" | "constraints" => {
-            if let Some(other) = history.iter().find(|i| i.kind() == node.kind()) {
+            if let Some(_) = history.iter().find(|i| i.kind() == node.kind()) {
                 Some(ErrorInfo {
                     location: node_range(node, &file.rope),
                     severity: DiagnosticSeverity::ERROR,
@@ -267,8 +273,11 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
     let time = Instant::now();
     let mut cursor = QueryCursor::new();
     let mut err: Vec<ErrorInfo> = Vec::new();
+    //To avoid duplicate error we store explicitly found errors
     let mut error_nodes = HashSet::new();
+    //To check the order of top level decalrations we store them
     let mut root_blks = Vec::new();
+    //search for explicit errors using query
     for m in cursor.matches(
         &TS.queries.check_syntax,
         file.tree.root_node(),
@@ -290,13 +299,12 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
                 });
                 error_nodes.insert(m.captures[0].node);
             }
-            2 => {}
-            3 => {
+            2 => {
                 if let Some(e) = check_root_blk(m.captures[0].node, &mut root_blks, file) {
                     err.push(e)
                 }
             }
-            4 => {
+            3 => {
                 err.push(ErrorInfo {
                     location: node_range(m.captures[0].node, &file.rope),
                     severity: DiagnosticSeverity::ERROR,
@@ -308,10 +316,20 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
                     },
                 });
             }
+            4 => {
+                err.push(ErrorInfo {
+                    location: node_range(m.captures[0].node, &file.rope),
+                    severity: DiagnosticSeverity::ERROR,
+                    weight: 50,
+                    msg: "to many arguments".to_string(),
+                });
+                error_nodes.insert(m.captures[0].node);
+            }
 
             _ => {}
         }
     }
+    //Iterate all nodes to search for common errors
     for i in tree_sitter_traversal::traverse_tree(&file.tree, tree_sitter_traversal::Order::Pre) {
         if i.is_missing() {
             err.push(ErrorInfo {
@@ -329,6 +347,7 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
                 msg: "unknown syntax error".into(),
             });
         }
+        //Check tree structure
         if i.kind() == "blk" {
             let template = blk_template(i, file);
             if i.child_by_field_name("cardinality").is_some() && !template.allow_card {
@@ -375,6 +394,7 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
             }
         }
     }
+    //Check top level order
     let root_order = &["namespace", "include", "imports", "features", "constraints"];
     for i in 1..root_blks.len() {
         let (pi, _) = root_order
@@ -558,8 +578,8 @@ fn check_references(file: &FileGraph, root: &RootGraph) -> Vec<ErrorInfo> {
             });
         }
     }
+    //Symbols are sorted in their prefix to easily check for duplicates
     for (a,b) in file.duplicate_symboles() {
-
         err.push(ErrorInfo {
             location: lsp_range(file.range(a), &file.rope).unwrap(),
             severity: DiagnosticSeverity::ERROR,
@@ -575,6 +595,7 @@ fn check_references(file: &FileGraph, root: &RootGraph) -> Vec<ErrorInfo> {
     }
     err
 }
+//When all files are correct check for references, maybe we should relax this
 pub async fn fininalize(
     root: RootGraph,
     state: HashMap<Ustr, DocumentState>,

@@ -19,20 +19,18 @@ static CHECK_SYNTAX: &str = r#"
     "/"
     "!"
     ".."]
- )@missing_op
-
-
-(blk
-  header:(_) @parent
-  (blk
-        header:(_)@sub)
-)
-
+)@missing_op
 (source_file
   (blk
         header:(_)@root)
 )
 [(incomplete_namespace) (incomplete_ref)]@incomplete
+(ERROR 
+ [
+    (name)
+    (path)
+ ]
+)@extra_arg
 "#;
 static CHECK_SANITY: &str = r#"
 (blk
@@ -84,10 +82,7 @@ static EXTRACT_SYNTAX_HIGHLIGHTING_SRC: &str = r#"
     "!"
     ".."
 ] @operator
-[
-    "avg"
-    "sum"
-]@function
+(aggregate op:(_) @function)
 
 (attribute_value name:(_)@enumMember)
 (ref alias:(_)@parameter)
