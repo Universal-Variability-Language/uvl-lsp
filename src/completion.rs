@@ -103,6 +103,8 @@ impl CompletionEnv {
                 kind,
                 CompletionKind::Feature | CompletionKind::Folder | CompletionKind::File
             ),
+            Self::Aggregate { .. }=> matches!(kind,
+                CompletionKind::Feature | CompletionKind::Folder | CompletionKind::File),
             _ => true, //Just pick anything
         }
     }
@@ -182,7 +184,7 @@ pub fn estimate_constraint_env(node: Node, origin: Option<Node>, source: &Rope) 
                     }
                 }
             } else {
-                CompletionEnv::SomeName
+                CompletionEnv::Aggregate { context: None }
             }
         }
         "binary_expr" => match node.child_by_field_name("op").unwrap().kind() {
@@ -828,7 +830,7 @@ pub fn compute_completions(
                 let mut has_context = false;
                 if let Some(context) = context.as_ref().and_then(|path| {
                     Some(snapshot.resolve(origin, &path.names).filter(|node| {
-                        matches!(node.sym, Symbol::Feature(..) | Symbol::Attributes(..))
+                        matches!(node.sym, Symbol::Feature(..) | Symbol::Attributes(..)| Symbol::Root)
                     }))
                 }) {
                     for f in context {
