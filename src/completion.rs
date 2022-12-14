@@ -755,7 +755,7 @@ fn completion_symbol(
             top,
         );
     }
-    info!("{:#?}", pred);
+    //info!("{:#?}", pred);
 }
 
 //Encode float as string keeping order eg: a<b => s(a)<s(b) stolen from clangd
@@ -879,7 +879,7 @@ pub fn compute_completions(
         }
 
         let mut comp = top.into_sorted_vec();
-        info!("Completions {:#?} in {:?}",&comp, timer.elapsed());
+        info!("Completions in {:?}", timer.elapsed());
         let items = comp
             .drain(0..)
             .filter(|opt| opt.kind != CompletionKind::DontCare)
