@@ -193,7 +193,7 @@ pub fn estimate_constraint_env(node: Node, origin: Option<Node>, source: &Rope) 
     }
 }
 fn estimate_env(node: Node, source: &Rope, edit_line: u32) -> Option<CompletionEnv> {
-    if node.is_extra() {
+    if node.is_extra()&&!node.is_error() {
         return None;
     }
     let section = find_section(node);
@@ -224,7 +224,7 @@ fn estimate_env(node: Node, source: &Rope, edit_line: u32) -> Option<CompletionE
             match header_kind(owner) {
                 "group_mode" | "cardinality" | "features" => Some(CompletionEnv::Feature),
                 "name" | "ref" => Some(CompletionEnv::GroupMode),
-                _ => None,
+                _ => Some(CompletionEnv::Feature),
             }
         }
         Section::Constraints => {
