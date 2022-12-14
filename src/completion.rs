@@ -18,24 +18,23 @@ use tower_lsp::lsp_types::{
 use tree_sitter::{Node, Point, Tree};
 use ustr::Ustr;
 /*
- * All things completion related happen in here, the proccess roughly as follows:
+ * All things completion related happen in here, the proccess is roughly as follows:
  * 1. Find the current context using the latest draft and editor position
  * 2. Find good completions in this context
  *
  * The completion context inculdes:
- *  - Meta information on the cursor position eg. Are we currently in a path an empty line etc.
- *  - The semantic context eg. do we need a Constraint or a number
+ *  - Meta information on the cursor position eg. Are we currently in a path or an empty line etc.
+ *  - The semantic context eg. do we need a constraint or a number
  *  - A optional path prefix and suffix. The suffix is used as a weight for completions using the jaro
- *    winkler distance, the prefix is filter restricting possible completions.
+ *    winkler distance, the prefix is a filter restricting possible completions.
  *
  *  To weigh completions we use a simple weight function with hand picked weights for parameters
  *  like lenght or type correctness
  * */
 static MAX_N: usize = 30;
-static W_PREFIX: f32 = 2.;
 static W_TYPE: f32 = 2.;
 static W_LEN: f32 = 3.0;
-static AVG_WEIGHT_THRESHOLD: f32 = 0.2;
+static AVG_WEIGHT_THRESHOLD: f32 = 0.2; //Unused
 static MIN_WEIGHT: f32 = 0.1;
 struct TopN<V> {
     buffer: min_max_heap::MinMaxHeap<V>,
@@ -815,7 +814,7 @@ pub fn compute_completions(
             CompletionEnv::Toplevel => add_top_lvl_keywords(&ctx.postfix, &mut top, 2.0),
             CompletionEnv::SomeName => {}
             CompletionEnv::Constraint | CompletionEnv::Numeric | CompletionEnv::Feature => {
-                match (&ctx.env, &ctx.offset) {//Switch to provide nearly correct prediction, to
+                match (&ctx.env, &ctx.offset) {//heuristic to provide nearly correct predictions, to
                                                //make it more accurate we need to respect
                                                //parenthesis
                     (CompletionEnv::Feature, CompletionOffset::SameLine) => {

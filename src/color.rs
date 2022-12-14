@@ -13,7 +13,7 @@ use tree_sitter::{Node, QueryCursor, Tree};
 //we mainly use tree-sitter queries to extract token and serialize them
 //according to the lsp spec
 //TODO make use of incremental parsing and updates
-//this is fast enough for medium sized files but breaks at huge files
+//this is fast enough for medium sized files but sinks at huge files
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbsToken {
@@ -180,8 +180,9 @@ impl FileState {
         let time = Instant::now();
         let mut cursor = QueryCursor::new();
         let mut token = vec![];
-        //Keep track of non ascii lines, only perform byte->utf8->utf16 transformation there
+        //Keep track of non ascii lines, only perform byte->utf8->utf16 transformation when needed
         //61ms->34ms performance improvment!
+        //TODO make a better uniform byte->utf16 provider as ropey is to slow
         let mut utf16_line = HashSet::new();
         for (i, line) in source.lines().enumerate() {
             for c in line.chars() {
@@ -192,7 +193,7 @@ impl FileState {
         }
         let captures = TS.queries.highlight.capture_names();
         let file = &root.files[&origin.as_str().into()];
-        //iterate captures and provide colors kindes
+        //iterate captures and create colors token
         for i in cursor.matches(
             &TS.queries.highlight,
             tree.root_node(),

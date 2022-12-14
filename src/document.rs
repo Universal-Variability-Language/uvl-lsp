@@ -210,7 +210,8 @@ impl AsyncDraft {
         semantic.revison_counter.fetch_add(1, Ordering::SeqCst);
         spawn(async move {
             let t = Instant::now();
-            let old = Self::wait_for(&mut old, DraftSync::Tree).await;
+            let old = Self::wait_for(&mut old, DraftSync::Tree).await;//Wait for the old document
+                                                                      //version to become ready
             info!("waiting {:?} for reparse", t.elapsed());
             let (mut source, mut old_tree) = match old.unwrap() {
                 Draft::Tree { source, tree, .. } => (source, tree),

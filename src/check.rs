@@ -15,15 +15,15 @@ use crate::filegraph::{FileGraph, SymbolKind};
 use crate::semantic::RootGraph;
 /*
  * Most error checking happens in here.
- * Files are checked in there phases if one phase failes checking is stopped.
- * Phase1. Check Sanity: Here we check if the fils is ambiguous, 
+ * Files are checked in three phases if one phase failes checking is stopped.
+ * Phase1. Check Sanity: Here we check if the file is ambiguous, 
  * this happens for example if there is a missing opperand at line break 
  * Phase2. Check Syntax: Check if the treesitter tree matches the UVL grammer spec. 
  * Phase3. Check References: When all files have correct syntax we check if pathes are valid and
  * have the correct type
  *
  *
- * All Erros have a artificial severity weight to mask consequential errors.
+ * All erros have a artificial severity weight to mask consequential errors.
 */
 
 #[derive(Clone, Debug)]
@@ -75,7 +75,7 @@ fn ts_filterd_visit<F: FnMut(Node) -> bool>(root: Node, mut f: F) {
         }
     }
 }
-//Check if line breaks are correct eg inside parenthesis
+//Check if line breaks are correct eg. inside parenthesis
 //This is necessary because the treesitter grammer allows 2 features on the same line under certain
 //conditions.
 fn check_sanity(file: &FileGraph) -> Vec<ErrorInfo> {
@@ -240,7 +240,7 @@ fn blk_kind(blk: Node, file: &FileGraph) -> SymbolKind {
         }
     }
 }
-//Check top level decalrations
+//Check top level declarations
 fn check_root_blk<'a>(
     node: Node<'a>,
     history: &mut Vec<Node<'a>>,
@@ -275,7 +275,7 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
     let mut err: Vec<ErrorInfo> = Vec::new();
     //To avoid duplicate error we store explicitly found errors
     let mut error_nodes = HashSet::new();
-    //To check the order of top level decalrations we store them
+    //To check the order of top level declarations we store them
     let mut root_blks = Vec::new();
     //search for explicit errors using query
     for m in cursor.matches(

@@ -27,7 +27,7 @@ mod parse;
 mod query;
 mod semantic;
 mod util;
-//The server core, request and respones handling happens here
+//The server core, request and respones handling
 struct Backend {
     client: Client,
     coloring: Arc<color::State>,
@@ -118,7 +118,7 @@ fn load_blocking(
         info!("Failed to load file {}", uri);
     }
 }
-//load all files under given path
+//load all files under given a path
 fn load_all_blocking(
     path: &Path,
     documents: Arc<DashMap<Url, AsyncDraft>>,
