@@ -869,6 +869,7 @@ impl FileGraph {
         for i in self.index.values_mut() {
             i.sort_unstable();
         }
+        //info!("{:#?}",self);
         self.path = uri_to_path(&self.uri).unwrap();
     }
     pub fn children_attributes<'a>(
@@ -912,6 +913,7 @@ impl FileGraph {
         }
     }
     pub fn children<'a>(&'a self, root: Symbol) -> impl Iterator<Item = (&'a [Ustr], Symbol)> + 'a {
+
         if matches!(root, Symbol::Root) {
             Either::Left(self.all_named_symboles().map(|sym| (self.prefix(sym), sym)))
         } else {

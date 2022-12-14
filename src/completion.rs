@@ -101,10 +101,12 @@ impl CompletionEnv {
         match self {
             Self::Feature => matches!(
                 kind,
-                CompletionKind::Feature | CompletionKind::Folder | CompletionKind::File
+                CompletionKind::Feature |CompletionKind::Import| CompletionKind::Folder | CompletionKind::File
             ),
-            Self::Aggregate { .. }=> matches!(kind,
-                CompletionKind::Feature | CompletionKind::Folder | CompletionKind::File),
+            Self::Aggregate { .. } => matches!(
+                kind,
+                CompletionKind::Feature |CompletionKind::Import| CompletionKind::Folder | CompletionKind::File
+            ),
             _ => true, //Just pick anything
         }
     }
@@ -195,7 +197,8 @@ pub fn estimate_constraint_env(node: Node, origin: Option<Node>, source: &Rope) 
     }
 }
 fn estimate_env(node: Node, source: &Rope, edit_line: u32) -> Option<CompletionEnv> {
-    if node.is_extra()&&!node.is_error() {//Comment?
+    if node.is_extra() && !node.is_error() {
+        //Comment?
         return None;
     }
     let section = find_section(node);
@@ -462,7 +465,11 @@ fn add_keywords<const I: usize>(
         top.push(CompletionOpt {
             op: TextOP::Put(word.clone()),
             lable: word.clone(),
-            rank: if query.is_empty() {w}  else {strsim::jaro_winkler(query, word.as_str()) as f32 * w},
+            rank: if query.is_empty() {
+                w
+            } else {
+                strsim::jaro_winkler(query, word.as_str()) as f32 * w
+            },
             name: word.as_str().into(),
             kind: CompletionKind::Keyword,
         });
@@ -514,7 +521,7 @@ fn add_lang_lvl_minor_keyword(query: &str, top: &mut TopN<CompletionOpt>, w: f32
 }
 
 fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-   add_keywords(
+    add_keywords(
         query,
         top,
         w,
@@ -527,7 +534,7 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
             "<".into(),
             "==".into(),
             "sum".into(),
-            "avg".into()
+            "avg".into(),
         ],
     );
 }
@@ -647,12 +654,15 @@ fn completion_symbol_local(
     query: &CompletionQuery,
     top: &mut TopN<CompletionOpt>,
 ) {
-    if query.env == CompletionEnv::Feature && root.file == origin {
-        return;
-    }
     let file = &snapshot.files[&root.file];
     for (sym_prefix, sym) in file.children(root.sym) {
+        if matches!(sym, Symbol::Dir(..)) {
+            info!("{:?}, {:?}", sym, prefix)
+        }
         if sym_prefix.is_empty() || !query.env.is_relevant(sym.into()) {
+            continue;
+        }
+        if query.env == CompletionEnv::Feature && root.file == origin && matches!(sym, Symbol::Feature(..)) {
             continue;
         }
         let text = make_path(prefix.iter().chain(sym_prefix.iter()));
@@ -786,17 +796,16 @@ pub fn compute_completions(
         let mut is_incomplete = false;
         match &ctx.env {
             CompletionEnv::GroupMode => {
-
-                    add_group_keywords(&ctx.postfix, &mut top, 2.0);
+                add_group_keywords(&ctx.postfix, &mut top, 2.0);
             }
             CompletionEnv::Toplevel => add_top_lvl_keywords(&ctx.postfix, &mut top, 2.0),
             CompletionEnv::SomeName => {}
             CompletionEnv::Constraint | CompletionEnv::Numeric | CompletionEnv::Feature => {
-                if ctx.env == CompletionEnv::Feature{
-                    add_keywords(&ctx.postfix,&mut top,2.0,["cardinality".into()]);
+                if ctx.env == CompletionEnv::Feature {
+                    add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
                 }
-                if (ctx.env == CompletionEnv::Constraint ||ctx.env == CompletionEnv::Numeric) && ctx.offset != CompletionOffset::Continous
-                    
+                if (ctx.env == CompletionEnv::Constraint || ctx.env == CompletionEnv::Numeric)
+                    && ctx.offset != CompletionOffset::Continous
                 {
                     add_logic_op(&ctx.postfix, &mut top, 6.1);
                 }
@@ -832,7 +841,10 @@ pub fn compute_completions(
                 let mut has_context = false;
                 if let Some(context) = context.as_ref().and_then(|path| {
                     Some(snapshot.resolve(origin, &path.names).filter(|node| {
-                        matches!(node.sym, Symbol::Feature(..) | Symbol::Attributes(..)| Symbol::Root)
+                        matches!(
+                            node.sym,
+                            Symbol::Feature(..) | Symbol::Attributes(..) | Symbol::Root
+                        )
                     }))
                 }) {
                     for f in context {
