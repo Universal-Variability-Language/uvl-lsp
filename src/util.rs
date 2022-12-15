@@ -26,7 +26,8 @@ pub fn node_source<'a>(source: &'a Rope) -> impl tree_sitter::TextProvider<'a> {
 pub fn node_range(node: Node, rope: &Rope) -> Range {
     lsp_range(node.byte_range(),rope).unwrap()
 }
-
+//Treesitter is using bytes as offsets while lsp uses utf16 codepoints for some insane reason 
+//So we have to convert
 pub fn lsp_position(byte: usize, source: &Rope) -> Option<Position> {
     if byte == source.len_bytes() {
         Some(Position {
