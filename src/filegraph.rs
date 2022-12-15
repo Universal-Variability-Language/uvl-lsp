@@ -19,13 +19,13 @@ use ustr::Ustr;
  * Here we transform the loose tree-sitter syntax tree(Green tree) into a more fixed
  * according to the UVL-grammar syntax tree
  * This happens in two steps
- * 1. Extract relevant symboles like features or imports using queries
- * 2. Linke those symboles using a second set of queries
+ * 1. Extract relevant symbols like features or imports using queries
+ * 2. Link those symbols using a second set of queries
  *
  * We also parse constraints into a fixed format for easy postprocessing
  * parse errors are stored for the later check pass.
  *
- * Additionally a index for all named nodes is created to provide esay look up for paths
+ * Additionally a index for all named nodes is created to provide easy look up for paths
  * */
 lazy_static! {
     pub static ref TS: util::ParseConstants = util::ParseConstants::new();

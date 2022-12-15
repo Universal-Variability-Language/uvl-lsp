@@ -27,6 +27,7 @@ mod parse;
 mod query;
 mod semantic;
 mod util;
+static  VERSION:&str="v0.0.2";
 //The server core, request and respones handling
 struct Backend {
     client: Client,
@@ -355,6 +356,10 @@ impl LanguageServer for Backend {
 async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
+    if std::env::args().find(|a| a=="-v").is_some(){
+        println!("{}",VERSION);
+        return;
+    }
 
     let _logger = flexi_logger::Logger::try_with_env_or_str("info")
         .expect("Log spec string broken")
