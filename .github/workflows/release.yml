@@ -147,11 +147,7 @@ jobs:
               # cp LICENSE README.md tmp/$pkgname
               mv bins-$platform/$BIN_NAME$exe tmp/$pkgname
               chmod +x tmp/$pkgname/$BIN_NAME$exe
-              if [ "$exe" = "" ]; then
-                  tar cJf dist/$pkgname.tar.xz -C tmp $pkgname
-              else
-                  (cd tmp && 7z a -r ../dist/$pkgname.zip $pkgname)
-              fi
+              (cd tmp && 7z a -r ../dist/$pkgname.zip $pkgname)
           done
       - name: Upload binaries to release
         uses: svenstaro/upload-release-action@v2
