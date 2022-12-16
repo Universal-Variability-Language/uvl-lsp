@@ -356,6 +356,7 @@ impl LanguageServer for Backend {
 async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
+    //only needed for vscode auto update
     if std::env::args().find(|a| a=="-v").is_some(){
         println!("{}",VERSION);
         return;

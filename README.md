@@ -13,20 +13,21 @@ cargo build --release
 ```
 
 ### VSCode
+There are prebuilt binaries for most common platforms so just installing the extension is enough.
 ```
 ext install caradhras.uvls-code
 ```
-Make sure the server binary is in path or specify the location under `uvls.path`
 ### NeoVim
+
 
 ## Features
 - Completions
 - Syntax highlighting
 - Error messages
 ## Why tree-sitter
-We use tree-sitter as an initial parser to create a lose syntax tree of uvl code-fragments.
+We use tree-sitter as an initial parser to create a loose syntax tree of UVL code fragments.
 Because the tree-sitter grammar is more relaxed than the original UVL-grammar and has great error recovery,
-we can capture many incorrect expression and provide decent error messages in most cases.
+we can capture many incorrect expressions and provide decent error messages in most cases.
 Tree-sitter queries allow for easy symbol extraction and are used to transform the tree-sitter tree into a more compact graph.
 This graph is then used for further analysis.
 Queries are also used for syntax highlighting as tree-sitter was originally intended for that.

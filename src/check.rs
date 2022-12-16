@@ -422,11 +422,13 @@ fn check_syntax(file: &FileGraph) -> Vec<ErrorInfo> {
             });
         }
     }
+
     for i in file.parse_errors.iter() {
         err.push(i.clone());
     }
     info!("checked syntax in {:?}", time.elapsed());
     err
+
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -450,14 +452,14 @@ impl DocumentState {
         self.validation >= ValidationState::Sane
     }
     pub async fn publish(&self, client: &Client) {
-        if let Some(max) = self.err.last().map(|e| e.weight) {
+        if let Some(max) = self.err.iter().max_by_key(|e| e.weight) {
             client
                 .publish_diagnostics(
                     self.uri.clone(),
                     self.err
                         .iter()
                         .rev()
-                        .take_while(|e| e.weight == max)
+                        .filter(|e| e.weight == max.weight)
                         .map(|i| i.clone().diagnostic())
                         .collect(),
                     None,
