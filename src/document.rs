@@ -8,6 +8,7 @@ use tokio::{select, spawn};
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Tree};
 
+use crate::filegraph::FileGraph;
 use crate::{ parse, semantic};
 
 use ropey::Rope;
@@ -92,6 +93,10 @@ pub enum Draft {
         tree: Tree,
         revision: Instant,
     },
+    Final{
+        graph: Arc<FileGraph>,
+        revision: Instant,
+    }
 }
 impl Draft {
     fn sync(&self) -> DraftSync {
@@ -99,6 +104,7 @@ impl Draft {
             Draft::Tree { .. } => DraftSync::Tree,
             Draft::Source { .. } => DraftSync::Source,
             Draft::Unavailable { .. } => DraftSync::Unavailable,
+            Draft::Final { .. } =>DraftSync::Final,
         }
     }
 }
@@ -107,8 +113,9 @@ pub enum DraftSync {
     Unavailable,
     Source,
     Tree,
+    Final
 }
-//A document can be owned by the operating system orde opened in the editor
+//A document can be owned by the operating system or opened in the editor
 #[derive(Clone, PartialEq, Eq, Copy)]
 pub enum DocumentState {
     OwnedByOs(SystemTime),
@@ -205,13 +212,13 @@ impl AsyncDraft {
     ) {
         let revision = Instant::now();
         let (tx, rx) = watch::channel(Draft::Unavailable { revision });
-        let mut old = std::mem::replace(&mut self.content, rx);
+        let mut old_rx = std::mem::replace(&mut self.content, rx);
         let uri = params.text_document.uri.clone();
         semantic.revison_counter.fetch_add(1, Ordering::SeqCst);
         spawn(async move {
             let t = Instant::now();
-            let old = Self::wait_for(&mut old, DraftSync::Tree).await;//Wait for the old document
-                                                                      //version to become ready
+
+            let old = Self::wait_for(&mut old_rx, DraftSync::Tree).await;//Wait for the old document
             info!("waiting {:?} for reparse", t.elapsed());
             let (mut source, mut old_tree) = match old.unwrap() {
                 Draft::Tree { source, tree, .. } => (source, tree),
@@ -230,6 +237,7 @@ impl AsyncDraft {
                 tree: tree.clone(),
                 source: source.clone(),
             });
+    
 
             _ = semantic
                 .tx_draft_updates

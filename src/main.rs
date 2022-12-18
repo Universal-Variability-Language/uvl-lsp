@@ -4,11 +4,13 @@ use dashmap::DashMap;
 use document::{AsyncDraft, Draft, DraftSync};
 use flexi_logger::FileSpec;
 
+use itertools::Itertools;
 use tokio::{join, spawn};
 
 use document::*;
 use log::info;
 use std::io::Read;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::{Duration, Instant};
@@ -27,7 +29,7 @@ mod parse;
 mod query;
 mod semantic;
 mod util;
-static  VERSION:&str="v0.0.1";
+static VERSION: &str = "v0.0.2";
 //The server core, request and respones handling
 struct Backend {
     client: Client,
@@ -136,11 +138,16 @@ fn load_all_blocking(
                 .unwrap_or(false)
         })
     {
-        load_blocking(
-            Url::from_file_path(e.path()).unwrap(),
-            &documents,
-            &semantic,
-        );
+        let semantic = semantic.clone();
+        let documents = documents.clone();
+
+        tokio::task::spawn_blocking(move || {
+            load_blocking(
+                Url::from_file_path(e.path()).unwrap(),
+                &documents,
+                &semantic,
+            )
+        });
     }
 }
 
@@ -154,11 +161,17 @@ impl LanguageServer for Backend {
             .map(|s| s.as_str())
             .or(init_params.root_uri.as_ref().map(|p| p.path()))
             .map(|s| PathBuf::from(s));
+
         if let Some(root_folder) = root_folder {
             let documents = self.documents.clone();
             let semantic = self.semantic.clone();
-            tokio::task::spawn_blocking(move || {
-                load_all_blocking(&root_folder, documents, semantic);
+            //cheap fix for better intial load, we should really use priority model to prefer
+            //editor owned files
+            spawn(async move {
+                let _ = tokio::time::sleep(Duration::from_millis(200)).await;
+                tokio::task::spawn_blocking(move || {
+                    load_all_blocking(&root_folder, documents, semantic);
+                })
             });
         }
 
@@ -234,9 +247,13 @@ impl LanguageServer for Backend {
         info!("done did_open");
     }
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let mut updated = false;
+        let uri = params.text_document.uri.clone();
         if let Some(mut doc) = self.documents.get_mut(&params.text_document.uri) {
-            let uri = params.text_document.uri.clone();
             doc.update(params, self.semantic.clone());
+            updated = true;
+        }
+        if updated {
             self.client.publish_diagnostics(uri, vec![], None).await;
         }
         info!("done did_change");
@@ -352,13 +369,20 @@ impl LanguageServer for Backend {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async_main())
+}
+async fn async_main() {
+    std::env::set_var("RUST_BACKTRACE", "1");
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     //only needed for vscode auto update
-    if std::env::args().find(|a| a=="-v").is_some(){
-        println!("{}",VERSION);
+    if std::env::args().find(|a| a == "-v").is_some() {
+        println!("{}", VERSION);
         return;
     }
 

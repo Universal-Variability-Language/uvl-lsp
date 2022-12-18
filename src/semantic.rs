@@ -261,12 +261,15 @@ impl Context {
     }
     //Make sure uri is inside the snapshot
     pub async fn snapshot(&self, uri: &Url) -> RootGraph {
+        let time = Instant::now();
         loop {
             let snap = self.root.read().clone();
             if snap.files.contains_key(&uri.as_str().into()) {
+                info!("waited {:?} for root",time.elapsed());
                 return snap;
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+
         }
     }
 }
@@ -355,7 +358,8 @@ impl State {
             self.files.insert(i.name, i);
         }
         //update root graph 
-        *ctx.root.write() = RootGraph::new(self.files.clone());
+        let root = RootGraph::new(self.files.clone());
+        *ctx.root.write() = root;
         //cancel if there is a newer version
         if update_timestamp
             != ctx

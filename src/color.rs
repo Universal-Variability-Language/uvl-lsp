@@ -144,29 +144,31 @@ impl FileState {
         utf16_lines: &HashSet<usize>,
     ) {
         let path = parse_path(node, source).unwrap();
-        if let Some(attrib) = root
-            .resolve(file.name, &path.names)
-            .find(|node| matches!(node.sym, Symbol::Number(..)))
-        {
-            let mut sym = Some(attrib.sym);
-            for i in (0..path.names.len()).rev() {
-                if let Some(cur) = sym {
-                    token.push(AbsToken {
-                        range: lsp_range(path.spans[i].clone(), source).unwrap(),
-                        kind: token_index("enumMember"),
-                    });
-                    let next = root.files[&attrib.file].owner(cur);
-                    if next.is_value() {
-                        sym = Some(next);
+        if path.names.len() > 1 {
+            if let Some(attrib) = root
+                .resolve(file.name, &path.names)
+                .find(|node| matches!(node.sym, Symbol::Number(..)))
+            {
+                let mut sym = Some(attrib.sym);
+                for i in (0..path.names.len()).rev() {
+                    if let Some(cur) = sym {
+                        token.push(AbsToken {
+                            range: lsp_range(path.spans[i].clone(), source).unwrap(),
+                            kind: token_index("enumMember"),
+                        });
+                        let next = root.files[&attrib.file].owner(cur);
+                        if next.is_value() {
+                            sym = Some(next);
+                        } else {
+                            sym = None;
+                        }
                     } else {
-                        sym = None;
+                        //TODO this is slow since we need the whole byte to utf16 conversion path
+                        token.push(AbsToken {
+                            range: lsp_range(path.spans[i].clone(), source).unwrap(),
+                            kind: token_index("parameter"),
+                        });
                     }
-                } else {
-                    //TODO this is slow since we need the whole byte to utf16 conversion path
-                    token.push(AbsToken {
-                        range: lsp_range(path.spans[i].clone(), source).unwrap(),
-                        kind: token_index("parameter"),
-                    });
                 }
             }
         } else {
@@ -176,57 +178,36 @@ impl FileState {
             });
         };
     }
-    fn new(origin: &Url, tree: Tree, source: &ropey::Rope, root: &RootGraph) -> Self {
-        let time = Instant::now();
+    fn color_section(
+        origin: Node,
+        root: &RootGraph,
+        source: &Rope,
+        file: &FileGraph,
+        utf16_line: &HashSet<usize>,
+        token: &mut Vec<AbsToken>,
+    ) {
+        let section = find_section(origin);
         let mut cursor = QueryCursor::new();
-        let mut token = vec![];
-        //Keep track of bad utf16 lines, only perform byte->utf8->utf16 transformation when needed
-        //61ms->34ms performance improvment for pure ascii!
-        //TODO make a better uniform byte->utf16 provider as ropey is to slow
-        //or just use more threads
-        let mut utf16_line = HashSet::new();
-        for (i, line) in source.lines().enumerate() {
-            for c in line.chars() {
-                if c.len_utf8() != c.len_utf16() {
-                    utf16_line.insert(i);
-                }
-            }
-        }
+
         let captures = TS.queries.highlight.capture_names();
-        let file = &root.files[&origin.as_str().into()];
-        //iterate captures and create colors token
         for i in cursor.matches(
             &TS.queries.highlight,
-            tree.root_node(),
+            origin,
             crate::util::node_source(source),
         ) {
             for c in i.captures {
                 let kind = captures[c.index as usize].as_str();
                 if kind == "some_path" {
-                    let section = find_section(c.node);
                     match section {
                         Section::Constraints => {
-                            let env = estimate_constraint_env(c.node, None, source);
-                            match env {
-                                CompletionEnv::Numeric => {
-                                    //Hard path we have to ananlyze the path
-                                    Self::highlight_attribute_path(
-                                        source,
-                                        root,
-                                        &mut token,
-                                        c.node,
-                                        file,
-                                        &utf16_line,
-                                    );
-                                }
-                                _ => {
-                                    //easy all segments have the same color
-                                    token.push(AbsToken {
-                                        range: fast_lsp_range(c.node, source, &utf16_line),
-                                        kind: token_index("parameter"),
-                                    });
-                                }
-                            }
+                            Self::highlight_attribute_path(
+                                source,
+                                root,
+                                token,
+                                c.node,
+                                file,
+                                &utf16_line,
+                            );
                         }
                         _ => token.push(AbsToken {
                             range: fast_lsp_range(c.node, source, &utf16_line),
@@ -241,6 +222,34 @@ impl FileState {
                     });
                 }
             }
+        }
+    }
+    fn new(origin: &Url, tree: Tree, source: &ropey::Rope, root: &RootGraph) -> Self {
+        let mut token = vec![];
+        //Keep track of bad utf16 lines, only perform byte->utf8->utf16 transformation when needed
+        //61ms->34ms performance improvment for pure ascii!
+        //TODO make a better uniform byte->utf16 provider as ropey is to slow
+        //or just use more threads
+        let mut utf16_line = HashSet::new();
+        for (i, line) in source.lines().enumerate() {
+            for c in line.chars() {
+                if c.len_utf8() != c.len_utf16() {
+                    utf16_line.insert(i);
+                }
+            }
+        }
+        let mut sections = tree.walk();
+        let file = &root.files[&origin.as_str().into()];
+        //iterate captures and create colors token
+        sections.goto_first_child();
+        loop {
+            let time = Instant::now();
+            Self::color_section(sections.node(), root, source, file, &utf16_line, &mut token);
+            if !sections.goto_next_sibling() {
+                break;
+            }
+
+            info!("Semantic highlight took {:?}", time.elapsed());
         }
         token.sort_by_key(|a| (a.range.start.line, a.range.start.character));
         token.dedup();
@@ -335,7 +344,6 @@ impl FileState {
             last = Some(i.clone());
         }
 
-        info!("Semantic highlight took {:?}", time.elapsed());
         FileState { state: filtered }
     }
 }
@@ -355,9 +363,12 @@ impl State {
         tree: Tree,
         source: ropey::Rope,
     ) -> SemanticTokens {
+        info!("Start color");
         let state = FileState::new(&uri, tree, &source, &root);
         let out = state.state.clone();
         self.files.insert(uri.clone(), state);
+
+        info!("End color");
         SemanticTokens {
             result_id: None,
             data: out,
@@ -376,9 +387,12 @@ impl State {
             self.files.insert(uri.clone(), state);
             diff
         } else {
+            info!("Start color");
             let state = FileState::new(&uri, tree, &source, &root);
             let out = state.state.clone();
             self.files.insert(uri.clone(), state);
+
+            info!("End color");
             SemanticTokensFullDeltaResult::Tokens(SemanticTokens {
                 result_id: None,
                 data: out,

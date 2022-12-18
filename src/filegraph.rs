@@ -585,14 +585,18 @@ impl FileGraph {
         });
         Symbol::Reference(self.references.len() as u32 - 1)
     }
-    fn parse_numeric(&mut self, source: &String, node: Node) -> Option<Numeric> {
+    fn parse_numeric(&mut self, source: &String, node: Node,depth:usize) -> Option<Numeric> {
+        if depth >1000{//guard against stack overflow
+            info!("starnge constraint in {} at {:?} ",self.name,node );
+            return None
+        }
         match node.kind() {
             "path" | "name" => Some(Numeric::Ref(self.add_reference(source, node, Type::Number))),
             "number" => Some(Numeric::Number(source[node.byte_range()].parse().unwrap())),
             "binary_expr" => {
                 if let Some(op) = NumericOP::parse(node.child_by_field_name("op").unwrap().kind()) {
-                    let lhs = self.parse_numeric(source, node.child_by_field_name("rhs")?)?;
-                    let rhs = self.parse_numeric(source, node.child_by_field_name("lhs")?)?;
+                    let lhs = self.parse_numeric(source, node.child_by_field_name("rhs")?,depth+1)?;
+                    let rhs = self.parse_numeric(source, node.child_by_field_name("lhs")?,depth+1)?;
                     Some(Numeric::Binary {
                         op,
                         lhs: Box::new(lhs),
@@ -646,7 +650,7 @@ impl FileGraph {
                 }
             }
 
-            "nested_expr" => self.parse_numeric(source, node.named_child(0)?),
+            "nested_expr" => self.parse_numeric(source, node.named_child(0)?,depth+1),
             "bool" | "unary_expr" => {
                 self.parse_errors.push(ErrorInfo {
                     location: node_range(node, &self.rope),
@@ -660,9 +664,16 @@ impl FileGraph {
             _ => None,
         }
     }
-    fn parse_constraint(&mut self, source: &String, node: Node) -> Option<Constraint> {
+    fn parse_constraint(&mut self, source: &String, node: Node,depth:usize) -> Option<Constraint> {
+        if depth >256{//guard against stack overflow
+            info!("starnge constraint in {} at {:?} ",self.name,node );
+            return None
+        }
+        if node.is_error() ||node.is_extra(){
+            return None;
+        }
         match node.kind() {
-            "constraint" => self.parse_constraint(source, node.named_child(0)?),
+            "constraint" => self.parse_constraint(source, node.named_child(0)?,depth+1),
             "path" | "name" => Some(Constraint::Ref(self.add_reference(
                 source,
                 node,
@@ -673,11 +684,11 @@ impl FileGraph {
                 "false" => false,
                 _ => panic!(),
             })),
-            "nested_expr" => self.parse_constraint(source, node.named_child(0)?),
+            "nested_expr" => self.parse_constraint(source, node.named_child(0)?,depth+1),
             "unary_expr" => match node.child_by_field_name("op").unwrap().kind() {
                 "!" => {
                     let out = Some(Constraint::Not(Box::new(
-                        self.parse_constraint(source, node.child_by_field_name("lhs").unwrap())?,
+                        self.parse_constraint(source, node.child_by_field_name("lhs").unwrap(),depth+1)?,
                     )));
                     out
                 }
@@ -693,8 +704,8 @@ impl FileGraph {
             },
             "binary_expr" => {
                 if let Some(op) = LogicOP::parse(node.child_by_field_name("op").unwrap().kind()) {
-                    let lhs = self.parse_constraint(source, node.child_by_field_name("rhs")?)?;
-                    let rhs = self.parse_constraint(source, node.child_by_field_name("lhs")?)?;
+                    let lhs = self.parse_constraint(source, node.child_by_field_name("rhs")?,depth+1)?;
+                    let rhs = self.parse_constraint(source, node.child_by_field_name("lhs")?,depth+1)?;
                     Some(Constraint::Logic {
                         op,
                         lhs: Box::new(lhs),
@@ -703,8 +714,8 @@ impl FileGraph {
                 } else if let Some(op) =
                     EquationOP::parse(node.child_by_field_name("op").unwrap().kind())
                 {
-                    let lhs = self.parse_numeric(source, node.child_by_field_name("rhs")?)?;
-                    let rhs = self.parse_numeric(source, node.child_by_field_name("lhs")?)?;
+                    let lhs = self.parse_numeric(source, node.child_by_field_name("rhs")?,depth+1)?;
+                    let rhs = self.parse_numeric(source, node.child_by_field_name("lhs")?,depth+1)?;
                     Some(Constraint::Equation {
                         op,
                         lhs: Box::new(lhs),
@@ -872,6 +883,8 @@ impl FileGraph {
     }
 
     fn build(&mut self, source: &String) {
+        
+        info!("Building {}",self.name);
         let mut cursor = QueryCursor::new();
         let cap_names = &TS.queries.extract_symboles.capture_names();
         for i in cursor.matches(
@@ -985,7 +998,7 @@ impl FileGraph {
                     self.ts2sym.insert(containing_node(n).id(), sym);
                 }
                 "constraint" => {
-                    if let Some(constraint) = self.parse_constraint(source, n) {
+                    if let Some(constraint) = self.parse_constraint(source, n,0) {
                         self.constraints.push(constraint);
 
                         //info!("{:?} err {:?}", n, self.parse_errors);
