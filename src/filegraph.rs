@@ -42,7 +42,7 @@ fn uri_to_path(uri: &Url) -> Option<Vec<Ustr>> {
         .collect()
 }
 
-fn insert_multi<K, V>(map: &mut HashMap<K, Vec<V>>, k: K, v: V)
+fn insert_multi<K, V>(map: &mut halfbrown::HashMap<K, Vec<V>>, k: K, v: V)
 where
     K: Hash + Eq,
 {
@@ -374,9 +374,8 @@ pub struct FileGraph {
     imports: Vec<Import>,
     groups: Vec<Group>,
     constraints: Vec<Constraint>,
-    root_attributes: Vec<u32>,
     graph: DiGraphMap<Symbol, LocalEdge>,
-    index: HashMap<Vec<Ustr>, Vec<Symbol>>,
+    index: halfbrown::HashMap<Vec<Ustr>, Vec<Symbol>>,
     lang_lvls: Vec<LanguageLevel>,
     //For the most part we ignore syntax errors while building the file graph
     //But while parseing constraints and values we can cheaply check for correctness
@@ -1041,7 +1040,6 @@ impl FileGraph {
                     if let Some(&inner) = self.ts2sym.get(&i.captures[1].node.id()) {
                         if let Some(&outer) = self.ts2sym.get(&i.captures[0].node.id()) {
                             self.graph.add_edge(outer, inner, LocalEdge::Containes);
-                            self.root_attributes.push(inner.offset())
                         }
                     } else {
                     }
@@ -1127,8 +1125,7 @@ impl FileGraph {
         let source = rope.to_string();
         let mut out = FileGraph {
             graph,
-            index: HashMap::new(),
-            root_attributes: Vec::new(),
+            index: halfbrown::HashMap::new(),
             features: Vec::new(),
             attributes: Vec::new(),
             references: Vec::new(),

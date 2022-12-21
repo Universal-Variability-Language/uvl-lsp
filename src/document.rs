@@ -173,9 +173,7 @@ impl AsyncDraft {
             revision,
             source: source.clone(),
         });
-
         let tree = parse::parse(&source, None);
-
         let _ = tx.send(Draft::Tree {
             revision,
             tree: tree.clone(),

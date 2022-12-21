@@ -590,7 +590,6 @@ fn completion_weight(
     env: &CompletionEnv,
     kind: CompletionKind,
 ) -> f32 {
-    let w1 = 1.0 / (depth.saturating_sub(2).max(1)) as f32 * W_LEN;
     let w2 = match (env, kind) {
         (CompletionEnv::Numeric, CompletionKind::AttributeNumber)
         | (CompletionEnv::Numeric, CompletionKind::AttributeAttributes)
@@ -598,12 +597,12 @@ fn completion_weight(
         | (CompletionEnv::Import, CompletionKind::Folder)
         | (CompletionEnv::Import, CompletionKind::File)
         | (CompletionEnv::Feature, CompletionKind::Feature) => W_TYPE,
-        (_, _) => 1.0,
+        (_, _) => 2.0,
     };
     if query.is_empty() {
-        w2 * w1
+        w2
     } else {
-        strsim::jaro_winkler(&query, &to_match) as f32 * w2 * w1
+        strsim::jaro_winkler(&query, &to_match) as f32 * w2
     }
 }
 //measure text distance for paths
@@ -660,12 +659,18 @@ fn completion_symbol_local(
     top: &mut TopN<CompletionOpt>,
 ) {
     let file = &snapshot.files[&root.file];
+    info!("Module {:?} under {:?}",root,prefix);
     for (sym_prefix, sym) in file.children(root.sym) {
+
         if matches!(sym, Symbol::Dir(..)) {
-            info!("{:?}, {:?}", sym, prefix)
+            info!("found dir")
         }
         if sym_prefix.is_empty() || !query.env.is_relevant(sym.into()) {
             continue;
+        }
+
+        if matches!(sym, Symbol::Dir(..)) {
+            info!("{:?}, {:?}", sym, sym_prefix)
         }
         if query.env == CompletionEnv::Feature
             && root.file == origin
@@ -919,7 +924,7 @@ pub fn compute_completions(
         }
 
         let mut comp = top.into_sorted_vec();
-        info!("Completions in {:?}", timer.elapsed());
+        info!("Completions P{:?} in {:?}",&comp ,timer.elapsed());
         let items = comp
             .drain(0..)
             .filter(|opt| opt.kind != CompletionKind::DontCare)
