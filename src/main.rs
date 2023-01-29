@@ -22,7 +22,6 @@ mod ast;
 mod check;
 mod color;
 mod completion;
-mod index;
 mod location;
 mod parse;
 mod query;
