@@ -1,3 +1,6 @@
+use crate::{ast, check};
+use crate::{parse, semantic};
+use hashbrown::HashMap;
 use log::info;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -7,9 +10,7 @@ use tokio::time::Instant;
 use tokio::{select, spawn};
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Tree};
-
-use crate::filegraph::FileGraph;
-use crate::{ parse, semantic};
+use ustr::Ustr;
 
 use ropey::Rope;
 //update the document text using text deltas form the editor
@@ -24,7 +25,6 @@ pub fn update_text(
             info!("apply change");
             let start_line = range.start.line as usize;
             let end_line = range.end.line as usize;
-
 
             let start_col = range.start.character as usize;
             let end_col = range.end.character as usize;
@@ -45,12 +45,12 @@ pub fn update_text(
 
             let start_byte = source.char_to_byte(start_char);
             let end_byte = source.char_to_byte(end_char);
-            let start_col_byte = start_byte-source.line_to_byte(start_line);
-            let end_col_byte = end_byte-source.line_to_byte(end_line);
+            let start_col_byte = start_byte - source.line_to_byte(start_line);
+            let end_col_byte = end_byte - source.line_to_byte(end_line);
             source.remove(start_char..end_char);
             source.insert(start_char, &e.text);
             let new_end_line = source.byte_to_line(start_byte + e.text.len());
-            let new_end_col_byte = (start_byte + e.text.len())-source.line_to_byte(new_end_line);
+            let new_end_col_byte = (start_byte + e.text.len()) - source.line_to_byte(new_end_line);
             tree.edit(&InputEdit {
                 start_byte,
                 old_end_byte: end_byte,
@@ -78,7 +78,7 @@ pub fn update_text(
     whole_file
 }
 //each parsed document can be in three states, wich allows for faster proccessing when the parse
-//tree is not needed 
+//tree is not needed
 #[derive(Clone)]
 pub enum Draft {
     Unavailable {
@@ -93,10 +93,6 @@ pub enum Draft {
         tree: Tree,
         revision: Instant,
     },
-    Final{
-        graph: Arc<FileGraph>,
-        revision: Instant,
-    }
 }
 impl Draft {
     fn sync(&self) -> DraftSync {
@@ -104,7 +100,13 @@ impl Draft {
             Draft::Tree { .. } => DraftSync::Tree,
             Draft::Source { .. } => DraftSync::Source,
             Draft::Unavailable { .. } => DraftSync::Unavailable,
-            Draft::Final { .. } =>DraftSync::Final,
+        }
+    }
+    pub fn revision(&self) -> Instant {
+        match self {
+            Self::Unavailable { revision }
+            | Self::Tree { revision, .. }
+            | Self::Source { revision, .. } => *revision,
         }
     }
 }
@@ -113,8 +115,9 @@ pub enum DraftSync {
     Unavailable,
     Source,
     Tree,
-    Final
+    Final,
 }
+
 //A document can be owned by the operating system or opened in the editor
 #[derive(Clone, PartialEq, Eq, Copy)]
 pub enum DocumentState {
@@ -164,30 +167,22 @@ impl AsyncDraft {
         tx: watch::Sender<Draft>,
         revision: Instant,
         text: String,
+        state: DocumentState,
         uri: Url,
         semantic: Arc<semantic::Context>,
     ) {
+        let _ = if state != DocumentState::OwnedByEditor {
+            Some(semantic.load_files_sema.acquire().await.unwrap())
+        } else {
+            None
+        };
         let t = Instant::now();
         let source = Rope::from_str(&text);
         let _ = tx.send(Draft::Source {
             revision,
             source: source.clone(),
         });
-        let tree = parse::parse(&source, None);
-        let _ = tx.send(Draft::Tree {
-            revision,
-            tree: tree.clone(),
-            source: source.clone(),
-        });
-        _ = semantic
-            .tx_draft_updates
-            .send(semantic::DraftUpdate::Put {
-                uri,
-                tree,
-                source,
-                timestamp: revision,
-            })
-            .await;
+        parse_document(semantic, revision, uri, tx, source, None).await;
         info!("opened in {:?}", t.elapsed());
     }
     pub fn open(
@@ -199,7 +194,7 @@ impl AsyncDraft {
         let revision = Instant::now();
         let (tx, rx) = watch::channel(Draft::Unavailable { revision });
         semantic.revison_counter.fetch_add(1, Ordering::SeqCst);
-        spawn(Self::open_raw(tx, revision, text, uri, semantic));
+        spawn(Self::open_raw(tx, revision, text, state, uri, semantic));
 
         Self { state, content: rx }
     }
@@ -216,7 +211,7 @@ impl AsyncDraft {
         spawn(async move {
             let t = Instant::now();
 
-            let old = Self::wait_for(&mut old_rx, DraftSync::Tree).await;//Wait for the old document
+            let old = Self::wait_for(&mut old_rx, DraftSync::Tree).await; //Wait for the old document
             info!("waiting {:?} for reparse", t.elapsed());
             let (mut source, mut old_tree) = match old.unwrap() {
                 Draft::Tree { source, tree, .. } => (source, tree),
@@ -229,24 +224,69 @@ impl AsyncDraft {
                 revision,
                 source: source.clone(),
             });
-            let tree = parse::parse(&source, if parse_whole { None } else { Some(&old_tree) });
-            let _ = tx.send(Draft::Tree {
+            parse_document(
+                semantic,
                 revision,
-                tree: tree.clone(),
-                source: source.clone(),
-            });
-    
-
-            _ = semantic
-                .tx_draft_updates
-                .send(semantic::DraftUpdate::Put {
-                    uri,
-                    tree,
-                    source,
-                    timestamp: revision,
-                })
-                .await;
+                uri,
+                tx,
+                source,
+                if parse_whole { None } else { Some(old_tree) },
+            )
+            .await;
             info!("Updated  in {:?}", t.elapsed());
         });
     }
+}
+#[derive(Default)]
+pub struct DocumentStore {
+    pub ast: im::HashMap<Ustr, ast::Document>,
+    revision: HashMap<Ustr, Instant>,
+}
+impl DocumentStore {
+    fn update(&mut self, doc: ast::Document) {
+        if self
+            .revision
+            .get(&doc.name)
+            .map(|old| old > &doc.timestamp)
+            .unwrap_or(false)
+        {
+            return;
+        }
+        self.ast.insert(doc.name, doc);
+    }
+    pub fn delete(&mut self, name: &Url, timestamp: Instant) {
+        let name: Ustr = name.as_str().into();
+        if self
+            .revision
+            .get(&name)
+            .map(|old| old > &timestamp)
+            .unwrap_or(false)
+        {
+            return;
+        }
+        self.ast.remove(&name);
+    }
+}
+
+async fn parse_document(
+    semantic: Arc<semantic::Context>,
+    revision: Instant,
+    uri: Url,
+    draft: watch::Sender<Draft>,
+    source: Rope,
+    old_tree: Option<Tree>,
+) {
+    let tree = parse::parse(&source, old_tree.as_ref());
+    let _ = draft.send(Draft::Tree {
+        revision,
+        tree: tree.clone(),
+        source: source.clone(),
+    });
+    let mut doc = ast::visit_root(source.clone(), tree.clone(), uri.clone(), revision);
+    doc.errors.append(&mut check::check_sanity(&tree, &source));
+    doc.errors.append(&mut check::check_errors(&tree, &source));
+    semantic.documents.lock().update(doc);
+    semantic
+        .revison_counter_parsed
+        .fetch_add(1, Ordering::SeqCst);
 }

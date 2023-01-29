@@ -4,13 +4,11 @@ use dashmap::DashMap;
 use document::{AsyncDraft, Draft, DraftSync};
 use flexi_logger::FileSpec;
 
-use itertools::Itertools;
 use tokio::{join, spawn};
 
 use document::*;
 use log::info;
 use std::io::Read;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::{Duration, Instant};
@@ -20,11 +18,12 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 mod document;
 
+mod ast;
 mod check;
 mod color;
 mod completion;
-mod filegraph;
 mod index;
+mod location;
 mod parse;
 mod query;
 mod semantic;
@@ -60,7 +59,7 @@ impl Backend {
             })
             .is_some()
         {
-            self.semantic.delete(uri, time).await;
+            self.semantic.documents.lock().delete(uri, time);
         }
     }
     fn load(&self, uri: &Url) {
@@ -141,13 +140,11 @@ fn load_all_blocking(
         let semantic = semantic.clone();
         let documents = documents.clone();
 
-        tokio::task::spawn_blocking(move || {
             load_blocking(
                 Url::from_file_path(e.path()).unwrap(),
                 &documents,
                 &semantic,
             )
-        });
     }
 }
 
@@ -161,14 +158,12 @@ impl LanguageServer for Backend {
             .map(|s| s.as_str())
             .or(init_params.root_uri.as_ref().map(|p| p.path()))
             .map(|s| PathBuf::from(s));
-
         if let Some(root_folder) = root_folder {
             let documents = self.documents.clone();
             let semantic = self.semantic.clone();
             //cheap fix for better intial load, we should really use priority model to prefer
             //editor owned files
             spawn(async move {
-                let _ = tokio::time::sleep(Duration::from_millis(200)).await;
                 tokio::task::spawn_blocking(move || {
                     load_all_blocking(&root_folder, documents, semantic);
                 })
@@ -190,7 +185,7 @@ impl LanguageServer for Backend {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..Default::default()
                 }),
-
+                definition_provider: Some(OneOf::Left(true)),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -281,29 +276,41 @@ impl LanguageServer for Backend {
         }
         Ok(None)
     }
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        if let Some(draft) = self.sync_draft(&uri, DraftSync::Tree, None).await {
+            let root = self.semantic.snapshot_version(&uri, draft.revision()).await;
+            Ok(location::goto_definition(
+                &root,
+                &params.text_document_position_params.position,
+                &uri,
+            ))
+        } else {
+            return Ok(None);
+        }
+    }
     async fn semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
-        let root = self.semantic.snapshot(&params.text_document.uri).await;
         if let Some(draft) = self
             .sync_draft(&params.text_document.uri, DraftSync::Tree, None)
             .await
         {
+            let root = self.semantic.snapshot(&params.text_document.uri).await;
             let color = self.coloring.clone();
-            return Ok(spawn(async move {
-                match draft {
-                    Draft::Tree { source, tree, .. } => {
-                        color.get(root, params.text_document.uri, tree, source)
-                    }
-                    _ => {
-                        unimplemented!()
-                    }
+            return Ok(match draft {
+                Draft::Tree { source, tree, .. } => {
+                    color.get(root, params.text_document.uri, tree, source)
+                }
+                _ => {
+                    unimplemented!()
                 }
             })
-            .await
-            .ok()
-            .map(|r| SemanticTokensResult::Tokens(r)));
+            .map(|r| Some(SemanticTokensResult::Tokens(r)));
         }
         Ok(None)
     }
@@ -318,18 +325,14 @@ impl LanguageServer for Backend {
             let color = self.coloring.clone();
 
             let root = self.semantic.snapshot(&params.text_document.uri).await;
-            return Ok(spawn(async move {
-                match draft {
-                    Draft::Tree { source, tree, .. } => {
-                        color.delta(root, params.text_document.uri, tree, source)
-                    }
-                    _ => {
-                        unimplemented!()
-                    }
+            return Ok(match draft {
+                Draft::Tree { source, tree, .. } => {
+                    Some(color.delta(root, params.text_document.uri, tree, source))
                 }
-            })
-            .await
-            .ok());
+                _ => {
+                    unimplemented!()
+                }
+            });
         }
         Ok(None)
     }
@@ -370,6 +373,11 @@ impl LanguageServer for Backend {
 }
 
 fn main() {
+    std::env::set_var("RUST_BACKTRACE", "1");
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_cpus::get())
+        .build_global()
+        .unwrap();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -377,7 +385,6 @@ fn main() {
         .block_on(async_main())
 }
 async fn async_main() {
-    std::env::set_var("RUST_BACKTRACE", "1");
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     //only needed for vscode auto update

@@ -1,8 +1,7 @@
-use crate::completion::{estimate_constraint_env, find_section, CompletionEnv, Section};
-use crate::parse::parse_path;
+use crate::ast::*;
+use crate::completion::find_section;
 use crate::semantic::RootGraph;
-use crate::util::node_range;
-use crate::{filegraph::*, util::lsp_range};
+use crate::util::{node_range, TS};
 use log::info;
 use ropey::Rope;
 use std::collections::HashSet;
@@ -135,58 +134,15 @@ impl FileState {
             }],
         })
     }
-    fn highlight_attribute_path(
-        source: &Rope,
-        root: &RootGraph,
-        token: &mut Vec<AbsToken>,
-        node: Node,
-        file: &FileGraph,
-        utf16_lines: &HashSet<usize>,
-    ) {
-        let path = parse_path(node, source).unwrap();
-        if path.names.len() > 1 {
-            if let Some(attrib) = root
-                .resolve(file.name, &path.names)
-                .find(|node| matches!(node.sym, Symbol::Number(..)))
-            {
-                let mut sym = Some(attrib.sym);
-                for i in (0..path.names.len()).rev() {
-                    if let Some(cur) = sym {
-                        token.push(AbsToken {
-                            range: lsp_range(path.spans[i].clone(), source).unwrap(),
-                            kind: token_index("enumMember"),
-                        });
-                        let next = root.files[&attrib.file].owner(cur);
-                        if next.is_value() {
-                            sym = Some(next);
-                        } else {
-                            sym = None;
-                        }
-                    } else {
-                        //TODO this is slow since we need the whole byte to utf16 conversion path
-                        token.push(AbsToken {
-                            range: lsp_range(path.spans[i].clone(), source).unwrap(),
-                            kind: token_index("parameter"),
-                        });
-                    }
-                }
-            }
-        } else {
-            token.push(AbsToken {
-                range: fast_lsp_range(node, source, utf16_lines),
-                kind: token_index("parameter"),
-            });
-        };
-    }
     fn color_section(
         origin: Node,
-        root: &RootGraph,
+        _root: &RootGraph,
         source: &Rope,
-        file: &FileGraph,
+        _file: &Document,
         utf16_line: &HashSet<usize>,
         token: &mut Vec<AbsToken>,
     ) {
-        let section = find_section(origin);
+        let _section = find_section(origin);
         let mut cursor = QueryCursor::new();
 
         let captures = TS.queries.highlight.capture_names();
@@ -197,30 +153,11 @@ impl FileState {
         ) {
             for c in i.captures {
                 let kind = captures[c.index as usize].as_str();
-                if kind == "some_path" {
-                    match section {
-                        Section::Constraints => {
-                            Self::highlight_attribute_path(
-                                source,
-                                root,
-                                token,
-                                c.node,
-                                file,
-                                &utf16_line,
-                            );
-                        }
-                        _ => token.push(AbsToken {
-                            range: fast_lsp_range(c.node, source, &utf16_line),
-                            kind: token_index("parameter"),
-                        }),
-                    }
-                } else {
-                    let range = fast_lsp_range(c.node, source, &utf16_line);
-                    token.push(AbsToken {
-                        range,
-                        kind: token_index(kind),
-                    });
-                }
+                let range = fast_lsp_range(c.node, source, &utf16_line);
+                token.push(AbsToken {
+                    range,
+                    kind: token_index(kind),
+                });
             }
         }
     }
@@ -240,7 +177,8 @@ impl FileState {
         }
         let mut sections = tree.walk();
         let file = &root.files[&origin.as_str().into()];
-        //iterate captures and create colors token
+        //iterate captures and create colors token, we currently allow diffrent color for diffrent
+        //sections (currently unsed)
         sections.goto_first_child();
         loop {
             let time = Instant::now();

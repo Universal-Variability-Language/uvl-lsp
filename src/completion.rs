@@ -1,5 +1,5 @@
+use crate::ast::*;
 use crate::document::Draft;
-use crate::filegraph::*;
 use crate::util::*;
 use crate::{parse, semantic::*};
 use compact_str::CompactString;
@@ -7,14 +7,12 @@ use itertools::Either;
 use log::info;
 use ropey::Rope;
 use std::cmp::Ordering;
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ops::Add;
 use tokio::time::Instant;
-use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionList, CompletionTextEdit, Position, Range,
-    TextDocumentPositionParams, TextEdit,
-};
+use tower_lsp::lsp_types::*;
 use tree_sitter::{Node, Point, Tree};
 use ustr::Ustr;
 /*
@@ -100,7 +98,7 @@ pub fn make_path<T: AsRef<str>, I: Iterator<Item = T>>(i: I) -> CompactString {
 
 //What kind of value is likely required to complete the expression
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum CompletionEnv {
+ pub enum CompletionEnv {
     Numeric,
     Constraint,
     GroupMode,
@@ -144,161 +142,120 @@ pub enum Section {
     Constraints,
     TopLevel,
     Unknown,
+    Attribute,
 }
 pub fn find_section(node: Node) -> Section {
-    if node.kind() == "blk" {
-        match node.child_by_field_name("header").unwrap().kind() {
+    match node.kind() {
+        "blk" => match node.child_by_field_name("header").unwrap().kind() {
             "constraints" => Section::Constraints,
             "include" => Section::Include,
             "imports" => Section::Imports,
             "features" => Section::Features,
             _ => find_section(node.parent().unwrap()),
-        }
-    } else if node.kind() == "source_file" {
-        Section::TopLevel
-    } else if node.kind() == "attribute_constraints" || node.kind() == "attribute_constraint" {
-        Section::Constraints
-    } else if let Some(p) = node.parent() {
-        find_section(p)
-    } else {
-        Section::Unknown
-    }
-}
-fn longest_path<'a>(node: Node<'a>, source: &Rope) -> Option<(Path, Node<'a>)> {
-    if let Some(p) = node
-        .parent()
-        .map(|n| parse::parse_path(n, source).or_else(|| parse::parse_lang_lvl_path(n, source)))
-        .flatten()
-    {
-        Some((p, node.parent().unwrap()))
-    } else if let Some(p) = parse::parse_path(node, source) {
-        Some((p, node))
-    } else {
-        None
-    }
-}
-
-pub fn estimate_constraint_env(node: Node, origin: Option<Node>, source: &Rope) -> CompletionEnv {
-    if node.is_error() {
-        for i in tree_sitter_traversal::traverse(node.walk(), tree_sitter_traversal::Order::Pre) {
-            match i.kind() {
-                "+" | "-" | "*" | "/" | ">" | "<" | "==" => return CompletionEnv::Numeric,
-                "=>" | "&" | "|" | "<=>" => return CompletionEnv::Constraint,
-                _ => {}
-            }
-        }
-    }
-    match node.kind() {
-        "nested_expr" | "path" | "name" => {
-            estimate_constraint_env(node.parent().unwrap(), Some(node), source)
-        }
-        "number" => CompletionEnv::Numeric,
-        "aggregate" => {
-            if let Some(origin) = origin {
-                if node
-                    .child_by_field_name("context")
-                    .map(|ctx| ctx == origin)
-                    .unwrap_or(false)
-                {
-                    CompletionEnv::Constraint
-                } else {
-                    CompletionEnv::Aggregate {
-                        context: node
-                            .child_by_field_name("context")
-                            .map(|ctx| parse::parse_path(ctx, source))
-                            .flatten(),
-                    }
-                }
-            } else {
-                CompletionEnv::Aggregate { context: None }
-            }
-        }
-        "binary_expr" => match node.child_by_field_name("op").unwrap().kind() {
-            "=>" | "&" | "|" | "<=>" => return CompletionEnv::Constraint,
-            _ => CompletionEnv::Numeric,
         },
-        _ => CompletionEnv::Constraint,
-    }
-}
-fn estimate_env(node: Node, source: &Rope, edit_line: u32) -> Option<CompletionEnv> {
-    if node.is_extra() && !node.is_error() {
-        //Comment?
-        return None;
-    }
-    let section = find_section(node);
-
-    info!("Section: {:?}", section);
-
-    match section {
-        Section::TopLevel => Some(CompletionEnv::Toplevel),
-        Section::Imports => {
-            let blk = containing_blk(node)?;
-            if (node.end_position().row as u32) < edit_line {
-                Some(CompletionEnv::Import)
+        "source_file" => Section::TopLevel,
+        "attribute_constraint" | "attribute_constraints" => Section::Constraints,
+        "binary_expr" | "nested_expr" => Section::Constraints,
+        "attribute_value"=>Section::Attribute,
+        _ => {
+            if let Some(p) = node.parent() {
+                find_section(p)
             } else {
-                match header_kind(blk) {
-                    "name" => Some(CompletionEnv::Import),
-                    "ref" if node.kind() == "path" => Some(CompletionEnv::Import),
-                    _ => None,
-                }
+                Section::Unknown
             }
         }
-        Section::Include => Some(CompletionEnv::Include),
-        Section::Features => {
-            let owner = if node.start_position().row as u32 == edit_line {
-                containing_blk(containing_blk(node)?)?
-            } else {
-                containing_blk(node)?
-            };
-            match header_kind(owner) {
-                "group_mode" | "cardinality" | "features" => Some(CompletionEnv::Feature),
-                "name" | "ref" => Some(CompletionEnv::GroupMode),
-                _ => Some(CompletionEnv::Feature),
-            }
-        }
-        Section::Constraints => {
-            if (node.end_position().row as u32) < edit_line {
-                Some(CompletionEnv::Constraint)
-            } else {
-                Some(estimate_constraint_env(node, None, source))
-            }
-        }
-        Section::Unknown => Some(CompletionEnv::Any),
     }
 }
 
-#[derive(Debug)]
-struct CompletionQuery {
-    perfix: Vec<Ustr>,
-    postfix: CompactString,
-    postfix_range: Range,
-    env: CompletionEnv,
-    offset: CompletionOffset,
-}
-impl CompletionQuery {
-    fn text_edit(&self, text: TextOP) -> TextEdit {
-        match text {
-            TextOP::Put(text) => TextEdit {
-                new_text: text.into(),
-                range: self.postfix_range,
-            },
-        }
-    }
-}
-fn node_at(node: Node, pos: tree_sitter::Point) -> Node {
+fn node_at(node: Node, pos: Point) -> Node {
     let mut next = pos;
     next.column += 1;
     node.named_descendant_for_point_range(pos, next).unwrap()
 }
+
+pub fn containes(range: Range, pos: &Position) -> bool {
+    range.start.character <= pos.character && range.end.character > pos.character
+}
+pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv {
+    if node.is_error() && node.start_position().row == node.end_position().row {
+        let err_raw: String = source.byte_slice(node.byte_range()).into();
+        if err_raw.contains("=>")
+            || err_raw.contains("<=>")
+            || err_raw.contains("&")
+            || err_raw.contains("|")
+        {
+            return CompletionEnv::Constraint;
+        }
+        if err_raw.contains("+")
+            || err_raw.contains("-")
+            || err_raw.contains("*")
+            || err_raw.contains("/")
+            || err_raw.contains(">")
+            || err_raw.contains("<")
+            || err_raw.contains("==")
+        {
+            return CompletionEnv::Numeric;
+        }
+    }
+    match node.kind() {
+        "number" => CompletionEnv::Numeric,
+        "aggregate" => {
+            let mut cursor = node.walk();
+            cursor.goto_first_child();
+            let mut arg_offset = -1;
+            let mut args = Vec::new();
+            loop {
+                if containes(
+                    lsp_range(cursor.node().byte_range(), source).unwrap(),
+                    &Position {
+                        character: pos.character - 1,
+                        line: pos.line,
+                    },
+                ) {
+                    arg_offset = args.len() as isize;
+                }
+                if cursor.field_name().map(|i| i == "arg").unwrap_or(false) {
+                    args.push(parse::parse_path(cursor.node(), source));
+                }
+                info!("{:?}", cursor.node().kind());
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            info!("args {:?} offset {}", &args, arg_offset);
+            if arg_offset == 0 && args.len() > 1 {
+                CompletionEnv::Constraint
+            } else if args.len() == 1 && arg_offset == 0 {
+                CompletionEnv::Aggregate { context: None }
+            } else if arg_offset >= 1 {
+                CompletionEnv::Aggregate{context:args[0].clone()}
+            } else {
+                CompletionEnv::Aggregate { context: None }
+            }
+        }
+        "binary_expr" => {
+            let op: String = source
+                .byte_slice(node.child_by_field_name("op").unwrap().byte_range())
+                .into();
+            match op.as_str() {
+                "=>" | "&" | "|" | "<=>" => return CompletionEnv::Constraint,
+                _ => CompletionEnv::Numeric,
+            }
+        }
+        "nested_expr"|"path" => estimate_expr(node.parent().unwrap(), pos, source),
+        _ => CompletionEnv::Constraint,       
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum CompletionOffset {
+pub enum CompletionOffset {
     Continous, // We are in path
     Dot,       //We are in open path ending with a dot
     SameLine,  // We are in a unfinished line
     Cut,       //We are in a empty line
 }
 //Search for context in the vicinity of the cursor
-//first search on char back, then inside the line, then in the previous line etc.
+//first search one char back, then inside the line, then in the previous line etc.
 fn position_to_node<'a>(
     source: &Rope,
     tree: &'a Tree,
@@ -367,10 +324,94 @@ fn position_to_node<'a>(
         }
     }
 }
-//"Smart" completion, find context arround the cursor
+fn estimate_env(
+    node: Node,
+    source: &Rope,
+    pos: &Position,
+) -> Option<CompletionEnv> {
+    if node.is_extra() && !node.is_error() {
+        //Comment?
+        return None;
+    }
+    let section = find_section(node);
+
+    info!("Section: {:?}", section);
+
+    match section {
+        Section::TopLevel => Some(CompletionEnv::Toplevel),
+        Section::Imports => {
+            let blk = containing_blk(node)?;
+            if (node.end_position().row as u32) < pos.line {
+                Some(CompletionEnv::Import)
+            } else {
+                match header_kind(blk) {
+                    "name" => Some(CompletionEnv::Import),
+                    "ref" if node.kind() == "path" => Some(CompletionEnv::Import),
+                    _ => None,
+                }
+            }
+        }
+        Section::Include => Some(CompletionEnv::Include),
+        Section::Features => {
+            let owner = if node.start_position().row as u32 == pos.line {
+                containing_blk(containing_blk(node)?)?
+            } else {
+                containing_blk(node)?
+            };
+            match header_kind(owner) {
+                "group_mode" | "cardinality" | "features" => Some(CompletionEnv::Feature),
+                "name" | "ref" => Some(CompletionEnv::GroupMode),
+                _ => Some(CompletionEnv::Feature),
+            }
+        }
+        Section::Constraints => {
+            if (node.end_position().row as u32) < pos.line {
+                Some(CompletionEnv::Constraint)
+            } else {
+                Some(estimate_expr(node,pos,source))
+            }
+        }
+        Section::Attribute=>Some(CompletionEnv::SomeName),
+        Section::Unknown => Some(CompletionEnv::Any),
+    }
+}
+
+#[derive(Debug)]
+struct CompletionQuery {
+    prefix: Vec<Ustr>,
+    postfix: CompactString,
+    postfix_range: Range,
+    env: CompletionEnv,
+    offset: CompletionOffset,
+}
+impl CompletionQuery {
+    fn text_edit(&self, text: TextOP) -> TextEdit {
+        match text {
+            TextOP::Put(text) => TextEdit {
+                new_text: text.into(),
+                range: self.postfix_range,
+            },
+        }
+    }
+}
+
+fn longest_path<'a>(node: Node<'a>, source: &Rope) -> Option<(Path, Node<'a>)> {
+    if let Some(p) = node
+        .parent()
+        .map(|n| parse::parse_path(n, source).or_else(|| parse::parse_lang_lvl_path(n, source)))
+        .flatten()
+    {
+        Some((p, node.parent().unwrap()))
+    } else if let Some(p) = parse::parse_path(node, source) {
+        Some((p, node))
+    } else {
+        None
+    }
+}
+//"smart" completion, find context arround the cursor
 fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
     match draft {
-        Draft::Tree { source, tree, .. } => {
+        Draft::Tree { source,tree, .. } => {
             let (offset, edit_node) = position_to_node(source, tree, pos);
             info!("Completion for: {:?}", edit_node);
             if let (Some((path, path_node)), CompletionOffset::Continous) =
@@ -381,8 +422,8 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
                         offset: CompletionOffset::Dot,
                         postfix_range: lsp_range(tail.end_byte()..tail.end_byte(), source)?,
                         postfix: CompactString::new_inline(""),
-                        perfix: path.names,
-                        env: estimate_env(path_node, source, pos.line)
+                        prefix: path.names,
+                        env: estimate_env(path_node, source, pos)
                             .unwrap_or(CompletionEnv::SomeName),
                     })
                 } else {
@@ -390,22 +431,21 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
                         offset,
                         postfix_range: lsp_range(path.spans.last()?.clone(), source)?,
                         postfix: path.names.last()?.as_str().into(),
-                        perfix: path.names[..path.names.len() - 1].to_vec(),
-                        env: estimate_env(path_node, source, pos.line)
+                        prefix: path.names[..path.names.len() - 1].to_vec(),
+                        env: estimate_env(path_node, source, pos)
                             .unwrap_or(CompletionEnv::SomeName),
                     })
                 }
             } else {
                 Some(CompletionQuery {
                     offset,
-                    perfix: Vec::new(),
-
+                    prefix: Vec::new(),
                     postfix: "".into(),
                     postfix_range: Range {
                         start: pos.clone(),
                         end: pos.clone(),
                     },
-                    env: estimate_env(edit_node, source, pos.line)
+                    env: estimate_env(edit_node, source, pos)
                         .unwrap_or(CompletionEnv::SomeName),
                 })
             }
@@ -425,15 +465,15 @@ enum CompletionKind {
     File,
     DontCare,
 }
-impl From<Symbol> for CompletionKind {
-    fn from(s: Symbol) -> Self {
+impl From<Type> for CompletionKind {
+    fn from(s: Type) -> Self {
         match s {
-            Symbol::Root => Self::DontCare,
-            Symbol::Dir(..) => Self::Folder,
-            Symbol::Feature(..) => Self::Feature,
-            Symbol::Import(..) => Self::Import,
-            Symbol::Number(..) => Self::AttributeNumber,
-            Symbol::Attributes(..) => Self::AttributeAttributes,
+            Type::Dir => Self::Folder,
+            Type::Feature => Self::Feature,
+            Type::Namespace => Self::Import,
+            Type::Number => Self::AttributeNumber,
+            Type::Attributes => Self::AttributeAttributes,
+            Type::Alias => Self::Namespace,
             _ => Self::DontCare,
         }
     }
@@ -586,7 +626,7 @@ fn make_relativ_path(path: &[CompactString], origin: &[CompactString]) -> Option
 fn completion_weight(
     query: &str,
     to_match: &str,
-    depth: u32,
+    _depth: u32,
     env: &CompletionEnv,
     kind: CompletionKind,
 ) -> f32 {
@@ -597,7 +637,7 @@ fn completion_weight(
         | (CompletionEnv::Import, CompletionKind::Folder)
         | (CompletionEnv::Import, CompletionKind::File)
         | (CompletionEnv::Feature, CompletionKind::Feature) => W_TYPE,
-        (_, _) => 2.0,
+        (_, _) => 1.0,
     };
     if query.is_empty() {
         w2
@@ -652,42 +692,35 @@ impl pathfinding::num_traits::Zero for ModulePath {
 fn completion_symbol_local(
     snapshot: &RootGraph,
     origin: Ustr,
-
     root: RootSymbol,
     prefix: &[Ustr],
     query: &CompletionQuery,
     top: &mut TopN<CompletionOpt>,
 ) {
     let file = &snapshot.files[&root.file];
-    info!("Module {:?} under {:?}",root,prefix);
-    for (sym_prefix, sym) in file.children(root.sym) {
-
-        if matches!(sym, Symbol::Dir(..)) {
-            info!("found dir")
-        }
-        if sym_prefix.is_empty() || !query.env.is_relevant(sym.into()) {
-            continue;
-        }
-
-        if matches!(sym, Symbol::Dir(..)) {
-            info!("{:?}, {:?}", sym, sym_prefix)
+    info!("Module {:?} under {:?}", root, prefix);
+    file.visit_named_children(root.sym, true, |sym, sym_prefix| {
+        let ty = file.type_of(sym).unwrap();
+        if sym_prefix.is_empty() || !query.env.is_relevant(ty.into()) {
+            return true;
         }
         if query.env == CompletionEnv::Feature
             && root.file == origin
             && matches!(sym, Symbol::Feature(..))
         {
-            continue;
+            return true;
         }
         let text = make_path(prefix.iter().chain(sym_prefix.iter()));
         top.push(CompletionOpt::new(
-            sym.into(),
+            ty.into(),
             *sym_prefix.last().unwrap(),
             text.clone(),
             prefix.len() + sym_prefix.len(),
             TextOP::Put(text),
             query,
-        ))
-    }
+        ));
+        true
+    });
 }
 fn path_len(path: &[Ustr]) -> usize {
     path.iter().map(|i| i.len()).sum()
@@ -699,34 +732,41 @@ fn completion_symbol(
     query: &CompletionQuery,
     top: &mut TopN<CompletionOpt>,
 ) {
-    let mut modules: HashMap<_, &[Ustr]> = HashMap::new(); //Store reachable documents under the
-                                                           //search perfix under a secondary prefix
+    let mut modules: HashMap<_, Vec<Ustr>> = HashMap::new(); //Store reachable documents under the
+                                                             //search perfix under a secondary prefix
     let mut visited = HashSet::new(); //Needed for circular references?
 
-    for i in snapshot.resolve(origin, &query.perfix) {
+    for i in snapshot.resolve(origin, &query.prefix) {
         //Find all possible continuations for the
         //search prefix
         visited.insert(i.file);
         match &i.sym {
             Symbol::Root => {
-                let _ = modules.insert(i.file, &[]);
+                let _ = modules.insert(i.file, vec![]);
             }
             Symbol::Dir(..) => {
                 let file = &snapshot.files[&i.file];
-                for im in file.imports_under(i.sym) {
-                    if let Some((_, tgt)) = snapshot.fs.imports(i.file).find(|k| k.0 == im) {
-                        let prefix = &file.prefix(im)[file.prefix(i.sym).len()..];
-                        if let Some(old_len) =
-                            modules.get(&tgt).map(|&prefix| ModulePath::from(prefix))
+                file.visit_named_children(i.sym, true, |im_sym, im_prefix| match im_sym {
+                    Symbol::Dir(..) => true,
+                    Symbol::Import(..) => {
+                        if let Some((_, tgt)) = snapshot.fs.imports(i.file).find(|k| k.0 == im_sym)
                         {
-                            if old_len > prefix.into() {
-                                modules.insert(tgt, prefix);
+                            if let Some(old_len) = modules
+                                .get(&tgt)
+                                .map(|prefix| ModulePath::from(prefix.as_slice()))
+                            {
+                                if old_len > im_prefix.into() {
+                                    modules.insert(tgt, im_prefix.to_vec());
+                                }
+                            } else {
+                                modules.insert(tgt, im_prefix.to_vec());
                             }
-                        } else {
-                            modules.insert(tgt, prefix);
                         }
+
+                        true
                     }
-                }
+                    _ => false,
+                });
             }
             _ => completion_symbol_local(snapshot, origin, i, &[], query, top),
         }
@@ -734,14 +774,18 @@ fn completion_symbol(
     let root = Ustr::from(""); //Perform nn from all reachable documents to all other
     let pred = pathfinding::directed::dijkstra::dijkstra_all(&root, |node| {
         if node == &root {
-            Either::Left(modules.iter().map(|(k, v)| (*k, ModulePath::from(*v))))
+            Either::Left(
+                modules
+                    .iter()
+                    .map(|(k, v)| (*k, ModulePath::from(v.as_slice()))),
+            )
         } else {
             let node = *node;
             Either::Right(
                 snapshot
                     .fs
                     .imports(node)
-                    .map(move |(im, tgt)| (tgt, snapshot.files[&node].prefix(im).into())),
+                    .map(move |(im, tgt)| (tgt, snapshot.files[&node].import_prefix(im).into())),
             )
         }
     });
@@ -760,7 +804,7 @@ fn completion_symbol(
             let import = snapshot
                 .fs
                 .imports_connecting(*parent, next)
-                .map(|im| snapshot.files[parent].prefix(im))
+                .map(|im| snapshot.files[parent].import_prefix(im))
                 .min_by_key(|prefix| ModulePath::from(*prefix))
                 .unwrap();
             for i in import.iter().rev() {
@@ -819,19 +863,26 @@ pub fn compute_completions(
             CompletionEnv::Toplevel => add_top_lvl_keywords(&ctx.postfix, &mut top, 2.0),
             CompletionEnv::SomeName => {}
             CompletionEnv::Constraint | CompletionEnv::Numeric | CompletionEnv::Feature => {
-                match (&ctx.env, &ctx.offset) {//heuristic to provide nearly correct predictions, to
-                                               //make it more accurate we need to respect
-                                               //parenthesis
+                match (&ctx.env, &ctx.offset) {
+                    //heuristic to provide nearly correct predictions, to
+                    //make it more accurate we need to respect
+                    //parenthesis
                     (CompletionEnv::Feature, CompletionOffset::SameLine) => {
                         add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
                     }
-                    (CompletionEnv::Constraint|CompletionEnv::Numeric, CompletionOffset::SameLine) => {
+                    (
+                        CompletionEnv::Constraint | CompletionEnv::Numeric,
+                        CompletionOffset::SameLine,
+                    ) => {
                         add_logic_op(&ctx.postfix, &mut top, 6.1);
-                        add_function_keywords(&ctx.postfix, &mut top, 4.0);
+                        add_function_keywords(&ctx.postfix, &mut top, 2.0);
                         completion_symbol(&snapshot, origin, &ctx, &mut top);
                     }
-                    (CompletionEnv::Constraint|CompletionEnv::Numeric, CompletionOffset::Cut|CompletionOffset::Continous)  => {
-                        add_function_keywords(&ctx.postfix, &mut top, 4.0);
+                    (
+                        CompletionEnv::Constraint | CompletionEnv::Numeric,
+                        CompletionOffset::Cut | CompletionOffset::Continous,
+                    ) => {
+                        add_function_keywords(&ctx.postfix, &mut top, 2.0);
                         completion_symbol(&snapshot, origin, &ctx, &mut top);
                     }
                     _ => {
@@ -841,7 +892,7 @@ pub fn compute_completions(
                 is_incomplete = true
             }
             CompletionEnv::Import => {
-                for (path, name, node) in snapshot.fs.sub_files(origin, &ctx.perfix) {
+                for (path, name, node) in snapshot.fs.sub_files(origin, &ctx.prefix) {
                     let len = path.as_str().chars().filter(|c| c == &'.').count();
                     top.push(CompletionOpt::new(
                         match node {
@@ -858,8 +909,8 @@ pub fn compute_completions(
                 is_incomplete = true
             }
             CompletionEnv::Include => {
-                if ctx.perfix.len() > 0 {
-                    match ctx.perfix[0].as_str() {
+                if ctx.prefix.len() > 0 {
+                    match ctx.prefix[0].as_str() {
                         "SAT-level" => add_lang_lvl_sat(&ctx.postfix, &mut top, 2.0),
                         "SMT-level" => add_lang_lvl_smt(&ctx.postfix, &mut top, 2.0),
                         _ => {}
@@ -869,53 +920,36 @@ pub fn compute_completions(
                 }
             }
             CompletionEnv::Aggregate { context } => {
-                let mut has_context = false;
-                if let Some(context) = context.as_ref().and_then(|path| {
-                    Some(snapshot.resolve(origin, &path.names).filter(|node| {
-                        matches!(
-                            node.sym,
-                            Symbol::Feature(..) | Symbol::Attributes(..) | Symbol::Root
-                        )
-                    }))
-                }) {
-                    for f in context {
-                        info!("found context");
-                        has_context = true;
-                        let file = &snapshot.files[&f.file];
-                        for (prefix, i) in file.children_attributes(f.sym) {
-                            if CompletionKind::from(i) == CompletionKind::DontCare {
-                                continue;
-                            }
-                            let prefix_str = make_path(prefix.iter());
+                snapshot.resolve_attributes(
+                    origin,
+                    context.as_ref().map(|p| p.names.as_slice()).unwrap_or(&[]),
+                    |attrib, prefix| {
+                        let common = prefix
+                            .iter()
+                            .zip(ctx.prefix.iter())
+                            .take_while(|(i, k)| i == k)
+                            .count();
+
+                        info!("common {}", common);
+                        if common < ctx.prefix.len() {
+                            return;
+                        }
+                        let file = &snapshot.files[&attrib.file];
+                        let prefix_str = make_path(prefix[common..].iter());
+                        let kind = file.type_of(attrib.sym).unwrap().into();
+                        info!("{:?}", kind);
+                        if kind != CompletionKind::DontCare {
                             top.push(CompletionOpt::new(
-                                i.into(),
+                                kind,
                                 *prefix.last().unwrap(),
                                 prefix_str.clone(),
                                 prefix.len(),
                                 TextOP::Put(prefix_str),
                                 &ctx,
-                            ))
+                            ));
                         }
-                    }
-                }
-                if !has_context {
-                    let file = &snapshot.files[&origin];
-                    for (prefix, i) in file.children_attributes(Symbol::Root) {
-                        info!("{:?}, {:?}", prefix, i);
-                        if CompletionKind::from(i) == CompletionKind::DontCare {
-                            continue;
-                        }
-                        let prefix_str = make_path(prefix.iter());
-                        top.push(CompletionOpt::new(
-                            i.into(),
-                            *prefix.last().unwrap(),
-                            prefix_str.clone(),
-                            prefix.len(),
-                            TextOP::Put(prefix_str),
-                            &ctx,
-                        ))
-                    }
-                }
+                    },
+                );
                 if context.is_none() {
                     completion_symbol(&snapshot, origin, &ctx, &mut top);
                 }
@@ -924,7 +958,8 @@ pub fn compute_completions(
         }
 
         let mut comp = top.into_sorted_vec();
-        info!("Completions P{:?} in {:?}",&comp ,timer.elapsed());
+        //info!("Completions P{:?} in {:?}", &comp, timer.elapsed());
+
         let items = comp
             .drain(0..)
             .filter(|opt| opt.kind != CompletionKind::DontCare)
@@ -948,7 +983,7 @@ pub fn compute_completions(
             })
             .collect();
 
-        //info!("Completions: {:?} in {:?}", items, timer.elapsed());
+        info!("Completions: {:?}", timer.elapsed());
         CompletionList {
             items,
             is_incomplete,
@@ -960,6 +995,7 @@ pub fn compute_completions(
         }
     }
 }
+
 
 #[cfg(test)]
 mod tests {

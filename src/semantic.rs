@@ -1,27 +1,24 @@
-use crate::document::AsyncDraft;
+use crate::ast::*;
 use crate::check;
+use crate::document::{AsyncDraft, DocumentStore};
+use crate::util::lsp_range;
 use compact_str::CompactStringExt;
+use hashbrown::{HashMap, HashSet};
+use parking_lot::Mutex;
 use parking_lot::RwLock;
 
 use dashmap::DashMap;
-
 use log::info;
-
-use crate::filegraph::*;
 use petgraph::prelude::*;
-use rayon::prelude::*;
-use ropey::Rope;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::Semaphore;
 use tokio::time::{Duration, Instant};
 use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::*;
 use tower_lsp::Client;
-use tree_sitter::Tree;
 use ustr::Ustr;
 
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
@@ -57,7 +54,7 @@ pub struct FileSystem {
     file2node: HashMap<Ustr, NodeIndex>,
 }
 impl FileSystem {
-    fn new(files: &im::HashMap<Ustr, FileGraph>) -> Self {
+    fn new(files: &im::HashMap<Ustr, Document>) -> Self {
         let mut graph = Graph::new();
         let mut file2node = HashMap::new();
         let root = graph.add_node(FSNode::Dir);
@@ -82,7 +79,7 @@ impl FileSystem {
         }
         //resolve imports
         for (n, f) in files.iter() {
-            for i in f.imports() {
+            for i in f.imports_iter() {
                 let path = f.import_path(i);
                 let mut node = graph
                     .neighbors_directed(file2node[n], Incoming)
@@ -176,13 +173,39 @@ impl FileSystem {
                 Some((path, name, self.graph[node].clone()))
             })
         })
+        .filter(move |(_, _, node)| match node {
+            FSNode::File(tgt) => tgt != &origin,
+            _ => true,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ReferenceMap {
+    resolved: HashMap<RootSymbol, RootSymbol>,
+    reverse: HashMap<RootSymbol, Vec<RootSymbol>>,
+}
+impl ReferenceMap {
+    pub fn insert(&mut self, src: RootSymbol, dst: RootSymbol) {
+        self.resolved.insert(src.clone(), dst.clone());
+        insert_multi(&mut self.reverse, dst, src);
+    }
+    pub fn resolve(&mut self, src: RootSymbol) -> Option<RootSymbol> {
+        self.resolved.get(&src).cloned()
+    }
+    pub fn used_by<'a>(&'a self, dst: RootSymbol) -> impl Iterator<Item = RootSymbol> + 'a {
+        self.reverse
+            .get(&dst)
+            .into_iter()
+            .flat_map(|i| i.iter().cloned())
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct RootGraph {
-    pub files: im::HashMap<Ustr, FileGraph>,
+    pub files: im::HashMap<Ustr, Document>,
     pub fs: Arc<FileSystem>,
+    pub ref_map: ReferenceMap,
 }
 impl RootGraph {
     //find all symbols from origin under path
@@ -196,218 +219,210 @@ impl RootGraph {
             stack.pop().and_then(|(file, tail)| {
                 for (sym, tgt) in self.fs.imports(file) {
                     let common_prefix = self.files[&file]
-                        .prefix(sym)
+                        .import_prefix(sym)
                         .iter()
                         .zip(tail.iter())
                         .take_while(|(i, k)| i == k)
                         .count();
 
-                    if common_prefix == self.files[&file].prefix(sym).len() {
+                    if common_prefix == self.files[&file].import_prefix(sym).len() {
                         stack.push((tgt, &tail[common_prefix..]));
                     }
                 }
                 Some(
                     self.files[&file]
-                        .lookup(tail)
+                        .lookup(Symbol::Root, tail, |_| true)
                         .map(move |sym| RootSymbol { file, sym }),
                 )
             })
         })
         .flatten()
     }
-    pub fn new(files: im::HashMap<Ustr, FileGraph>) -> Self {
+    pub fn resolve_with_binding<'a>(
+        &'a self,
+        origin: Ustr,
+        path: &'a [Ustr],
+    ) -> impl Iterator<Item = Vec<RootSymbol>> + 'a {
+        let mut stack = vec![(origin, path, vec![])];
+        std::iter::from_fn(move || {
+            stack.pop().and_then(|(file, tail, binding)| {
+                let src_file = &self.files[&file];
+                for (sym, tgt) in self.fs.imports(file) {
+                    let common_prefix = src_file
+                        .import_prefix(sym)
+                        .iter()
+                        .zip(tail.iter())
+                        .take_while(|(i, k)| i == k)
+                        .count();
+
+                    if common_prefix == src_file.import_prefix(sym).len() {
+                        stack.push((
+                            tgt,
+                            &tail[common_prefix..],
+                            [binding.as_slice(), &[RootSymbol { sym, file }]].concat(),
+                        ));
+                    }
+                }
+                Some(
+                    src_file
+                        .lookup_with_binding(Symbol::Root, tail, |_| true)
+                        .map(move |sub_binding| {
+                            binding
+                                .iter()
+                                .cloned()
+                                .chain(sub_binding.iter().map(|i| RootSymbol { file, sym: *i }))
+                                .collect()
+                        }),
+                )
+            })
+        })
+        .flatten()
+    }
+
+    pub fn resolve_attributes<'a, F: FnMut(RootSymbol, &[Ustr])>(
+        &'a self,
+        origin: Ustr,
+        context: &'a [Ustr],
+        mut f: F,
+    ) {
+        for root in self.resolve(origin, context) {
+            let file = &self.files[&root.file];
+            info!("resolved {:?}", root);
+            file.visit_named_children(root.sym, false, |i, prefix| match i {
+                Symbol::Feature(..) => true,
+                Symbol::Attribute(..) => {
+                    info!("attrib {:?}", prefix);
+                    f(
+                        RootSymbol {
+                            sym: i,
+                            file: root.file,
+                        },
+                        &prefix[1..],
+                    );
+                    true
+                }
+                _ => false,
+            });
+        }
+    }
+    pub fn new(files: im::HashMap<Ustr, Document>) -> Self {
         Self {
             fs: Arc::new(FileSystem::new(&files)),
-
             files,
+            ref_map: Default::default(),
         }
     }
     pub fn dump(&self) {
         info!("{:#?}", &self.files);
     }
 }
-pub enum DraftUpdate {
-    Put {
-        uri: Url,
-        timestamp: Instant,
-        tree: Tree,
-        source: Rope,
-    },
-
-    Delete {
-        uri: Ustr,
-        timestamp: Instant,
-    },
-}
 //Central synchronisation provider
 pub struct Context {
     pub root: RwLock<RootGraph>,
     pub revison_counter: AtomicU64,
+    pub revison_counter_parsed: AtomicU64,
     pub shutdown: CancellationToken,
-    pub tx_draft_updates: mpsc::Sender<DraftUpdate>,
+    pub documents: Mutex<DocumentStore>,
     pub client: Client,
+    pub load_files_sema: Semaphore,
 }
 impl Context {
-    pub async fn delete(&self, uri: &Url, timestamp: Instant) {
-        self.revison_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let _ = self
-            .tx_draft_updates
-            .send(DraftUpdate::Delete {
-                uri: uri.as_str().into(),
-                timestamp,
-            })
-            .await;
-    }
     //Make sure uri is inside the snapshot
     pub async fn snapshot(&self, uri: &Url) -> RootGraph {
         let time = Instant::now();
         loop {
             let snap = self.root.read().clone();
             if snap.files.contains_key(&uri.as_str().into()) {
-                info!("waited {:?} for root",time.elapsed());
+                info!("waited {:?} for root", time.elapsed());
                 return snap;
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-
         }
     }
-}
-//Semantic analysis happens we currently only output diagnostics this runs inside its one task
-//seperat to the rest of the server
-struct State {
-    files: im::HashMap<Ustr, FileGraph>,
-    changes: Vec<DraftUpdate>,
-    last_update: Instant,
-    revision_counter: u64,
-    latest_change: HashMap<Ustr, Instant>,
-    check_state: HashMap<Ustr, check::DocumentState>,
-}
-impl State {
-    //apply updates
-    async fn update(&mut self, change: DraftUpdate, ctx: &Arc<Context>) {
-        self.changes.push(change);
-        self.revision_counter += 1;
-        if ctx
-            .revison_counter
-            .load(std::sync::atomic::Ordering::SeqCst)
-            != self.revision_counter
-            && self.last_update.elapsed() < Duration::from_millis(500)
-        {
-            info!(
-                "Dont rebuild modules {} {}",
-                self.revision_counter,
-                ctx.revison_counter
-                    .load(std::sync::atomic::Ordering::SeqCst)
-            );
-            return;
+    pub async fn snapshot_version(&self, uri: &Url, min_version: Instant) -> RootGraph {
+        let time = Instant::now();
+        loop {
+            let snap = self.root.read().clone();
+            if snap
+                .files
+                .get(&uri.as_str().into())
+                .map(|file| file.timestamp >= min_version)
+                .unwrap_or(false)
+            {
+                info!("waited {:?} for root", time.elapsed());
+                return snap;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
         }
-        let update_timestamp = ctx
-            .revison_counter
-            .load(std::sync::atomic::Ordering::SeqCst);
-        //keep only the newest changes
-        self.changes.sort_by_key(|e| match e {
-            DraftUpdate::Put { timestamp, .. } => *timestamp,
-            DraftUpdate::Delete { timestamp, .. } => *timestamp,
-        });
-        let mut to_create = HashMap::new();
-        for i in self.changes.drain(0..).rev() {
-            match i {
-                DraftUpdate::Put {
-                    uri,
-                    timestamp,
-                    tree,
-                    source,
-                } => {
-                    if self
-                        .latest_change
-                        .get(&uri.as_str().into())
-                        .map(|old| *old >= timestamp)
-                        .unwrap_or(false)
-                    {
-                        continue;
-                    }
-
-                    self.latest_change.insert(uri.as_str().into(), timestamp);
-                    to_create.insert(Ustr::from(uri.as_str()), (uri, timestamp, tree, source));
+    }
+    pub fn ready(&self) -> bool {
+        self.revison_counter
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == self
+                .revison_counter_parsed
+                .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+async fn update_root_graph(
+    ctx: &Context,
+    _local_revision: u64,
+    check_state: &mut HashMap<Ustr, Instant>,
+) {
+    let timer = Instant::now();
+    let mut root = RootGraph::new(ctx.documents.lock().ast.clone());
+    let mut ref_map = ReferenceMap::default();
+    let publish = ctx.ready();
+    {
+        let mut file_paths = HashSet::new();
+        for (_, file) in root.files.iter() {
+            if !file_paths.insert(file.path.as_slice()) {
+                if let Some(ns) = file.namespace() {
+                    check::publish(
+                        &ctx.client,
+                        &file.uri,
+                        &[check::ErrorInfo {
+                            location: lsp_range(ns.range(), &file.source).unwrap(),
+                            severity: DiagnosticSeverity::ERROR,
+                            weight: 100,
+                            msg: "namespace already defined".into(),
+                        }],
+                    )
+                    .await
                 }
-                DraftUpdate::Delete { uri, timestamp } => {
-                    if self
-                        .latest_change
-                        .get(&uri)
-                        .map(|old| *old >= timestamp)
-                        .unwrap_or(false)
-                    {
-                        continue;
-                    }
-                    self.latest_change.insert(uri, timestamp);
-                    self.check_state.remove(&uri);
-                    self.files.remove(&uri);
+            } else if check_state
+                .get(&file.name)
+                .map(|old| old < &file.timestamp)
+                .unwrap_or(true)
+                && file.errors.len() > 0
+            {
+                check_state.insert(file.name, file.timestamp);
+                if publish {
+                    check::publish(&ctx.client, &file.uri, &file.errors).await;
                 }
+            } else if file.errors.len() == 0 {
+                let timer = Instant::now();
+                let err = check::check_references(&root, file.name, &mut ref_map);
+                check::publish(&ctx.client, &file.uri, &err).await;
+                info!("checked refs {:?}", timer.elapsed());
             }
         }
-        //create new file graphs
-        let (dirty, mut new_graphs): (Vec<_>, Vec<_>) = to_create
-            .par_drain()
-            .map(|(key, (url, timestamp, tree, rope))| {
-                (key, FileGraph::new(timestamp, tree, rope, url))
-            })
-            .collect();
-
-        for i in new_graphs.drain(..) {
-            self.files.insert(i.name, i);
-        }
-        //update root graph 
-        let root = RootGraph::new(self.files.clone());
-        *ctx.root.write() = root;
-        //cancel if there is a newer version
-        if update_timestamp
-            != ctx
-                .revison_counter
-                .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            return;
-        }
-        //check for syntax errors
-        let mut new_check_state: Vec<check::DocumentState> = dirty
-            .par_iter()
-            .map(|fname| check::check_document(&self.files[fname]))
-            .collect();
-        for (i, state) in new_check_state.drain(..).enumerate() {
-            self.check_state.insert(dirty[i], state);
-        }
-        if update_timestamp
-            != ctx
-                .revison_counter
-                .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            return;
-        }
-        //check for sematic errors
-        tokio::spawn(check::fininalize(
-            ctx.root.read().clone(),
-            self.check_state.clone(),
-            dirty,
-            ctx.clone(),
-            update_timestamp,
-        ));
     }
+    info!("updated root graph {:?}", timer.elapsed());
+    root.ref_map = ref_map;
+    *ctx.root.write() = root;
 }
 
-async fn handler_impl(ctx: Arc<Context>, mut rx: mpsc::Receiver<DraftUpdate>) {
-    let mut state = State {
-        check_state: HashMap::new(),
-        latest_change: HashMap::new(),
-        revision_counter: 0,
-        changes: Vec::new(),
-        last_update: Instant::now(),
-        files: im::HashMap::new(),
-    };
-
+async fn handler_impl(ctx: Arc<Context>) {
+    let mut timer = tokio::time::interval(Duration::from_millis(20));
+    let mut local_revision = 0;
+    let mut check_state = HashMap::new();
     loop {
         select! {
             _ = ctx.shutdown.cancelled() => return,
-            Some(c) = rx.recv()=>state.update(c,&ctx).await
+            _ = timer.tick() => if ctx.revison_counter_parsed.load(std::sync::atomic::Ordering::SeqCst)>local_revision{
+                local_revision = ctx.revison_counter_parsed.load(std::sync::atomic::Ordering::SeqCst);
+                update_root_graph(&ctx,local_revision,&mut check_state).await
+            }
 
         }
     }
@@ -418,13 +433,15 @@ pub fn create_handler(
     shutdown: CancellationToken,
     _: Arc<DashMap<Url, AsyncDraft>>,
 ) -> Arc<Context> {
-    let (tx, rx) = mpsc::channel(1024);
     let ctx = Arc::new(Context {
+        load_files_sema: Semaphore::new((num_cpus::get() - 1).max(1)),
         shutdown,
-        tx_draft_updates: tx,
         client,
         revison_counter: AtomicU64::new(0),
+        revison_counter_parsed: AtomicU64::new(0),
+        documents: Mutex::new(DocumentStore::default()),
         root: RwLock::new(RootGraph {
+            ref_map: ReferenceMap::default(),
             fs: Arc::new(FileSystem {
                 graph: Default::default(),
                 file2node: HashMap::new(),
@@ -432,6 +449,6 @@ pub fn create_handler(
             files: Default::default(),
         }),
     });
-    spawn(handler_impl(ctx.clone(), rx));
+    spawn(handler_impl(ctx.clone()));
     ctx
 }
