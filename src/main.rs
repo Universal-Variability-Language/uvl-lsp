@@ -27,7 +27,7 @@ mod parse;
 mod query;
 mod semantic;
 mod util;
-static VERSION: &str = "v0.0.2";
+static VERSION: &str = "v0.0.3";
 //The server core, request and respones handling
 struct Backend {
     client: Client,
