@@ -1635,7 +1635,7 @@ fn visit_top_lvl(state: &mut VisitorState) {
     }
     let fixed_order = [
         "namespace",
-        "includes",
+        "include",
         "imports",
         "features",
         "constraints",
