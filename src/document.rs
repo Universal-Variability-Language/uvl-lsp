@@ -289,4 +289,5 @@ async fn parse_document(
     semantic
         .revison_counter_parsed
         .fetch_add(1, Ordering::SeqCst);
+    semantic.dirty.notify_one();
 }

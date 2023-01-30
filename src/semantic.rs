@@ -13,6 +13,7 @@ use petgraph::prelude::*;
 use std::fmt::Debug;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use tokio::sync::Notify;
 use tokio::sync::Semaphore;
 use tokio::time::{Duration, Instant};
 use tokio::{select, spawn};
@@ -242,7 +243,7 @@ impl RootGraph {
         &'a self,
         origin: Ustr,
         path: &'a [Ustr],
-    ) -> impl Iterator<Item = Vec<RootSymbol>> + 'a {
+    ) -> impl Iterator<Item = Vec<(RootSymbol,usize)>> + 'a {
         let mut stack = vec![(origin, path, vec![])];
         std::iter::from_fn(move || {
             stack.pop().and_then(|(file, tail, binding)| {
@@ -259,7 +260,11 @@ impl RootGraph {
                         stack.push((
                             tgt,
                             &tail[common_prefix..],
-                            [binding.as_slice(), &[RootSymbol { sym, file }]].concat(),
+                            [
+                                binding.as_slice(),
+                                &[(RootSymbol { sym, file }, common_prefix)],
+                            ]
+                            .concat(),
                         ));
                     }
                 }
@@ -267,10 +272,19 @@ impl RootGraph {
                     src_file
                         .lookup_with_binding(Symbol::Root, tail, |_| true)
                         .map(move |sub_binding| {
+                            let mut offset = 0;
                             binding
                                 .iter()
                                 .cloned()
-                                .chain(sub_binding.iter().map(|i| RootSymbol { file, sym: *i }))
+                                .chain(
+                                    sub_binding
+                                        .iter()
+                                        .map(|i| (RootSymbol { file, sym: *i }, 1)),
+                                )
+                                .map(move |(sym,len)|{
+                                    offset +=len;
+                                    (sym,offset)
+                                })
                                 .collect()
                         }),
                 )
@@ -321,6 +335,7 @@ pub struct Context {
     pub root: RwLock<RootGraph>,
     pub revison_counter: AtomicU64,
     pub revison_counter_parsed: AtomicU64,
+    pub dirty: Notify,
     pub shutdown: CancellationToken,
     pub documents: Mutex<DocumentStore>,
     pub client: Client,
@@ -413,17 +428,14 @@ async fn update_root_graph(
 }
 
 async fn handler_impl(ctx: Arc<Context>) {
-    let mut timer = tokio::time::interval(Duration::from_millis(20));
     let mut local_revision = 0;
     let mut check_state = HashMap::new();
     loop {
         select! {
             _ = ctx.shutdown.cancelled() => return,
-            _ = timer.tick() => if ctx.revison_counter_parsed.load(std::sync::atomic::Ordering::SeqCst)>local_revision{
-                local_revision = ctx.revison_counter_parsed.load(std::sync::atomic::Ordering::SeqCst);
+            _ = ctx.dirty.notified() =>{
                 update_root_graph(&ctx,local_revision,&mut check_state).await
             }
-
         }
     }
 }
@@ -436,6 +448,7 @@ pub fn create_handler(
     let ctx = Arc::new(Context {
         load_files_sema: Semaphore::new((num_cpus::get() - 1).max(1)),
         shutdown,
+        dirty: Notify::new(),
         client,
         revison_counter: AtomicU64::new(0),
         revison_counter_parsed: AtomicU64::new(0),

@@ -211,14 +211,23 @@ pub fn find_definitions(root: &RootGraph, pos: &Position, uri: &Url) -> Option<V
             let r = &file.references()[id as usize];
             let segment = r.path.segment(offset);
             for bind in root.resolve_with_binding(file.name, &r.path.names) {
-                let tgt = bind.last().unwrap();
-                let dst_file = &root.files[&bind.last().unwrap().file];
+                let last = bind.last().unwrap().0.clone();
+                let dst_file = &root.files[&last.file];
                 if dst_file
-                    .type_of(tgt.sym)
+                    .type_of(last.sym)
                     .map(|ty| ty == r.ty)
                     .unwrap_or(false)
                 {
-                    return Some(vec![bind[segment].clone()]);
+                    return Some(vec![bind
+                        .iter()
+                        .find_map(|(sym, index)| {
+                            if segment < *index {
+                                Some(sym.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(last)]);
                 }
             }
             None

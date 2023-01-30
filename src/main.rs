@@ -59,9 +59,13 @@ impl Backend {
             .is_some()
         {
             self.semantic.documents.lock().delete(uri, time);
+            self.semantic.dirty.notify_one();
         }
     }
     fn load(&self, uri: &Url) {
+        if self.documents.get(uri).map(|doc|doc.state == DocumentState::OwnedByEditor).unwrap_or(false){
+            return;
+        }
         let documents = self.documents.clone();
         let semantic = self.semantic.clone();
         let uri = uri.clone();
@@ -211,7 +215,7 @@ impl LanguageServer for Backend {
             .log_message(MessageType::INFO, "server initialized!")
             .await;
         let watcher = FileSystemWatcher {
-            glob_pattern: "**/.uvl".to_string(),
+            glob_pattern: "**/*.uvl".to_string(),
             kind: None,
         };
         let reg = Registration {
@@ -349,6 +353,7 @@ impl LanguageServer for Backend {
         self.load(&params.text_document.uri);
     }
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        info!("file change {:?}",params);
         for i in params.changes {
             match i.typ {
                 FileChangeType::CREATED => {
