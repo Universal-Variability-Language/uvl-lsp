@@ -1656,14 +1656,14 @@ fn visit_top_lvl(state: &mut VisitorState) {
         if k == w {
             state.push_error_node(
                 top_level_order[i],
-                35,
+                50,
                 format!("duplicate {} section", top_level_order[i].kind()),
             );
         }
         if k > w {
             state.push_error_node(
                 top_level_order[i],
-                35,
+                50,
                 format!(
                     "{} section comes before the {} section",
                     top_level_order[i - 1].kind(),
