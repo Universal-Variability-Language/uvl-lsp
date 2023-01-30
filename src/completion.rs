@@ -395,14 +395,15 @@ impl CompletionQuery {
     }
 }
 
+
 fn longest_path<'a>(node: Node<'a>, source: &Rope) -> Option<(Path, Node<'a>)> {
     if let Some(p) = node
         .parent()
-        .map(|n| parse::parse_path(n, source).or_else(|| parse::parse_lang_lvl_path(n, source)))
+        .map(|n| parse::parse_or_lang_lvl(n,source) )
         .flatten()
     {
         Some((p, node.parent().unwrap()))
-    } else if let Some(p) = parse::parse_path(node, source) {
+    } else if let Some(p) = parse::parse_or_lang_lvl(node, source) {
         Some((p, node))
     } else {
         None
