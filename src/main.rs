@@ -27,7 +27,7 @@ mod parse;
 mod query;
 mod semantic;
 mod util;
-static VERSION: &str = "v0.0.4";
+static VERSION: &str = "v0.0.5";
 //The server core, request and respones handling
 struct Backend {
     client: Client,
@@ -286,10 +286,8 @@ impl LanguageServer for Backend {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = &params.text_document_position_params.text_document.uri;
         if let Some(draft) = self.sync_draft(&uri, DraftSync::Tree, None).await {
-            info!("test");
             let root = self.semantic.snapshot_sync(&uri).await;
 
-            info!("test");
             Ok(location::goto_definition(
                 &root,
                 &draft,
