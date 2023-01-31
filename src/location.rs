@@ -95,18 +95,23 @@ pub fn find_text_object_impl(
             _ => None,
         },
         Section::Constraints => {
+            info!("patj");
+
             let (path, p_node) = longest_path(node, source)?;
+
+            info!("patj {:?}", estimate_expr(p_node, pos, source));
             match estimate_expr(p_node, pos, source) {
                 CompletionEnv::Numeric => Some(TextObject {
                     kind: TextObjectKind::AttributeReference,
                     selected_segment: path.segment(offset),
                     path,
                 }),
-                CompletionEnv::Feature => Some(TextObject {
+                CompletionEnv::Constraint => Some(TextObject {
                     kind: TextObjectKind::FeatureReference,
                     selected_segment: path.segment(offset),
                     path,
                 }),
+            
                 CompletionEnv::Aggregate { context } => Some(TextObject {
                     kind: TextObjectKind::Aggregate(context),
                     selected_segment: path.segment(offset),
@@ -147,8 +152,10 @@ fn find_definitions(
     pos: &Position,
     uri: &Url,
 ) -> Option<Vec<RootSymbol>> {
-    let file = root.files.get(&uri.as_str().into())?;
+
     let obj = find_text_object(draft, pos)?;
+    info!("{:?}",obj);
+    let file = root.files.get(&uri.as_str().into())?;
     match obj.kind {
         TextObjectKind::ImportPath => {
             for i in root.resolve(file.name, &obj.path.names) {
@@ -162,6 +169,8 @@ fn find_definitions(
             for bind in root.resolve_with_binding(file.name, &obj.path.names) {
                 let last = bind.last().unwrap().0.clone();
                 let dst_file = &root.files[&last.file];
+                info!("{:?}",bind);
+
                 if dst_file
                     .type_of(last.sym)
                     .map(|ty| {
