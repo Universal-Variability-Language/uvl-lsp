@@ -155,7 +155,7 @@ pub fn find_section(node: Node) -> Section {
         },
         "source_file" => Section::TopLevel,
         "attribute_constraint" | "attribute_constraints" => Section::Constraints,
-        "binary_expr" | "nested_expr" => Section::Constraints,
+        "binary_expr" |"unary_expr"| "nested_expr" => Section::Constraints,
         "attribute_value"=>Section::Attribute,
         _ => {
             if let Some(p) = node.parent() {
@@ -396,7 +396,7 @@ impl CompletionQuery {
 }
 
 
-fn longest_path<'a>(node: Node<'a>, source: &Rope) -> Option<(Path, Node<'a>)> {
+pub fn longest_path<'a>(node: Node<'a>, source: &Rope) -> Option<(Path, Node<'a>)> {
     if let Some(p) = node
         .parent()
         .map(|n| parse::parse_or_lang_lvl(n,source) )
@@ -939,6 +939,7 @@ pub fn compute_completions(
                         let prefix_str = make_path(prefix[common..].iter());
                         let kind = file.type_of(attrib.sym).unwrap().into();
                         info!("{:?}", kind);
+                        info!("{:?}", attrib);
                         if kind != CompletionKind::DontCare {
                             top.push(CompletionOpt::new(
                                 kind,

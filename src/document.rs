@@ -109,6 +109,13 @@ impl Draft {
             | Self::Source { revision, .. } => *revision,
         }
     }
+    pub fn source(&self)->Option<&Rope>{
+        match self{
+            Draft::Tree { source,.. }|Draft::Source{source,..}=>Some(source),
+            _=>None
+
+        }
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DraftSync {
@@ -240,12 +247,14 @@ impl AsyncDraft {
 #[derive(Default)]
 pub struct DocumentStore {
     pub ast: im::HashMap<Ustr, ast::Document>,
-    revision: HashMap<Ustr, Instant>,
+    file_revision: HashMap<Ustr, Instant>,
+    pub revision: u64,
+
 }
 impl DocumentStore {
     fn update(&mut self, doc: ast::Document) {
         if self
-            .revision
+            .file_revision
             .get(&doc.name)
             .map(|old| old > &doc.timestamp)
             .unwrap_or(false)
@@ -253,11 +262,12 @@ impl DocumentStore {
             return;
         }
         self.ast.insert(doc.name, doc);
+        self.revision +=1;
     }
     pub fn delete(&mut self, name: &Url, timestamp: Instant) {
         let name: Ustr = name.as_str().into();
         if self
-            .revision
+            .file_revision
             .get(&name)
             .map(|old| old > &timestamp)
             .unwrap_or(false)
@@ -265,6 +275,7 @@ impl DocumentStore {
             return;
         }
         self.ast.remove(&name);
+        self.revision +=1;
     }
 }
 

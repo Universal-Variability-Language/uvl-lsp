@@ -57,7 +57,7 @@ pub struct Path {
 }
 
 impl Path {
-    fn append(&self, arg: &SymbolSpan) -> Path {
+    pub fn append(&self, arg: &SymbolSpan) -> Path {
         let mut new = self.clone();
         new.names.push(arg.name);
         new.spans.push(arg.span.clone());

@@ -24,6 +24,7 @@ ext install caradhras.uvls-code
 - Completions
 - Syntax highlighting
 - Error messages
+- Goto definitions and references
 ## Why tree-sitter
 We use tree-sitter as an initial parser to create a loose syntax tree of UVL code fragments.
 Because the tree-sitter grammar is more relaxed than the original UVL-grammar and has great error recovery,

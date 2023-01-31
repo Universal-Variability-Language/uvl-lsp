@@ -163,6 +163,8 @@ impl FileState {
     }
     fn new(origin: &Url, tree: Tree, source: &ropey::Rope, root: &RootGraph) -> Self {
         let mut token = vec![];
+
+        let time = Instant::now();
         //Keep track of bad utf16 lines, only perform byte->utf8->utf16 transformation when needed
         //61ms->34ms performance improvment for pure ascii!
         //TODO make a better uniform byte->utf16 provider as ropey is to slow
@@ -181,13 +183,11 @@ impl FileState {
         //sections (currently unsed)
         sections.goto_first_child();
         loop {
-            let time = Instant::now();
             Self::color_section(sections.node(), root, source, file, &utf16_line, &mut token);
             if !sections.goto_next_sibling() {
                 break;
             }
 
-            info!("Semantic highlight took {:?}", time.elapsed());
         }
         token.sort_by_key(|a| (a.range.start.line, a.range.start.character));
         token.dedup();
@@ -282,6 +282,8 @@ impl FileState {
             last = Some(i.clone());
         }
 
+        info!("Semantic highlight took {:?}", time.elapsed());
+
         FileState { state: filtered }
     }
 }
@@ -301,12 +303,10 @@ impl State {
         tree: Tree,
         source: ropey::Rope,
     ) -> SemanticTokens {
-        info!("Start color");
         let state = FileState::new(&uri, tree, &source, &root);
         let out = state.state.clone();
         self.files.insert(uri.clone(), state);
 
-        info!("End color");
         SemanticTokens {
             result_id: None,
             data: out,

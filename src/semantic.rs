@@ -13,6 +13,7 @@ use petgraph::prelude::*;
 use std::fmt::Debug;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use tokio::sync::watch;
 use tokio::sync::Notify;
 use tokio::sync::Semaphore;
 use tokio::time::{Duration, Instant};
@@ -207,6 +208,7 @@ pub struct RootGraph {
     pub files: im::HashMap<Ustr, Document>,
     pub fs: Arc<FileSystem>,
     pub ref_map: ReferenceMap,
+    pub revision: u64,
 }
 impl RootGraph {
     //find all symbols from origin under path
@@ -243,7 +245,7 @@ impl RootGraph {
         &'a self,
         origin: Ustr,
         path: &'a [Ustr],
-    ) -> impl Iterator<Item = Vec<(RootSymbol,usize)>> + 'a {
+    ) -> impl Iterator<Item = Vec<(RootSymbol, usize)>> + 'a {
         let mut stack = vec![(origin, path, vec![])];
         std::iter::from_fn(move || {
             stack.pop().and_then(|(file, tail, binding)| {
@@ -281,9 +283,9 @@ impl RootGraph {
                                         .iter()
                                         .map(|i| (RootSymbol { file, sym: *i }, 1)),
                                 )
-                                .map(move |(sym,len)|{
-                                    offset +=len;
-                                    (sym,offset)
+                                .map(move |(sym, len)| {
+                                    offset += len;
+                                    (sym, offset)
                                 })
                                 .collect()
                         }),
@@ -302,7 +304,8 @@ impl RootGraph {
         for root in self.resolve(origin, context) {
             let file = &self.files[&root.file];
             info!("resolved {:?}", root);
-            file.visit_named_children(root.sym, false, |i, prefix| match i {
+            let prefix_mask = if matches!(root.sym,Symbol::Feature(..)) {0} else {1};
+            file.visit_named_children(root.sym, true, |i, prefix| match i {
                 Symbol::Feature(..) => true,
                 Symbol::Attribute(..) => {
                     info!("attrib {:?}", prefix);
@@ -311,7 +314,7 @@ impl RootGraph {
                             sym: i,
                             file: root.file,
                         },
-                        &prefix[1..],
+                        &prefix[prefix_mask..],
                     );
                     true
                 }
@@ -319,11 +322,12 @@ impl RootGraph {
             });
         }
     }
-    pub fn new(files: im::HashMap<Ustr, Document>) -> Self {
+    pub fn new(files: im::HashMap<Ustr, Document>, revision: u64) -> Self {
         Self {
             fs: Arc::new(FileSystem::new(&files)),
             files,
             ref_map: Default::default(),
+            revision,
         }
     }
     pub fn dump(&self) {
@@ -332,7 +336,7 @@ impl RootGraph {
 }
 //Central synchronisation provider
 pub struct Context {
-    pub root: RwLock<RootGraph>,
+    pub root: watch::Receiver<RootGraph>,
     pub revison_counter: AtomicU64,
     pub revison_counter_parsed: AtomicU64,
     pub dirty: Notify,
@@ -345,29 +349,35 @@ impl Context {
     //Make sure uri is inside the snapshot
     pub async fn snapshot(&self, uri: &Url) -> RootGraph {
         let time = Instant::now();
+        let mut rx = self.root.clone();
         loop {
-            let snap = self.root.read().clone();
-            if snap.files.contains_key(&uri.as_str().into()) {
-                info!("waited {:?} for root", time.elapsed());
-                return snap;
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-        }
-    }
-    pub async fn snapshot_version(&self, uri: &Url, min_version: Instant) -> RootGraph {
-        let time = Instant::now();
-        loop {
-            let snap = self.root.read().clone();
-            if snap
+            if rx
+                .borrow_and_update()
                 .files
-                .get(&uri.as_str().into())
-                .map(|file| file.timestamp >= min_version)
-                .unwrap_or(false)
+                .contains_key(&uri.as_str().into())
             {
                 info!("waited {:?} for root", time.elapsed());
-                return snap;
+                return rx.borrow().clone();
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+            let _ = rx.changed().await;
+        }
+    }
+    pub async fn snapshot_sync(&self, uri: &Url) -> RootGraph {
+        let time = Instant::now();
+        let base = self
+            .revison_counter
+            .load(std::sync::atomic::Ordering::SeqCst);
+
+        let mut rx = self.root.clone();
+        loop {
+            {
+                let root = rx.borrow_and_update();
+                if root.files.contains_key(&uri.as_str().into()) && root.revision >= base {
+                    info!("waited {:?} for root", time.elapsed());
+                    return root.clone();
+                }
+            }
+            let _ = rx.changed().await;
         }
     }
     pub fn ready(&self) -> bool {
@@ -378,13 +388,12 @@ impl Context {
                 .load(std::sync::atomic::Ordering::SeqCst)
     }
 }
-async fn update_root_graph(
-    ctx: &Context,
-    _local_revision: u64,
-    check_state: &mut HashMap<Ustr, Instant>,
-) {
+async fn update_root_graph(ctx: &Context, check_state: &mut HashMap<Ustr, Instant>) -> RootGraph {
     let timer = Instant::now();
-    let mut root = RootGraph::new(ctx.documents.lock().ast.clone());
+    let mut root = {
+        let docs = ctx.documents.lock();
+        RootGraph::new(docs.ast.clone(), docs.revision)
+    };
     let mut ref_map = ReferenceMap::default();
     let publish = ctx.ready();
     {
@@ -414,27 +423,35 @@ async fn update_root_graph(
                 if publish {
                     check::publish(&ctx.client, &file.uri, &file.errors).await;
                 }
-            } else if file.errors.len() == 0 {
-                let timer = Instant::now();
-                let err = check::check_references(&root, file.name, &mut ref_map);
-                check::publish(&ctx.client, &file.uri, &err).await;
-                info!("checked refs {:?}", timer.elapsed());
+            }
+
+            //let timer = Instant::now();
+            let ref_err = check::check_references(&root, file.name, &mut ref_map);
+            //info!("checked_refs {:?}", timer.elapsed());
+
+
+            if file.errors.len() == 0 && publish {
+                check::publish(&ctx.client, &file.uri, &ref_err).await;
             }
         }
     }
     info!("updated root graph {:?}", timer.elapsed());
     root.ref_map = ref_map;
-    *ctx.root.write() = root;
+    root
 }
 
-async fn handler_impl(ctx: Arc<Context>) {
-    let mut local_revision = 0;
+async fn handler_impl(ctx: Arc<Context>, tx: watch::Sender<RootGraph>) {
     let mut check_state = HashMap::new();
     loop {
         select! {
             _ = ctx.shutdown.cancelled() => return,
             _ = ctx.dirty.notified() =>{
-                update_root_graph(&ctx,local_revision,&mut check_state).await
+
+                let local_revision = ctx
+                    .revison_counter_parsed
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                let new= update_root_graph(&ctx,&mut check_state).await;
+                let _ = tx.send(new);
             }
         }
     }
@@ -445,6 +462,15 @@ pub fn create_handler(
     shutdown: CancellationToken,
     _: Arc<DashMap<Url, AsyncDraft>>,
 ) -> Arc<Context> {
+    let (tx, rx) = watch::channel(RootGraph {
+        ref_map: ReferenceMap::default(),
+        fs: Arc::new(FileSystem {
+            graph: Default::default(),
+            file2node: HashMap::new(),
+        }),
+        files: Default::default(),
+        revision: 0,
+    });
     let ctx = Arc::new(Context {
         load_files_sema: Semaphore::new((num_cpus::get() - 1).max(1)),
         shutdown,
@@ -453,15 +479,8 @@ pub fn create_handler(
         revison_counter: AtomicU64::new(0),
         revison_counter_parsed: AtomicU64::new(0),
         documents: Mutex::new(DocumentStore::default()),
-        root: RwLock::new(RootGraph {
-            ref_map: ReferenceMap::default(),
-            fs: Arc::new(FileSystem {
-                graph: Default::default(),
-                file2node: HashMap::new(),
-            }),
-            files: Default::default(),
-        }),
+        root: rx,
     });
-    spawn(handler_impl(ctx.clone()));
+    spawn(handler_impl(ctx.clone(), tx));
     ctx
 }

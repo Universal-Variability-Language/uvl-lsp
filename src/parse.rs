@@ -150,4 +150,13 @@ pub fn parse_lang_lvl_path<S: SymbolSlice>(node: Node, source: &S) -> Option<Pat
 pub fn parse_or_lang_lvl<S: SymbolSlice>(node: Node, source: &S) -> Option<Path> {
     parse_path(node,source).or_else(||parse_lang_lvl_path(node,source))
 }
+pub fn parse_path_from_source(span:Span,source:&Rope){
+    let mut path = Path::default();
+    for c in source.slice(span).chars(){
+    
+
+    }
+
+
+}
 
