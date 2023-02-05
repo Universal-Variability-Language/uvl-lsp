@@ -95,11 +95,9 @@ pub fn find_text_object_impl(
             _ => None,
         },
         Section::Constraints => {
-            info!("patj");
 
             let (path, p_node) = longest_path(node, source)?;
 
-            info!("patj {:?}", estimate_expr(p_node, pos, source));
             match estimate_expr(p_node, pos, source) {
                 CompletionEnv::Numeric => Some(TextObject {
                     kind: TextObjectKind::AttributeReference,
@@ -147,7 +145,7 @@ pub fn find_text_object(draft: &Draft, pos: &Position) -> Option<TextObject> {
 }
 
 fn find_definitions(
-    root: &RootGraph,
+    root: &Snapshot,
     draft: &Draft,
     pos: &Position,
     uri: &Url,
@@ -155,10 +153,12 @@ fn find_definitions(
 
     let obj = find_text_object(draft, pos)?;
     info!("{:?}",obj);
-    let file = root.files.get(&uri.as_str().into())?;
+
+    let file_id = root.file_id(uri)?;
+    let file = root.file(file_id);
     match obj.kind {
         TextObjectKind::ImportPath => {
-            for i in root.resolve(file.name, &obj.path.names) {
+            for i in root.resolve(file_id, &obj.path.names) {
                 if matches!(i.sym, Symbol::Root) {
                     return Some(vec![i]);
                 }
@@ -166,9 +166,9 @@ fn find_definitions(
             None
         }
         TextObjectKind::FeatureReference | TextObjectKind::AttributeReference => {
-            for bind in root.resolve_with_binding(file.name, &obj.path.names) {
+            for bind in root.resolve_with_binding(file_id, &obj.path.names) {
                 let last = bind.last().unwrap().0.clone();
-                let dst_file = &root.files[&last.file];
+                let dst_file = root.file(last.file);
                 info!("{:?}",bind);
 
                 if dst_file
@@ -199,7 +199,7 @@ fn find_definitions(
         TextObjectKind::Aggregate(ctx) => {
             let mut out = Vec::new();
             root.resolve_attributes(
-                file.name,
+                file_id,
                 &ctx.as_ref().map(|ctx| ctx.names.as_slice()).unwrap_or(&[]),
                 |sym, prefix| {
                     let common = prefix
@@ -218,7 +218,7 @@ fn find_definitions(
     }
 }
 pub fn goto_definition(
-    root: &RootGraph,
+    root: &Snapshot,
     draft: &Draft,
     pos: &Position,
     uri: &Url,
@@ -227,7 +227,7 @@ pub fn goto_definition(
     Some(GotoDefinitionResponse::Array(
         refs.iter()
             .filter_map(|sym| {
-                let file = &root.files[&sym.file];
+                let file =root.file(sym.file);
                 match sym.sym {
                     Symbol::Root => Some(Location {
                         uri: file.uri.clone(),
@@ -245,13 +245,25 @@ pub fn goto_definition(
             .collect(),
     ))
 }
+
+fn reverse_resolve(root: &Snapshot,dst_file:&Document,dst_id:FileID,tgt:Symbol)->Vec<RootSymbol>{
+    let ty = dst_file.type_of(tgt);
+    root.imported(dst_id).iter().flat_map(|&src_id|{
+        let src_file = root.file(src_id);
+        src_file.all_references().filter(move |r| src_file.type_of(*r) == ty).filter(move |r|{
+            root.resolve(src_id, src_file.path(*r)).find(|sym| *sym == RootSymbol{file:dst_id,sym:tgt}).is_some()
+        }).map(move |i|RootSymbol { file: src_id, sym: i })
+    }).collect()
+}
+
 fn find_references_symboles(
-    root: &RootGraph,
+    root: &Snapshot,
     draft: &Draft,
     pos: &Position,
     uri: &Url,
 ) -> Option<Vec<RootSymbol>> {
-    let file = root.files.get(&uri.as_str().into())?;
+    let file_id = root.file_id(uri)?;
+    let file = root.file(file_id);
     let obj = find_text_object(draft, pos)?;
     info!("{:?}", obj);
     match obj.kind {
@@ -261,12 +273,7 @@ fn find_references_symboles(
             })
             .next()
             .map(|f| {
-                root.ref_map
-                    .used_by(RootSymbol {
-                        file: file.name,
-                        sym: f,
-                    })
-                    .collect()
+                reverse_resolve(root,file,file_id,f)
             }),
 
         TextObjectKind::Attribute => file
@@ -275,26 +282,21 @@ fn find_references_symboles(
             })
             .next()
             .map(|a| {
-                root.ref_map
-                    .used_by(RootSymbol {
-                        file: file.name,
-                        sym: a,
-                    })
-                    .collect()
+                reverse_resolve(root,file,file_id,a)
             }),
 
         TextObjectKind::FeatureReference
         | TextObjectKind::AttributeReference
         | TextObjectKind::Aggregate(..) => find_definitions(root, draft, pos, uri).map(|defs| {
             defs.iter()
-                .flat_map(|def| root.ref_map.used_by(def.clone()))
+                .flat_map(|def|reverse_resolve(root,root.file(def.file),def.file,def.sym))
                 .collect()
         }),
         _ => None,
     }
 }
 pub fn find_references(
-    root: &RootGraph,
+    root: &Snapshot,
     draft: &Draft,
     pos: &Position,
     uri: &Url,
@@ -303,7 +305,7 @@ pub fn find_references(
     Some(
         refs.iter()
             .filter_map(|sym| {
-                let file = &root.files[&sym.file];
+                let file = root.file(sym.file);
                 match sym.sym {
                     Symbol::Root => Some(Location {
                         uri: file.uri.clone(),

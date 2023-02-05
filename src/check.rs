@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::semantic::{RootGraph, RootSymbol, ReferenceMap};
+use crate::semantic::{RootGraph, RootSymbol, ReferenceMap, FileID};
 use crate::util::*;
 use log::info;
 use ropey::Rope;
@@ -221,10 +221,10 @@ enum ReferenceResolveState {
 }
 pub fn check_references(
     root: &RootGraph,
-    file_name: Ustr,
+    src_file_id:FileID,
     ref_map: &mut ReferenceMap,
 ) -> Vec<ErrorInfo> {
-    let src = root.files.get(&file_name).unwrap();
+    let src = root.file(src_file_id);
     let mut errors = Vec::new();
     for (id, i) in src
         .references()
@@ -233,8 +233,8 @@ pub fn check_references(
         .map(|(i, k)| (Symbol::Reference(i as u32), k))
     {
         let mut state = ReferenceResolveState::Unresolved;
-        for k in root.resolve(file_name, &i.path.names) {
-            let dst = root.files.get(&k.file).unwrap();
+        for k in root.resolve(src_file_id, &i.path.names) {
+            let dst = root.file(k.file);
             if i.ty == dst.type_of(k.sym).unwrap() {
                 state = ReferenceResolveState::Resolved(k);
                 break;
@@ -256,7 +256,7 @@ pub fn check_references(
                 msg: format!("expected a {:?} got {:?}", i.ty, ty),
             }),
             ReferenceResolveState::Resolved(sym) => { 
-                ref_map.insert(RootSymbol{sym:id,file:file_name},sym);
+                ref_map.insert(RootSymbol{sym:id,file:src_file_id},sym);
 
             }
         }

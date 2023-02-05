@@ -27,6 +27,7 @@ mod parse;
 mod query;
 mod semantic;
 mod util;
+mod smt;
 static VERSION: &str = "v0.0.5";
 //The server core, request and respones handling
 struct Backend {
@@ -166,10 +167,10 @@ impl LanguageServer for Backend {
             let semantic = self.semantic.clone();
             //cheap fix for better intial load, we should really use priority model to prefer
             //editor owned files
-            spawn(async move {
+            let _= spawn(async move {
                 tokio::task::spawn_blocking(move || {
                     load_all_blocking(&root_folder, documents, semantic);
-                })
+                }).await
             });
         }
 

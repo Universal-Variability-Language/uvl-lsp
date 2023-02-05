@@ -692,13 +692,13 @@ impl pathfinding::num_traits::Zero for ModulePath {
 //find completions in a document under a prefix
 fn completion_symbol_local(
     snapshot: &RootGraph,
-    origin: Ustr,
+    origin: FileID,
     root: RootSymbol,
     prefix: &[Ustr],
     query: &CompletionQuery,
     top: &mut TopN<CompletionOpt>,
 ) {
-    let file = &snapshot.files[&root.file];
+    let file = snapshot.file(root.file);
     info!("Module {:?} under {:?}", root, prefix);
     file.visit_named_children(root.sym, true, |sym, sym_prefix| {
         let ty = file.type_of(sym).unwrap();
@@ -729,7 +729,7 @@ fn path_len(path: &[Ustr]) -> usize {
 //find completions in all related documents
 fn completion_symbol(
     snapshot: &RootGraph,
-    origin: Ustr,
+    origin: FileID,
     query: &CompletionQuery,
     top: &mut TopN<CompletionOpt>,
 ) {
@@ -746,7 +746,7 @@ fn completion_symbol(
                 let _ = modules.insert(i.file, vec![]);
             }
             Symbol::Dir(..) => {
-                let file = &snapshot.files[&i.file];
+                let file = snapshot.file(i.file);
                 file.visit_named_children(i.sym, true, |im_sym, im_prefix| match im_sym {
                     Symbol::Dir(..) => true,
                     Symbol::Import(..) => {
@@ -772,7 +772,7 @@ fn completion_symbol(
             _ => completion_symbol_local(snapshot, origin, i, &[], query, top),
         }
     }
-    let root = Ustr::from(""); //Perform nn from all reachable documents to all other
+    let root = FileID(u16::max_value()); //Perform nn from all reachable documents to all other
     let pred = pathfinding::directed::dijkstra::dijkstra_all(&root, |node| {
         if node == &root {
             Either::Left(
@@ -786,7 +786,7 @@ fn completion_symbol(
                 snapshot
                     .fs
                     .imports(node)
-                    .map(move |(im, tgt)| (tgt, snapshot.files[&node].import_prefix(im).into())),
+                    .map(move |(im, tgt)| (tgt, snapshot.file(node).import_prefix(im).into())),
             )
         }
     });
@@ -805,7 +805,7 @@ fn completion_symbol(
             let import = snapshot
                 .fs
                 .imports_connecting(*parent, next)
-                .map(|im| snapshot.files[parent].import_prefix(im))
+                .map(|im| snapshot.file(*parent).import_prefix(im))
                 .min_by_key(|prefix| ModulePath::from(*prefix))
                 .unwrap();
             for i in import.iter().rev() {
@@ -845,13 +845,13 @@ fn encode_float(f: f32) -> u32 {
 }
 
 pub fn compute_completions(
-    snapshot: RootGraph,
+    snapshot: Snapshot,
     draft: &Draft,
     pos: TextDocumentPositionParams,
 ) -> CompletionList {
     info!("Starting completion");
     let timer = Instant::now();
-    let origin = Ustr::from(pos.text_document.uri.as_str());
+    let origin = snapshot.file_id(&pos.text_document.uri).unwrap();
     let ctx = estimate_context(&pos.position, draft);
     info!("Stat completion: {:#?}", ctx);
     if let Some(ctx) = ctx {
@@ -935,7 +935,7 @@ pub fn compute_completions(
                         if common < ctx.prefix.len() {
                             return;
                         }
-                        let file = &snapshot.files[&attrib.file];
+                        let file = snapshot.file(attrib.file);
                         let prefix_str = make_path(prefix[common..].iter());
                         let kind = file.type_of(attrib.sym).unwrap().into();
                         info!("{:?}", kind);

@@ -78,7 +78,7 @@ pub fn update_text(
     whole_file
 }
 //each parsed document can be in three states, wich allows for faster proccessing when the parse
-//tree is not needed
+//tree is not needed currently unused
 #[derive(Clone)]
 pub enum Draft {
     Unavailable {
@@ -246,8 +246,8 @@ impl AsyncDraft {
 }
 #[derive(Default)]
 pub struct DocumentStore {
-    pub ast: im::HashMap<Ustr, ast::Document>,
-    file_revision: HashMap<Ustr, Instant>,
+    pub ast: HashMap<Url, Arc<ast::Document>>,
+    file_revision: HashMap<Url, Instant>,
     pub revision: u64,
 
 }
@@ -255,26 +255,25 @@ impl DocumentStore {
     fn update(&mut self, doc: ast::Document) {
         if self
             .file_revision
-            .get(&doc.name)
+            .get(&doc.uri)
             .map(|old| old > &doc.timestamp)
             .unwrap_or(false)
         {
             return;
         }
-        self.ast.insert(doc.name, doc);
+        self.ast.insert(doc.uri.clone(), Arc::new(doc));
         self.revision +=1;
     }
     pub fn delete(&mut self, name: &Url, timestamp: Instant) {
-        let name: Ustr = name.as_str().into();
         if self
             .file_revision
-            .get(&name)
+            .get(name)
             .map(|old| old > &timestamp)
             .unwrap_or(false)
         {
             return;
         }
-        self.ast.remove(&name);
+        self.ast.remove(name);
         self.revision +=1;
     }
 }

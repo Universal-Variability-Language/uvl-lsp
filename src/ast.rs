@@ -34,16 +34,6 @@ where
         map.insert(k, vec![v]);
     }
 }
-fn containing_node(node: Node) -> Node {
-    match node.kind() {
-        "attribute_value"
-        | "attribute_constraints"
-        | "attribute_constraint"
-        | "blk"
-        | "source_file" => node,
-        _ => containing_node(node.parent().unwrap()),
-    }
-}
 pub type Span = std::ops::Range<usize>;
 #[derive(Clone, Debug)]
 pub struct SymbolSpan {
@@ -149,6 +139,7 @@ pub struct Namespace {
 #[derive(Clone, Debug)]
 pub struct Group {
     pub mode: GroupMode,
+    pub span: Span,
 }
 #[derive(Clone, Debug)]
 pub struct Reference {
@@ -158,7 +149,7 @@ pub struct Reference {
 #[derive(Clone, Debug)]
 pub struct Attribute {
     pub name: SymbolSpan,
-    pub value: Value,
+    pub value: ValueDecl,
     pub depth: u32,
 }
 #[derive(Clone, Debug)]
@@ -167,33 +158,6 @@ pub struct Dir {
     pub depth: u32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, enum_kinds::EnumKind)]
-#[enum_kind(SymbolKind, derive(Hash))]
-pub enum Symbol {
-    Feature(u32),
-    Constraint(u32),
-    Attribute(u32),
-    Reference(u32),
-    Group(u32),
-    Import(u32),
-    LangLvl(u32),
-    Dir(u32),
-    Root,
-}
-impl Symbol {
-    fn offset(&self) -> u32 {
-        match self {
-            Self::Feature(id)
-            | Self::Constraint(id)
-            | Self::Attribute(id)
-            | Self::Reference(id)
-            | Self::Group(id)
-            | Self::LangLvl(id)
-            | Self::Import(id) => *id,
-            _ => panic!(),
-        }
-    }
-}
 #[derive(Clone, Debug)]
 pub enum Value {
     Void,
@@ -203,6 +167,13 @@ pub enum Value {
     Bool(bool),
     Attributes,
 }
+
+#[derive(Clone, Debug)]
+pub struct ValueDecl{
+    pub value:Value,
+    pub span:Span,
+}
+
 impl Default for Value {
     fn default() -> Self {
         Value::Void
@@ -306,6 +277,13 @@ pub enum Constraint {
 }
 
 #[derive(Clone, Debug)]
+pub struct  ConstraintDecl{
+    pub content:Constraint,
+    pub span:Span,
+}
+
+
+#[derive(Clone, Debug)]
 pub enum Numeric {
     Number(f64),
     Ref(Symbol),
@@ -319,6 +297,33 @@ pub enum Numeric {
         context: Option<Symbol>,
         query: Path,
     },
+}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, enum_kinds::EnumKind)]
+#[enum_kind(SymbolKind, derive(Hash))]
+pub enum Symbol {
+    Feature(u32),
+    Constraint(u32),
+    Attribute(u32),
+    Reference(u32),
+    Group(u32),
+    Import(u32),
+    LangLvl(u32),
+    Dir(u32),
+    Root,
+}
+impl Symbol {
+    pub fn offset(&self) -> u32 {
+        match self {
+            Self::Feature(id)
+            | Self::Constraint(id)
+            | Self::Attribute(id)
+            | Self::Reference(id)
+            | Self::Group(id)
+            | Self::LangLvl(id)
+            | Self::Import(id) => *id,
+            _ => panic!(),
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -339,14 +344,13 @@ struct Ast {
     includes: Vec<LanguageLevel>,
     import: Vec<Import>,
     features: Vec<Feature>,
-    constraints: Vec<Constraint>,
+    constraints: Vec<ConstraintDecl>,
     attributes: Vec<Attribute>,
     references: Vec<Reference>,
     groups: Vec<Group>,
     dirs: Vec<Dir>,
     structure: TreeMap,
     index: HashMap<(Symbol, Ustr, SymbolKind), Symbol>,
-    sorted_by_span: Vec<Symbol>,
 }
 impl Ast {
     pub fn import_prefix(&self, sym: Symbol) -> &[Ustr] {
@@ -427,6 +431,8 @@ impl Ast {
                 }
             }
             Symbol::Reference(i) => Some(self.references[i as usize].path.range()),
+            Symbol::Group(i)=>Some(self.groups[i as usize].span.clone()),
+            Symbol::Constraint(i)=>Some(self.constraints[i as usize].span.clone()),
             _ => None,
         }
     }
@@ -449,6 +455,10 @@ impl Ast {
     fn all_references(&self) -> impl Iterator<Item = Symbol> {
         (0..self.references.len()).map(|i| Symbol::Reference(i as u32))
     }
+
+    fn all_constraints(&self) -> impl Iterator<Item = Symbol> {
+        (0..self.references.len()).map(|i| Symbol::Constraint(i as u32))
+    }
     fn find(&self, offset: usize) -> Option<Symbol> {
         self.all_imports()
             .chain(self.all_features())
@@ -466,8 +476,8 @@ struct VisitorState<'a> {
 }
 impl<'a> VisitorState<'a> {
     fn add_constraint(&mut self, constraint: Constraint, scope: Symbol) -> Symbol {
-        self.ast.constraints.push(constraint);
-        let sym = Symbol::Reference(self.ast.constraints.len() as u32 - 1);
+        self.ast.constraints.push(ConstraintDecl { content: constraint, span: self.cursor.node().byte_range()});
+        let sym = Symbol::Constraint(self.ast.constraints.len() as u32 - 1);
         self.push_child(scope, sym);
         sym
     }
@@ -740,11 +750,58 @@ impl Document {
             self.ast.structure.parent.get(&sym).cloned()
         }
     }
-    pub fn imports_iter<'a>(&'a self) -> impl Iterator<Item = Symbol> + 'a {
+    pub fn scope(&self,mut sym: Symbol)->Symbol{
+        while let Some(p) = self.parent(sym, true){
+            match sym{
+                Symbol::Feature(..)=>return sym,
+                Symbol::Root=>return sym,
+                _=>{}
+            }
+        }
+        Symbol::Root
+    }
+    pub fn all_imports(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_imports()
     }
-    pub fn imports(&self) -> &[Import] {
-        self.ast.import.as_slice()
+    pub fn all_features(&self) -> impl Iterator<Item = Symbol> {
+        self.ast.all_features()
+    }
+    pub fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
+        self.ast.all_attributes()
+    }
+    pub fn all_references(&self) -> impl Iterator<Item = Symbol> {
+        self.ast.all_references()
+    }
+    pub fn all_constraints(&self) -> impl Iterator<Item = Symbol> {
+        self.ast.all_constraints()
+    }
+    pub fn group_mode(&self, sym: Symbol) -> Option<GroupMode> {
+        match sym {
+            Symbol::Group(id) => Some(self.ast.groups[id as usize].mode.clone()),
+            _ => None,
+        }
+    }
+    pub fn constraint(&self, sym: Symbol) -> Option<&Constraint> {
+        match sym {
+            Symbol::Constraint(id) => Some(&self.ast.constraints[id as usize].content),
+            _ => None,
+        }
+    }
+
+    pub fn value(&self, sym: Symbol) -> Option<&Value> {
+        match sym {
+            Symbol::Attribute(id) => Some(&self.ast.attributes[id as usize].value.value),
+            _ => None,
+        }
+    }
+    pub fn direct_children<'a>(&'a self, sym: Symbol) -> impl Iterator<Item = Symbol> + 'a {
+        self.ast
+            .structure
+            .children
+            .get(&sym)
+            .into_iter()
+            .flat_map(|i| i.iter())
+            .cloned()
     }
     pub fn lsp_range(&self, sym: Symbol) -> Option<tower_lsp::lsp_types::Range> {
         self.ast.lsp_range(sym, &self.source)
@@ -755,9 +812,10 @@ impl Document {
     pub fn references(&self) -> &[Reference] {
         &self.ast.references
     }
-    pub fn import_path(&self, sym: Symbol) -> &[Ustr] {
+    pub fn path(&self, sym: Symbol) -> &[Ustr] {
         match sym {
             Symbol::Import(i) => &self.ast.import[i as usize].path.names,
+            Symbol::Reference(i) => &self.ast.references[i as usize].path.names,
             _ => unimplemented!(),
         }
     }
@@ -836,7 +894,7 @@ impl Document {
         match sym {
             Symbol::Root => Some(Type::Namespace),
             Symbol::Feature(..) => Some(Type::Feature),
-            Symbol::Attribute(i) => match &self.ast.attributes[i as usize].value {
+            Symbol::Attribute(i) => match &self.ast.attributes[i as usize].value.value {
                 Value::Void => Some(Type::Void),
                 Value::Vector => Some(Type::Vector),
                 Value::Bool(..) => Some(Type::Feature),
@@ -873,9 +931,18 @@ impl Document {
             {
                 continue;
             }
-            stack.push((i, 0));
+            if matches!(i, Symbol::Attribute(..)) {
+                stack.push((i, 1));
+            } else {
+                stack.push((i, 0));
+            }
         }
-        let mut path = Vec::new();
+        let mut path = if matches!(root,Symbol::Feature(..)){
+            vec![self.ast.name(root).unwrap()]
+        }
+        else{
+            vec![]
+        };
         while let Some((cur, depth)) = stack.pop() {
             let depth = if matches!(cur, Symbol::Feature(..)) {
                 0
@@ -897,6 +964,37 @@ impl Document {
                         continue;
                     }
                     stack.push((i, depth + 1));
+                }
+            }
+        }
+    }
+    pub fn visit_children<F: FnMut(Symbol) -> bool>(
+        &self,
+        root: Symbol,
+        merge_root_features: bool,
+        mut f: F,
+    ) {
+        let mut stack = vec![];
+        for i in self.ast.children(root) {
+            if merge_root_features
+                && matches!(i, Symbol::Feature(..))
+                && !matches!(root, Symbol::Root)
+            {
+                continue;
+            }
+            stack.push(i);
+        }
+        while let Some(cur) = stack.pop() {
+            let mut explore = f(cur);
+            if explore {
+                for i in self.ast.children(cur) {
+                    if merge_root_features
+                        && matches!(i, Symbol::Feature(..))
+                        && !matches!(root, Symbol::Root)
+                    {
+                        continue;
+                    }
+                    stack.push(i);
                 }
             }
         }
@@ -1334,8 +1432,8 @@ fn opt_constraint(state: &mut VisitorState) -> Option<Constraint> {
                     let rhs = opt_numeric(state)?;
                     Some(Constraint::Equation {
                         op,
-                        lhs: Box::new(rhs),
-                        rhs: Box::new(lhs),
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
                     })
                 } else {
                     state.push_error_node(
@@ -1401,7 +1499,7 @@ fn visit_attribute_value(state: &mut VisitorState, parent: Symbol) {
     let has_children = matches!(&value, Value::Attributes);
     state.ast.attributes.push(Attribute {
         name,
-        value,
+        value:ValueDecl{value,span:state.node().byte_range()},
         depth: 0,
     });
     if has_children {
@@ -1508,7 +1606,7 @@ fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode) {
     }
     let sym = Symbol::Group(state.ast.groups.len() as u32);
     state.push_child(parent, sym);
-    state.ast.groups.push(Group { mode });
+    state.ast.groups.push(Group { mode,span:state.node().byte_range() });
     loop {
         check_no_extra_blk(state, "group");
         if state.kind() == "blk" {
@@ -1633,13 +1731,7 @@ fn visit_top_lvl(state: &mut VisitorState) {
             break;
         }
     }
-    let fixed_order = [
-        "namespace",
-        "include",
-        "imports",
-        "features",
-        "constraints",
-    ];
+    let fixed_order = ["namespace", "include", "imports", "features", "constraints"];
     for i in 1..top_level_order.iter().len() {
         let k = fixed_order
             .iter()

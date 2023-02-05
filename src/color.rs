@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::completion::find_section;
-use crate::semantic::RootGraph;
+use crate::semantic::{RootGraph, Snapshot};
 use crate::util::{node_range, TS};
 use log::info;
 use ropey::Rope;
@@ -136,7 +136,7 @@ impl FileState {
     }
     fn color_section(
         origin: Node,
-        _root: &RootGraph,
+        _root: &Snapshot,
         source: &Rope,
         _file: &Document,
         utf16_line: &HashSet<usize>,
@@ -161,7 +161,7 @@ impl FileState {
             }
         }
     }
-    fn new(origin: &Url, tree: Tree, source: &ropey::Rope, root: &RootGraph) -> Self {
+    fn new(origin: &Url, tree: Tree, source: &ropey::Rope, root: &Snapshot) -> Self {
         let mut token = vec![];
 
         let time = Instant::now();
@@ -178,7 +178,7 @@ impl FileState {
             }
         }
         let mut sections = tree.walk();
-        let file = &root.files[&origin.as_str().into()];
+        let file = root.file_by_uri(origin).unwrap();
         //iterate captures and create colors token, we currently allow diffrent color for diffrent
         //sections (currently unsed)
         sections.goto_first_child();
@@ -298,7 +298,7 @@ impl State {
     }
     pub fn get(
         &self,
-        root: RootGraph,
+        root: Snapshot,
         uri: Url,
         tree: Tree,
         source: ropey::Rope,
@@ -314,7 +314,7 @@ impl State {
     }
     pub fn delta(
         &self,
-        root: RootGraph,
+        root: Snapshot,
         uri: Url,
         tree: Tree,
         source: ropey::Rope,
