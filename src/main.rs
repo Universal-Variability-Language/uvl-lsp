@@ -11,7 +11,7 @@ use log::info;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::time::{Duration, Instant};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -26,8 +26,9 @@ mod location;
 mod parse;
 mod query;
 mod semantic;
-mod util;
 mod smt;
+mod util;
+use semantic::Snapshot;
 static VERSION: &str = "v0.0.5";
 //The server core, request and respones handling
 struct Backend {
@@ -43,7 +44,7 @@ impl Backend {
         sync: DraftSync,
         deadline: Option<Instant>,
     ) -> Option<Draft> {
-        let mut draft = self.documents.get(&uri).map(|d| d.clone())?;
+        let mut draft = self.documents.get(uri).map(|d| d.clone())?;
         if let Some(deadline) = deadline {
             draft.sync(sync, deadline).await
         } else {
@@ -59,12 +60,19 @@ impl Backend {
             })
             .is_some()
         {
-            self.semantic.documents.lock().delete(uri, time);
-            self.semantic.dirty.notify_one();
+            self.semantic
+                .documents
+                .lock()
+                .send_modify(|docs| docs.delete(uri, time));
         }
     }
     fn load(&self, uri: &Url) {
-        if self.documents.get(uri).map(|doc|doc.state == DocumentState::OwnedByEditor).unwrap_or(false){
+        if self
+            .documents
+            .get(uri)
+            .map(|doc| doc.state == DocumentState::OwnedByEditor)
+            .unwrap_or(false)
+        {
             return;
         }
         let documents = self.documents.clone();
@@ -75,6 +83,20 @@ impl Backend {
             load_blocking(uri, &documents, &semantic);
         });
     }
+    async fn snapshot(&self, uri: &Url, sync: bool) -> Option<(Draft, Snapshot)> {
+        if let Some(draft) = self.sync_draft(uri, DraftSync::Tree, None).await {
+            if sync {
+                self.semantic
+                    .snapshot_sync(uri, draft.revision())
+                    .await
+                    .map(|snap| (draft, snap))
+            } else {
+                self.semantic.snapshot(uri).await.map(|snap| (draft, snap))
+            }
+        } else {
+            None
+        }
+    }
 }
 //load a file this is tricky because the editor can also load it at the same time
 fn load_blocking(
@@ -82,7 +104,7 @@ fn load_blocking(
     documents: &DashMap<Url, AsyncDraft>,
     semantic: &Arc<semantic::Context>,
 ) {
-    if !std::fs::File::open(uri.path())
+    if std::fs::File::open(uri.path())
         .and_then(|mut f| {
             let meta = f.metadata()?;
             let modified = meta.modified()?;
@@ -119,7 +141,7 @@ fn load_blocking(
             }
             Ok(())
         })
-        .is_ok()
+        .is_err()
     {
         info!("Failed to load file {}", uri);
     }
@@ -144,11 +166,18 @@ fn load_all_blocking(
         let semantic = semantic.clone();
         let documents = documents.clone();
 
-            load_blocking(
-                Url::from_file_path(e.path()).unwrap(),
-                &documents,
-                &semantic,
-            )
+        load_blocking(
+            Url::from_file_path(e.path()).unwrap(),
+            &documents,
+            &semantic,
+        )
+    }
+}
+fn shutdown_error() -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error {
+        code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+        message: "".into(),
+        data: None,
     }
 }
 
@@ -158,19 +187,19 @@ impl LanguageServer for Backend {
         #[allow(deprecated)]
         let root_folder = init_params
             .root_path
-            .as_ref()
-            .map(|s| s.as_str())
-            .or(init_params.root_uri.as_ref().map(|p| p.path()))
-            .map(|s| PathBuf::from(s));
+            .as_deref()
+            .or_else(|| init_params.root_uri.as_ref().map(|p| p.path()))
+            .map(PathBuf::from);
         if let Some(root_folder) = root_folder {
             let documents = self.documents.clone();
             let semantic = self.semantic.clone();
             //cheap fix for better intial load, we should really use priority model to prefer
             //editor owned files
-            let _= spawn(async move {
+            let _ = spawn(async move {
                 tokio::task::spawn_blocking(move || {
                     load_all_blocking(&root_folder, documents, semantic);
-                }).await
+                })
+                .await
             });
         }
 
@@ -205,7 +234,7 @@ impl LanguageServer for Backend {
                         },
                     ),
                 ),
-                references_provider:Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
 
                 ..Default::default()
             },
@@ -260,23 +289,12 @@ impl LanguageServer for Backend {
     }
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         info!("received completion request");
-        if let Some(draft) = self
-            .sync_draft(
-                &params.text_document_position.text_document.uri,
-                DraftSync::Tree,
-                Some(Instant::now() + Duration::from_millis(1000)), //We dont support, alternative
-                                                                    //completions for  big files yet, so we wait
-            )
+        if let Some((draft, root)) = self
+            .snapshot(&params.text_document_position.text_document.uri, false)
             .await
         {
             return Ok(Some(CompletionResponse::List(
-                completion::compute_completions(
-                    self.semantic
-                        .snapshot(&params.text_document_position.text_document.uri)
-                        .await,
-                    &draft,
-                    params.text_document_position,
-                ),
+                completion::compute_completions(root, &draft, params.text_document_position),
             )));
         }
         Ok(None)
@@ -286,31 +304,25 @@ impl LanguageServer for Backend {
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = &params.text_document_position_params.text_document.uri;
-        if let Some(draft) = self.sync_draft(&uri, DraftSync::Tree, None).await {
-            let root = self.semantic.snapshot_sync(&uri).await;
-
+        if let Some((draft, root)) = self.snapshot(&uri, true).await {
             Ok(location::goto_definition(
                 &root,
                 &draft,
                 &params.text_document_position_params.position,
-                &uri,
+                uri,
             ))
         } else {
-            return Ok(None);
+            Ok(None)
         }
     }
-    async fn references(
-        &self,
-        params: ReferenceParams,
-    ) -> Result<Option<Vec<Location>>> {
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = &params.text_document_position.text_document.uri;
-        if let Some(draft) = self.sync_draft(&uri, DraftSync::Tree, None).await {
-            let root = self.semantic.snapshot_sync(&uri).await;
+        if let Some((draft, root)) = self.snapshot(&uri, true).await {
             Ok(location::find_references(
                 &root,
                 &draft,
                 &params.text_document_position.position,
-                &uri,
+                uri,
             ))
         } else {
             return Ok(None);
@@ -320,16 +332,11 @@ impl LanguageServer for Backend {
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
-        if let Some(draft) = self
-            .sync_draft(&params.text_document.uri, DraftSync::Tree, None)
-            .await
-        {
-            let root = self.semantic.snapshot(&params.text_document.uri).await;
+        let uri = params.text_document.uri;
+        if let Some((draft, root)) = self.snapshot(&uri, false).await {
             let color = self.coloring.clone();
             return Ok(match draft {
-                Draft::Tree { source, tree, .. } => {
-                    color.get(root, params.text_document.uri, tree, source)
-                }
+                Draft::Tree { source, tree, .. } => color.get(root, uri, tree, source),
                 _ => {
                     unimplemented!()
                 }
@@ -342,23 +349,18 @@ impl LanguageServer for Backend {
         &self,
         params: SemanticTokensDeltaParams,
     ) -> Result<Option<SemanticTokensFullDeltaResult>> {
-        if let Some(draft) = self
-            .sync_draft(&params.text_document.uri, DraftSync::Tree, None)
-            .await
-        {
+        let uri = params.text_document.uri;
+        if let Some((draft, root)) = self.snapshot(&uri, false).await {
             let color = self.coloring.clone();
-
-            let root = self.semantic.snapshot(&params.text_document.uri).await;
-            return Ok(match draft {
-                Draft::Tree { source, tree, .. } => {
-                    Some(color.delta(root, params.text_document.uri, tree, source))
-                }
+            Ok(match draft {
+                Draft::Tree { source, tree, .. } => Some(color.delta(root, uri, tree, source)),
                 _ => {
                     unimplemented!()
                 }
-            });
+            })
+        } else {
+            Ok(None)
         }
-        Ok(None)
     }
     async fn did_save(&self, _: DidSaveTextDocumentParams) {
         self.client
@@ -374,7 +376,7 @@ impl LanguageServer for Backend {
         self.load(&params.text_document.uri);
     }
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
-        info!("file change {:?}",params);
+        info!("file change {:?}", params);
         for i in params.changes {
             match i.typ {
                 FileChangeType::CREATED => {
@@ -397,23 +399,12 @@ impl LanguageServer for Backend {
     }
 }
 
-fn main() {
-    std::env::set_var("RUST_BACKTRACE", "1");
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(num_cpus::get())
-        .build_global()
-        .unwrap();
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async_main())
-}
-async fn async_main() {
+#[tokio::main]
+async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     //only needed for vscode auto update
-    if std::env::args().find(|a| a == "-v").is_some() {
+    if std::env::args().any(|a| &a == "-v") {
         println!("{}", VERSION);
         return;
     }
@@ -435,8 +426,7 @@ async fn async_main() {
     let (service, socket) = LspService::new(|client| {
         let documents = Arc::new(DashMap::new());
         let shutdown = CancellationToken::new();
-        let semantic =
-            semantic::create_handler(client.clone(), shutdown.clone(), documents.clone());
+        let semantic = semantic::create_handler(client.clone(), shutdown, documents.clone());
         Backend {
             semantic,
             documents,

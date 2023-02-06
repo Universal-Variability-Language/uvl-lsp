@@ -1,9 +1,11 @@
 use crate::ast::*;
 use crate::check;
+use crate::check::DiagnosticUpdate;
 use crate::check::ErrorInfo;
 use crate::document::{AsyncDraft, DocumentStore};
 use crate::smt::check_smt;
 use crate::util::lsp_range;
+use crate::util::AtomicSemaphore;
 use compact_str::CompactStringExt;
 use dashmap::DashMap;
 use hashbrown::{HashMap, HashSet};
@@ -11,15 +13,13 @@ use log::info;
 use parking_lot::Mutex;
 use petgraph::prelude::*;
 use petgraph::unionfind::UnionFind;
-use petgraph::visit::IntoEdges;
 use std::borrow::Borrow;
+use std::collections::BTreeSet;
 use std::fmt::Debug;
-use std::ops::{Deref, Index};
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
+use std::ops::Index;
 use std::sync::Arc;
-use tokio::sync::Notify;
-use tokio::sync::Semaphore;
+use tokio::sync::mpsc;
+use tokio::sync::{watch, RwLock, RwLockReadGuard, Semaphore};
 use tokio::time::{Duration, Instant};
 use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
@@ -34,14 +34,81 @@ pub struct RootSymbol {
     pub file: FileID,
     pub sym: Symbol,
 }
+//Central synchronisation provider
+pub struct Context {
+    //latest red trees
+    pub documents: Mutex<watch::Sender<DocumentStore>>,
+    //latest linked state
+    pub root: Arc<RwLock<RootGraph>>,
+    pub tx_err: mpsc::Sender<DiagnosticUpdate>,
+    pub shutdown: CancellationToken,
+    pub client: Client,
+    //limit the amount of parallel background tasks to keep the server responsiv
+    //TODO find a better way
+    pub load_files_sema: Semaphore,
+    pub parser_active: AtomicSemaphore,
+}
+pub type Snapshot<'a> = RwLockReadGuard<'a, RootGraph>;
+impl Context {
+    //Make sure uri is inside the snapshot
+    pub async fn snapshot(&self, uri: &Url) -> Option<Snapshot> {
+        let time = Instant::now();
+        loop {
+            {
+                let snap = self.root.read().await;
+                if snap.index.contains_key(uri) {
+                    info!("waited {:?} for root", time.elapsed());
+                    return Some(snap);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            if self.shutdown.is_cancelled() {
+                return None;
+            }
+        }
+    }
+    //Assure uri exists and wait for the linker to catched up
+    pub async fn snapshot_sync(&self, uri: &Url, timestamp: Instant) -> Option<Snapshot> {
+        let time = Instant::now();
+        loop {
+            {
+                let snap = self.root.read().await;
+                if snap
+                    .file_by_uri(uri)
+                    .map(|file| file.timestamp >= timestamp)
+                    .unwrap_or(false)
+                {
+                    info!("waited {:?} for root", time.elapsed());
+                    return Some(snap);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            if self.shutdown.is_cancelled() {
+                return None;
+            }
+        }
+    }
+    pub async fn publish_err(&self, mut err: HashMap<FileID, Vec<ErrorInfo>>, root: &RootGraph) {
+        let _ = self
+            .tx_err
+            .send(DiagnosticUpdate {
+                error_state: err
+                    .drain()
+                    .map(|(file, err)| (root.file(file).uri.clone(), err))
+                    .collect(),
+                timestamp: root.revision,
+            })
+            .await;
+    }
+}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum FSEdge {
     Path(Ustr),
     Import(Symbol),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FSNode {
     Dir,
     File(FileID),
@@ -49,10 +116,7 @@ pub enum FSNode {
 
 impl FSNode {
     fn is_dir(&self) -> bool {
-        match self {
-            Self::Dir => true,
-            _ => false,
-        }
+        matches!(self, Self::Dir)
     }
 }
 //Simple virtual filesystem for fast completions, resolve and namespaces
@@ -62,7 +126,7 @@ pub struct FileSystem {
     file2node: HashMap<FileID, NodeIndex>,
 }
 impl FileSystem {
-    fn new(files: &Vec<Arc<Document>>) -> Self {
+    fn new(files: &[Arc<Document>]) -> Self {
         let mut graph = DiGraph::new();
         let mut file2node = HashMap::new();
         let root = graph.add_node(FSNode::Dir);
@@ -97,7 +161,7 @@ impl FileSystem {
                 for (k, i) in path.iter().enumerate() {
                     if let Some(e) = graph.edges(node).find(|e| match e.weight() {
                         FSEdge::Path(name) => {
-                            name == i && (!(k == path.len() - 1) || !graph[e.target()].is_dir())
+                            name == i && (k != path.len() - 1 || !graph[e.target()].is_dir())
                         }
                         _ => false,
                     }) {
@@ -118,11 +182,7 @@ impl FileSystem {
         Self { graph, file2node }
     }
     //Check an import between a and b
-    pub fn imports_connecting<'a>(
-        &'a self,
-        a: FileID,
-        b: FileID,
-    ) -> impl Iterator<Item = Symbol> + 'a {
+    pub fn imports_connecting(&self, a: FileID, b: FileID) -> impl Iterator<Item = Symbol> + '_ {
         self.graph
             .edges_connecting(self.file2node[&a], self.file2node[&b])
             .filter_map(|e| match e.weight() {
@@ -131,7 +191,7 @@ impl FileSystem {
             })
     }
     //all imports from a
-    pub fn imports<'a>(&'a self, a: FileID) -> impl Iterator<Item = (Symbol, FileID)> + 'a {
+    pub fn imports(&self, a: FileID) -> impl Iterator<Item = (Symbol, FileID)> + '_ {
         self.graph.edges(self.file2node[&a]).filter_map(|e| {
             match (e.weight(), &self.graph[e.target()]) {
                 (FSEdge::Import(sym), FSNode::File(name)) => Some((*sym, *name)),
@@ -141,13 +201,13 @@ impl FileSystem {
     }
 
     //all imports to a
-    pub fn imported<'a>(&'a self, a: FileID) -> impl Iterator<Item = (Symbol, FileID)> + 'a {
-        self.graph.edges_directed(self.file2node[&a],Direction::Incoming).filter_map(|e| {
-            match (e.weight(), &self.graph[e.source()]) {
+    pub fn imported(&self, a: FileID) -> impl Iterator<Item = (Symbol, FileID)> + '_ {
+        self.graph
+            .edges_directed(self.file2node[&a], Direction::Incoming)
+            .filter_map(|e| match (e.weight(), &self.graph[e.source()]) {
                 (FSEdge::Import(sym), FSNode::File(name)) => Some((*sym, *name)),
                 _ => None,
-            }
-        })
+            })
     }
     //all subfiles from origin under path, returns (prefix,filename,filenode)
     pub fn sub_files<'a>(
@@ -181,7 +241,7 @@ impl FileSystem {
             }
         }
         std::iter::from_fn(move || {
-            stack.pop().and_then(|(path, name, node)| {
+            stack.pop().map(|(path, name, node)| {
                 for i in self.graph.edges(node) {
                     match i.weight() {
                         FSEdge::Path(name) => stack.push((
@@ -192,7 +252,7 @@ impl FileSystem {
                         _ => {}
                     }
                 }
-                Some((path, name, self.graph[node].clone()))
+                (path, name, self.graph[node].clone())
             })
         })
         .filter(move |(_, _, node)| match node {
@@ -205,24 +265,16 @@ impl FileSystem {
 #[derive(Debug, Clone, Default)]
 pub struct ReferenceMap {
     resolved: HashMap<RootSymbol, RootSymbol>,
-    reverse: HashMap<RootSymbol, Vec<RootSymbol>>,
 }
 impl ReferenceMap {
     pub fn insert(&mut self, src: RootSymbol, dst: RootSymbol) {
-        self.resolved.insert(src.clone(), dst.clone());
-        insert_multi(&mut self.reverse, dst, src);
+        self.resolved.insert(src, dst);
     }
     pub fn resolve(&self, src: RootSymbol) -> Option<RootSymbol> {
         self.resolved.get(&src).cloned()
     }
-    pub fn used_by<'a>(&'a self, dst: RootSymbol) -> impl Iterator<Item = RootSymbol> + 'a {
-        self.reverse
-            .get(&dst)
-            .into_iter()
-            .flat_map(|i| i.iter().cloned())
-    }
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = (RootSymbol, RootSymbol)> + 'a {
-        self.resolved.iter().map(|(k, v)| (k.clone(), v.clone()))
+    pub fn iter(&self) -> impl Iterator<Item = (RootSymbol, RootSymbol)> + '_ {
+        self.resolved.iter().map(|(k, v)| (*k, *v))
     }
 }
 impl<T> Index<FileID> for Vec<T> {
@@ -231,14 +283,29 @@ impl<T> Index<FileID> for Vec<T> {
         &self[index.0 as usize]
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComponentErrorState {
+    SyntaxError,
+    LinkError,
+    Valid,
+}
+
+#[derive(Debug, Clone)]
+pub struct Component {
+    pub members: Vec<FileID>,
+    pub error: ComponentErrorState,
+    pub dirty: bool,
+}
 //A fully linked version of all files, computed asynchronously
 #[derive(Debug, Clone)]
 pub struct RootGraph {
     files: Vec<Arc<Document>>,
     pub fs: FileSystem,
+    pub revision: u64,
     ref_map: ReferenceMap,
     index: HashMap<Url, FileID>,
-    revision: u64,
+    components: Vec<Component>,
 }
 impl RootGraph {
     pub fn file_by_uri(&self, name: &Url) -> Option<&Document> {
@@ -250,43 +317,62 @@ impl RootGraph {
     pub fn file_id(&self, name: &Url) -> Option<FileID> {
         self.index.get(name).cloned()
     }
-    pub fn resolve_sym<'a>(&'a self, sym: RootSymbol) -> Option<RootSymbol> {
+    pub fn resolve_sym(&self, sym: RootSymbol) -> Option<RootSymbol> {
         match sym.sym {
             Symbol::Reference(..) => self.ref_map.resolve(sym).or_else(|| {
                 let file = self.file(sym.file);
                 let path = file.path(sym.sym);
                 let ty = file.type_of(sym.sym);
-                for dst in self.resolve(sym.file, path) {
-                    if self.file(dst.file).type_of(dst.sym) == ty {
-                        return Some(dst);
-                    }
-                }
-                None
+                self.resolve(sym.file, path)
+                    .find(|&dst| self.file(dst.file).type_of(dst.sym) == ty)
             }),
             _ => Some(sym),
         }
     }
+    pub fn components(&self) -> &[Component] {
+        &self.components[..]
+    }
     pub fn imported(&self, src: FileID) -> Vec<FileID> {
-        let mut out  = HashSet::new();
+        let mut out = HashSet::new();
+        out.insert(src);
         let mut stack = vec![src];
-        while let Some(src) = stack.pop(){
-            for (_,tgt) in self.fs.imported(src){
+        while let Some(src) = stack.pop() {
+            for (_, tgt) in self.fs.imported(src) {
                 stack.push(tgt);
                 out.insert(tgt);
             }
         }
         out.drain().collect()
     }
-    pub fn connected_components(&self)->Vec<Vec<FileID>>{
+    pub fn importes(&self, src: FileID) -> Vec<FileID> {
+        let mut out = HashSet::new();
+        out.insert(src);
+        let mut stack = vec![src];
+        while let Some(src) = stack.pop() {
+            for (_, tgt) in self.fs.imports(src) {
+                stack.push(tgt);
+                out.insert(tgt);
+            }
+        }
+        out.drain().collect()
+    }
+    pub fn connected_components(&self) -> Vec<Vec<FileID>> {
         let mut union_find = UnionFind::new(self.files.len());
-        for e in self.fs.graph.edge_references().filter(|e|matches!(e.weight(),FSEdge::Import(..))){
+        for e in self
+            .fs
+            .graph
+            .edge_references()
+            .filter(|e| matches!(e.weight(), FSEdge::Import(..)))
+        {
             let (a, b) = (e.source(), e.target());
             // union the two vertices of the edge
-            union_find.union(a.index(),b.index());
+            if let (FSNode::File(a), FSNode::File(b)) = (&self.fs.graph[a], &self.fs.graph[b]) {
+                union_find.union(a.0, b.0);
+            }
         }
         let mut map = HashMap::new();
         for i in 0..self.files.len() {
-            let rep = union_find.find(i);
+            let rep = union_find.find(i as u16);
             insert_multi(&mut map, rep, i);
         }
         map.into_values()
@@ -301,7 +387,7 @@ impl RootGraph {
     ) -> impl Iterator<Item = RootSymbol> + 'a {
         let mut stack = vec![(origin, path)];
         std::iter::from_fn(move || {
-            stack.pop().and_then(|(file, tail)| {
+            stack.pop().map(|(file, tail)| {
                 for (sym, tgt) in self.fs.imports(file) {
                     let common_prefix = self.files[file]
                         .import_prefix(sym)
@@ -314,11 +400,9 @@ impl RootGraph {
                         stack.push((tgt, &tail[common_prefix..]));
                     }
                 }
-                Some(
-                    self.files[file]
-                        .lookup(Symbol::Root, tail, |_| true)
-                        .map(move |sym| RootSymbol { file, sym }),
-                )
+                self.files[file]
+                    .lookup(Symbol::Root, tail, |_| true)
+                    .map(move |sym| RootSymbol { file, sym })
             })
         })
         .flatten()
@@ -330,7 +414,7 @@ impl RootGraph {
     ) -> impl Iterator<Item = Vec<(RootSymbol, usize)>> + 'a {
         let mut stack = vec![(origin, path, vec![])];
         std::iter::from_fn(move || {
-            stack.pop().and_then(|(file, tail, binding)| {
+            stack.pop().map(|(file, tail, binding)| {
                 let src_file = &self.files[file];
                 for (sym, tgt) in self.fs.imports(file) {
                     let common_prefix = src_file
@@ -352,26 +436,24 @@ impl RootGraph {
                         ));
                     }
                 }
-                Some(
-                    src_file
-                        .lookup_with_binding(Symbol::Root, tail, |_| true)
-                        .map(move |sub_binding| {
-                            let mut offset = 0;
-                            binding
-                                .iter()
-                                .cloned()
-                                .chain(
-                                    sub_binding
-                                        .iter()
-                                        .map(|i| (RootSymbol { file, sym: *i }, 1)),
-                                )
-                                .map(move |(sym, len)| {
-                                    offset += len;
-                                    (sym, offset)
-                                })
-                                .collect()
-                        }),
-                )
+                src_file
+                    .lookup_with_binding(Symbol::Root, tail, |_| true)
+                    .map(move |sub_binding| {
+                        let mut offset = 0;
+                        binding
+                            .iter()
+                            .cloned()
+                            .chain(
+                                sub_binding
+                                    .iter()
+                                    .map(|i| (RootSymbol { file, sym: *i }, 1)),
+                            )
+                            .map(move |(sym, len)| {
+                                offset += len;
+                                (sym, offset)
+                            })
+                            .collect()
+                    })
             })
         })
         .flatten()
@@ -409,7 +491,6 @@ impl RootGraph {
                     true
                 }
                 Symbol::Attribute(..) => {
-                    info!("attrib {:?}", prefix);
                     f(
                         owner.unwrap(),
                         RootSymbol {
@@ -425,7 +506,7 @@ impl RootGraph {
             });
         }
     }
-    pub fn iter_files<'a>(&'a self) -> impl Iterator<Item = (FileID, &'a Document)> + 'a {
+    pub fn iter_files(&self) -> impl Iterator<Item = (FileID, &'_ Document)> + '_ {
         self.files
             .iter()
             .enumerate()
@@ -434,19 +515,8 @@ impl RootGraph {
     pub fn iter_file_ids(&self) -> impl Iterator<Item = FileID> {
         (0..self.files.len()).map(|i| FileID(i as u16))
     }
-    pub fn new(file_map: &HashMap<Url, Arc<Document>>, revision: u64) -> Self {
-        let files = file_map.values().cloned().collect();
-        Self {
-            fs: FileSystem::new(&files),
-            index: file_map
-                .keys()
-                .enumerate()
-                .map(|(i, k)| (k.clone(), FileID(i as u16)))
-                .collect(),
-            files,
-            ref_map: Default::default(),
-            revision,
-        }
+    pub fn file_paths(&self) -> BTreeSet<Vec<Ustr>> {
+        self.files.iter().map(|f| f.path.clone()).collect()
     }
     pub fn dump(&self) {
         info!("{:#?}", &self.files);
@@ -459,16 +529,13 @@ impl RootGraph {
         }
         let src = &self.files[src_file_id.0 as usize];
         let mut errors = Vec::new();
-        for (id, i) in src
-            .references()
-            .iter()
-            .enumerate()
-            .map(|(i, k)| (Symbol::Reference(i as u32), k))
-        {
+        for id in src.all_references() {
+            let path = src.path(id);
+            let r_ty = src.type_of(id);
             let mut state = ReferenceResolveState::Unresolved;
-            for k in self.resolve(src_file_id, &i.path.names) {
+            for k in self.resolve(src_file_id, path) {
                 let dst = self.file(k.file);
-                if i.ty == dst.type_of(k.sym).unwrap() {
+                if r_ty == dst.type_of(k.sym) {
                     state = ReferenceResolveState::Resolved(k);
                     break;
                 } else {
@@ -477,16 +544,16 @@ impl RootGraph {
             }
             match state {
                 ReferenceResolveState::Unresolved => errors.push(ErrorInfo {
-                    location: lsp_range(i.path.range(), &src.source).unwrap(),
+                    location: src.lsp_range(id).unwrap(),
                     severity: DiagnosticSeverity::ERROR,
                     weight: 30,
                     msg: "unresolved reference".into(),
                 }),
                 ReferenceResolveState::WrongType(ty) => errors.push(ErrorInfo {
-                    location: lsp_range(i.path.range(), &src.source).unwrap(),
+                    location: src.lsp_range(id).unwrap(),
                     severity: DiagnosticSeverity::ERROR,
                     weight: 30,
-                    msg: format!("expected a {:?} got {:?}", i.ty, ty),
+                    msg: format!("expected a {:?} got {:?}", r_ty, ty),
                 }),
                 ReferenceResolveState::Resolved(sym) => {
                     self.ref_map.insert(
@@ -501,158 +568,144 @@ impl RootGraph {
         }
         errors
     }
-    async fn link(&mut self, ctx: &Context) {
-        for i in self.iter_file_ids() {
-            let err = self.link_file(i);
-            let file = self.file(i);
-            if file.errors.len() == 0 && ctx.ready() {
-                check::publish(&ctx.client, &file.uri, &err).await;
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Snapshot {
-    revision: u64,
-    lock: Arc<tokio::sync::OwnedRwLockReadGuard<RootGraph>>,
-    revison_counter_linked: Arc<AtomicU64>,
-}
-impl Snapshot {
-    async fn new(ctx: &Context) -> Self {
-        let lock = tokio::sync::RwLock::read_owned(ctx.root.clone()).await;
+    pub fn new(file_map: &HashMap<Url, Arc<Document>>, revision: u64) -> Self {
+        let files: Vec<_> = file_map.values().cloned().collect();
         Self {
-            revision: lock.revision,
-            lock: Arc::new(lock),
-            revison_counter_linked: ctx.revison_counter_linked.clone(),
+            components: Vec::new(),
+            fs: FileSystem::new(&files),
+            index: file_map
+                .keys()
+                .enumerate()
+                .map(|(i, k)| (k.clone(), FileID(i as u16)))
+                .collect(),
+            files,
+            ref_map: Default::default(),
+            revision,
         }
     }
 }
-impl Deref for Snapshot {
-    type Target = RootGraph;
-    fn deref(&self) -> &Self::Target {
-        &*self.lock
-    }
+
+#[derive(Default)]
+struct RootGraphHandler {
+    check_state: HashMap<Ustr, Instant>,
+    cancel_smt: Option<CancellationToken>,
 }
-//Central synchronisation provider
-pub struct Context {
-    //latest red trees
-    pub documents: Mutex<DocumentStore>,
-    //notified when there is a changed red tree
-    pub dirty: Notify,
-    //latest linked version
-    pub root: Arc<tokio::sync::RwLock<RootGraph>>,
-    pub revison_counter: AtomicU64,
-    pub revison_counter_parsed: AtomicU64,
-    pub revison_counter_linked: Arc<AtomicU64>,
-    pub shutdown: CancellationToken,
-    pub client: Client,
-    //limit the amount of parallel background tasks to keep the server responsiv
-    //TODO find a better way
-    pub load_files_sema: Semaphore,
-}
-impl Context {
-    //Make sure uri is inside the snapshot
-    pub async fn snapshot(&self, uri: &Url) -> Snapshot {
-        let time = Instant::now();
-        loop {
+impl RootGraphHandler {
+    pub fn collect_changes(&mut self, root: &RootGraph) -> HashMap<FileID, Vec<ErrorInfo>> {
+        let mut err = HashMap::new();
+        for file in root.files.iter() {
+            if self
+                .check_state
+                .get(&file.name)
+                .map(|old| old < &file.timestamp)
+                .unwrap_or(true)
             {
-                let snap = Snapshot::new(self).await;
-                if snap.index.contains_key(uri) {
-                    info!("waited {:?} for root", time.elapsed());
-                    return snap;
+                self.check_state.insert(file.name, file.timestamp);
+                err.insert(root.file_id(&file.uri).unwrap(), file.errors.clone());
+            }
+        }
+        err
+    }
+    fn check_namespaces(&self, root: &RootGraph, err_out: &mut HashMap<FileID, Vec<ErrorInfo>>) {
+        let mut file_paths = HashSet::new();
+        for file in root.files.iter() {
+            if !file_paths.insert(file.path.as_slice()) {
+                info!("{:?}", file.namespace());
+                if let Some(ns) = file.namespace() {
+                    let id = root.file_id(&file.uri).unwrap();
+                    if let Some(old) = err_out.get_mut(&id) {
+                        old.push(check::ErrorInfo {
+                            location: lsp_range(ns.range(), &file.source).unwrap(),
+                            severity: DiagnosticSeverity::ERROR,
+                            weight: 100,
+                            msg: "namespace already defined".into(),
+                        });
+                    }
                 }
             }
-            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
-    //Assure uri exists and wait for till the linker catched up
-    pub async fn snapshot_sync(&self, uri: &Url) -> Snapshot {
-        let time = Instant::now();
-        let base = self
-            .revison_counter
-            .load(std::sync::atomic::Ordering::SeqCst);
-        loop {
-            {
-                let snap = Snapshot::new(self).await;
-                if snap.index.contains_key(uri) && snap.revision >= base {
-                    info!("waited {:?} for root", time.elapsed());
-                    return snap;
+    pub fn link(
+        &self,
+        root: &mut RootGraph,
+        err_out: &mut HashMap<FileID, Vec<ErrorInfo>>,
+        dirty: &HashSet<FileID>,
+        dirty_fs: bool,
+    ) {
+        let mut components: Vec<_> = root
+            .connected_components()
+            .drain(..)
+            .map(|files| Component {
+                error: if files
+                    .iter()
+                    .any(|f| err_out.get(f).map(|err| err.len() > 0).unwrap_or(false))
+                {
+                    ComponentErrorState::SyntaxError
+                } else {
+                    ComponentErrorState::Valid
+                },
+                dirty: files.iter().any(|f| dirty.contains(f)) || dirty_fs,
+                members: files,
+            })
+            .collect();
+        //info!("components {:#?}",components);
+        for c in components.iter_mut() {
+            if c.error == ComponentErrorState::Valid && c.dirty {
+                let mut all_ok = true;
+                for f in c.members.iter() {
+                    if dirty_fs || root.importes(*f).iter().any(|im| dirty.contains(im)) {
+                        let err = root.link_file(*f);
+                        if err.len() > 0 {
+                            all_ok = false;
+                        }
+                        err_out.insert(*f, err);
+                    }
+                }
+                if !all_ok {
+                    c.error = ComponentErrorState::LinkError;
                 }
             }
-            tokio::time::sleep(Duration::from_millis(5)).await;
         }
+        root.components = components;
     }
-    pub fn ready(&self) -> bool {
-        self.revison_counter
-            .load(std::sync::atomic::Ordering::SeqCst)
-            == self
-                .revison_counter_parsed
-                .load(std::sync::atomic::Ordering::SeqCst)
-    }
-}
-async fn check_namespaces(ctx: &Context, root: &RootGraph) {
-    let mut file_paths = HashSet::new();
-    for file in root.files.iter() {
-        if !file_paths.insert(file.path.as_slice()) {
-            if let Some(ns) = file.namespace() {
-                check::publish(
-                    &ctx.client,
-                    &file.uri,
-                    &[check::ErrorInfo {
-                        location: lsp_range(ns.range(), &file.source).unwrap(),
-                        severity: DiagnosticSeverity::ERROR,
-                        weight: 100,
-                        msg: "namespace already defined".into(),
-                    }],
-                )
-                .await
-            }
+    pub async fn update(
+        &mut self,
+        ctx: &Arc<Context>,
+        documents: &mut watch::Receiver<DocumentStore>,
+    ) {
+        if let Some(token) = self.cancel_smt.take() {
+            token.cancel();
         }
-    }
-}
-async fn publish_syntax_error(
-    ctx: &Context,
-    root: &RootGraph,
-    check_state: &mut HashMap<Ustr, Instant>,
-) {
-    for file in root.files.iter() {
-        if check_state
-            .get(&file.name)
-            .map(|old| old < &file.timestamp)
-            .unwrap_or(true)
-            && file.errors.len() > 0
-        {
-            check_state.insert(file.name, file.timestamp);
-            if ctx.ready() {
-                check::publish(&ctx.client, &file.uri, &file.errors).await;
-            }
+        let mut new_root = {
+            let docs = documents.borrow_and_update();
+            RootGraph::new(&docs.ast, docs.revision)
+        };
+        if ctx.parser_active.zero() {
+            let timer = Instant::now();
+            let mut err = self.collect_changes(&new_root);
+            self.check_namespaces(&new_root, &mut err);
+            let dirty_fs = ctx.root.read().await.file_paths() != new_root.file_paths();
+            let dirty_files = err.keys().cloned().collect();
+            self.link(&mut new_root, &mut err, &dirty_files, dirty_fs);
+            ctx.publish_err(err, &new_root).await;
+            info!("linked root graph {:?}", timer.elapsed());
+        }
+        *ctx.root.write().await = new_root;
+        if ctx.parser_active.zero() {
+            let token = CancellationToken::new();
+            let _ = spawn(check_smt(ctx.clone(), token.clone()));
+            self.cancel_smt = Some(token);
         }
     }
 }
 
-async fn update_root_graph(ctx: &Context, check_state: &mut HashMap<Ustr, Instant>) -> RootGraph {
-    let timer = Instant::now();
-    let mut root = {
-        let docs = ctx.documents.lock();
-        RootGraph::new(&docs.ast, docs.revision)
-    };
-    publish_syntax_error(ctx, &root, check_state).await;
-    root.link(ctx).await;
-    info!("updated root graph {:?}", timer.elapsed());
-
-    root
-}
-
-async fn handler_impl(ctx: Arc<Context>) {
-    let mut check_state = HashMap::new();
+async fn handler_impl(ctx: Arc<Context>, mut documents: watch::Receiver<DocumentStore>) {
+    let mut handler = RootGraphHandler::default();
     loop {
         select! {
             _ = ctx.shutdown.cancelled() => return,
-            _ = ctx.dirty.notified() =>{
-                let new= update_root_graph(&ctx,&mut check_state).await;
-                ctx.revison_counter_linked.fetch_add(1,Ordering::SeqCst);
-                *ctx.root.write().await = new;
+            _ =  documents.changed()=>{
+                handler.update(&ctx, &mut documents).await
             }
         }
     }
@@ -664,6 +717,7 @@ pub fn create_handler(
     _: Arc<DashMap<Url, AsyncDraft>>,
 ) -> Arc<Context> {
     let root = Arc::new(tokio::sync::RwLock::new(RootGraph {
+        components: Vec::new(),
         ref_map: ReferenceMap::default(),
         index: HashMap::new(),
         fs: FileSystem {
@@ -673,17 +727,19 @@ pub fn create_handler(
         files: Default::default(),
         revision: 0,
     }));
+    let (tx_doc, rx_doc) = watch::channel(DocumentStore::default());
+    let (tx_err, rx_err) = mpsc::channel(32);
+
     let ctx = Arc::new(Context {
         load_files_sema: Semaphore::new((num_cpus::get() - 1).max(1)),
+        parser_active: AtomicSemaphore::new(),
+        tx_err,
         shutdown,
-        dirty: Notify::new(),
         client,
-        revison_counter: AtomicU64::new(0),
-        revison_counter_parsed: AtomicU64::new(0),
-        revison_counter_linked: Arc::new(AtomicU64::new(0)),
-        documents: Mutex::new(DocumentStore::default()),
+        documents: Mutex::new(tx_doc),
         root,
     });
-    spawn(handler_impl(ctx.clone()));
+    spawn(handler_impl(ctx.clone(), rx_doc));
+    spawn(check::diagnostic_handler(ctx.clone(), rx_err));
     ctx
 }

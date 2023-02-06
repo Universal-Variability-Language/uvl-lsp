@@ -109,21 +109,18 @@ impl FileState {
                     }],
                 });
             }
-        } else if self.state.len() > new.state.len() {
-            if self.state[prefix + diff..]
+        } else if self.state.len() > new.state.len() && self.state[prefix + diff..]
                 .iter()
                 .zip(new.state[prefix..].iter())
-                .all(|(i, k)| i == k)
-            {
-                return SemanticTokensFullDeltaResult::TokensDelta(SemanticTokensDelta {
-                    result_id: None,
-                    edits: vec![SemanticTokensEdit {
-                        start: prefix as u32,
-                        delete_count: diff as u32,
-                        data: None,
-                    }],
-                });
-            }
+                .all(|(i, k)| i == k) {
+            return SemanticTokensFullDeltaResult::TokensDelta(SemanticTokensDelta {
+                result_id: None,
+                edits: vec![SemanticTokensEdit {
+                    start: prefix as u32,
+                    delete_count: diff as u32,
+                    data: None,
+                }],
+            });
         }
         SemanticTokensFullDeltaResult::TokensDelta(SemanticTokensDelta {
             result_id: None,
@@ -153,7 +150,7 @@ impl FileState {
         ) {
             for c in i.captures {
                 let kind = captures[c.index as usize].as_str();
-                let range = fast_lsp_range(c.node, source, &utf16_line);
+                let range = fast_lsp_range(c.node, source, utf16_line);
                 token.push(AbsToken {
                     range,
                     kind: token_index(kind),
@@ -305,7 +302,7 @@ impl State {
     ) -> SemanticTokens {
         let state = FileState::new(&uri, tree, &source, &root);
         let out = state.state.clone();
-        self.files.insert(uri.clone(), state);
+        self.files.insert(uri, state);
 
         SemanticTokens {
             result_id: None,

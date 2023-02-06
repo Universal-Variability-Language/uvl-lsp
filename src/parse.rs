@@ -17,7 +17,7 @@ pub fn parse(src: &Rope, old_tree: Option<&Tree>) -> Tree {
     let tree = PARSER
         .with(|parser| {
             if parser.borrow().language().is_none() {
-                let _ = parser.borrow_mut().set_language(TS.lang.clone());
+                let _ = parser.borrow_mut().set_language(TS.lang);
             }
 
             parser.borrow_mut().parse_with(
@@ -42,7 +42,7 @@ pub trait SymbolSlice {
     fn name(&self, node: Node) -> Ustr {
         Ustr::from(&self.slice_raw(node.byte_range()))
     }
-    fn slice_raw<'a>(&'a self, node: Span) -> Cow<'a, str>;
+    fn slice_raw(&self, node: Span) -> Cow<'_, str>;
 }
 
 impl SymbolSlice for str {
@@ -151,8 +151,8 @@ pub fn parse_or_lang_lvl<S: SymbolSlice>(node: Node, source: &S) -> Option<Path>
     parse_path(node,source).or_else(||parse_lang_lvl_path(node,source))
 }
 pub fn parse_path_from_source(span:Span,source:&Rope){
-    let mut path = Path::default();
-    for c in source.slice(span).chars(){
+    let _path = Path::default();
+    for _c in source.slice(span).chars(){
     
 
     }

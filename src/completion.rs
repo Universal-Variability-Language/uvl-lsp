@@ -3,7 +3,7 @@ use crate::document::Draft;
 use crate::util::*;
 use crate::{parse, semantic::*};
 use compact_str::CompactString;
-use itertools::Either;
+use itertools::{Either, Itertools};
 use log::info;
 use ropey::Rope;
 use std::cmp::Ordering;
@@ -85,8 +85,8 @@ pub fn starts_with<T: PartialEq>(path: &[T], prefix: &[T]) -> bool {
 
 pub fn make_path<T: AsRef<str>, I: Iterator<Item = T>>(i: I) -> CompactString {
     let mut out = CompactString::new_inline("");
-    for i in i.filter(|i| i.as_ref().len() > 0) {
-        if out.len() == 0 {
+    for i in i.filter(|i| !i.as_ref().is_empty()) {
+        if out.is_empty() {
             out.push_str(i.as_ref())
         } else {
             out.push('.');
@@ -98,7 +98,7 @@ pub fn make_path<T: AsRef<str>, I: Iterator<Item = T>>(i: I) -> CompactString {
 
 //What kind of value is likely required to complete the expression
 #[derive(PartialEq, Eq, Debug, Clone)]
- pub enum CompletionEnv {
+pub enum CompletionEnv {
     Numeric,
     Constraint,
     GroupMode,
@@ -155,8 +155,8 @@ pub fn find_section(node: Node) -> Section {
         },
         "source_file" => Section::TopLevel,
         "attribute_constraint" | "attribute_constraints" => Section::Constraints,
-        "binary_expr" |"unary_expr"| "nested_expr" => Section::Constraints,
-        "attribute_value"=>Section::Attribute,
+        "binary_expr" | "unary_expr" | "nested_expr" => Section::Constraints,
+        "attribute_value" => Section::Attribute,
         _ => {
             if let Some(p) = node.parent() {
                 find_section(p)
@@ -181,17 +181,17 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
         let err_raw: String = source.byte_slice(node.byte_range()).into();
         if err_raw.contains("=>")
             || err_raw.contains("<=>")
-            || err_raw.contains("&")
-            || err_raw.contains("|")
+            || err_raw.contains('&')
+            || err_raw.contains('|')
         {
             return CompletionEnv::Constraint;
         }
-        if err_raw.contains("+")
-            || err_raw.contains("-")
-            || err_raw.contains("*")
-            || err_raw.contains("/")
-            || err_raw.contains(">")
-            || err_raw.contains("<")
+        if err_raw.contains('+')
+            || err_raw.contains('-')
+            || err_raw.contains('*')
+            || err_raw.contains('/')
+            || err_raw.contains('>')
+            || err_raw.contains('<')
             || err_raw.contains("==")
         {
             return CompletionEnv::Numeric;
@@ -228,7 +228,9 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
             } else if args.len() == 1 && arg_offset == 0 {
                 CompletionEnv::Aggregate { context: None }
             } else if arg_offset >= 1 {
-                CompletionEnv::Aggregate{context:args[0].clone()}
+                CompletionEnv::Aggregate {
+                    context: args[0].clone(),
+                }
             } else {
                 CompletionEnv::Aggregate { context: None }
             }
@@ -238,12 +240,12 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
                 .byte_slice(node.child_by_field_name("op").unwrap().byte_range())
                 .into();
             match op.as_str() {
-                "=>" | "&" | "|" | "<=>" => return CompletionEnv::Constraint,
+                "=>" | "&" | "|" | "<=>" => CompletionEnv::Constraint,
                 _ => CompletionEnv::Numeric,
             }
         }
-        "nested_expr"|"path" => estimate_expr(node.parent().unwrap(), pos, source),
-        _ => CompletionEnv::Constraint,       
+        "nested_expr" | "path" => estimate_expr(node.parent().unwrap(), pos, source),
+        _ => CompletionEnv::Constraint,
     }
 }
 
@@ -324,11 +326,7 @@ fn position_to_node<'a>(
         }
     }
 }
-fn estimate_env(
-    node: Node,
-    source: &Rope,
-    pos: &Position,
-) -> Option<CompletionEnv> {
+fn estimate_env(node: Node, source: &Rope, pos: &Position) -> Option<CompletionEnv> {
     if node.is_extra() && !node.is_error() {
         //Comment?
         return None;
@@ -368,10 +366,10 @@ fn estimate_env(
             if (node.end_position().row as u32) < pos.line {
                 Some(CompletionEnv::Constraint)
             } else {
-                Some(estimate_expr(node,pos,source))
+                Some(estimate_expr(node, pos, source))
             }
         }
-        Section::Attribute=>Some(CompletionEnv::SomeName),
+        Section::Attribute => Some(CompletionEnv::SomeName),
         Section::Unknown => Some(CompletionEnv::Any),
     }
 }
@@ -395,24 +393,20 @@ impl CompletionQuery {
     }
 }
 
-
 pub fn longest_path<'a>(node: Node<'a>, source: &Rope) -> Option<(Path, Node<'a>)> {
     if let Some(p) = node
         .parent()
-        .map(|n| parse::parse_or_lang_lvl(n,source) )
-        .flatten()
+        .and_then(|n| parse::parse_or_lang_lvl(n, source))
     {
         Some((p, node.parent().unwrap()))
-    } else if let Some(p) = parse::parse_or_lang_lvl(node, source) {
-        Some((p, node))
     } else {
-        None
+        parse::parse_or_lang_lvl(node, source).map(|p| (p, node))
     }
 }
 //"smart" completion, find context arround the cursor
 fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
     match draft {
-        Draft::Tree { source,tree, .. } => {
+        Draft::Tree { source, tree, .. } => {
             let (offset, edit_node) = position_to_node(source, tree, pos);
             info!("Completion for: {:?}", edit_node);
             if let (Some((path, path_node)), CompletionOffset::Continous) =
@@ -443,11 +437,10 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
                     prefix: Vec::new(),
                     postfix: "".into(),
                     postfix_range: Range {
-                        start: pos.clone(),
-                        end: pos.clone(),
+                        start: *pos,
+                        end: *pos,
                     },
-                    env: estimate_env(edit_node, source, pos)
-                        .unwrap_or(CompletionEnv::SomeName),
+                    env: estimate_env(edit_node, source, pos).unwrap_or(CompletionEnv::SomeName),
                 })
             }
         }
@@ -614,13 +607,11 @@ fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
 fn make_relativ_path(path: &[CompactString], origin: &[CompactString]) -> Option<CompactString> {
     if path.len() > origin.len() {
         None
+    } else if starts_with(path, origin) {
+        let postfix = &origin[path.len()..];
+        Some(make_path(postfix.iter()))
     } else {
-        if starts_with(path, origin) {
-            let postfix = &origin[path.len()..];
-            Some(make_path(postfix.iter()))
-        } else {
-            None
-        }
+        None
     }
 }
 //weight function
@@ -643,7 +634,7 @@ fn completion_weight(
     if query.is_empty() {
         w2
     } else {
-        strsim::jaro_winkler(&query, &to_match) as f32 * w2
+        strsim::jaro_winkler(query, to_match) as f32 * w2
     }
 }
 //measure text distance for paths
@@ -678,7 +669,7 @@ impl Ord for ModulePath {
 }
 impl PartialOrd for ModulePath {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(&other))
+        Some(self.cmp(other))
     }
 }
 impl pathfinding::num_traits::Zero for ModulePath {
@@ -910,7 +901,7 @@ pub fn compute_completions(
                 is_incomplete = true
             }
             CompletionEnv::Include => {
-                if ctx.prefix.len() > 0 {
+                if !ctx.prefix.is_empty() {
                     match ctx.prefix[0].as_str() {
                         "SAT-level" => add_lang_lvl_sat(&ctx.postfix, &mut top, 2.0),
                         "SMT-level" => add_lang_lvl_smt(&ctx.postfix, &mut top, 2.0),
@@ -959,11 +950,12 @@ pub fn compute_completions(
             _ => {}
         }
 
-        let mut comp = top.into_sorted_vec();
         //info!("Completions P{:?} in {:?}", &comp, timer.elapsed());
 
-        let items = comp
-            .drain(0..)
+        let items = top
+            .into_sorted_vec()
+            .into_iter()
+            .unique_by(|c| c.lable.clone())
             .filter(|opt| opt.kind != CompletionKind::DontCare)
             .map(|opt| CompletionItem {
                 label: opt.lable.into(),
@@ -997,7 +989,6 @@ pub fn compute_completions(
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

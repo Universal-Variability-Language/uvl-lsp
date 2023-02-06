@@ -2,7 +2,6 @@ use crate::{ast, check};
 use crate::{parse, semantic};
 use hashbrown::HashMap;
 use log::info;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::watch;
@@ -10,7 +9,6 @@ use tokio::time::Instant;
 use tokio::{select, spawn};
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Tree};
-use ustr::Ustr;
 
 use ropey::Rope;
 //update the document text using text deltas form the editor
@@ -109,11 +107,10 @@ impl Draft {
             | Self::Source { revision, .. } => *revision,
         }
     }
-    pub fn source(&self)->Option<&Rope>{
-        match self{
-            Draft::Tree { source,.. }|Draft::Source{source,..}=>Some(source),
-            _=>None
-
+    pub fn source(&self) -> Option<&Rope> {
+        match self {
+            Draft::Tree { source, .. } | Draft::Source { source, .. } => Some(source),
+            _ => None,
         }
     }
 }
@@ -178,8 +175,9 @@ impl AsyncDraft {
         uri: Url,
         semantic: Arc<semantic::Context>,
     ) {
+        let permit = semantic.parser_active.take();
         let _ = if state != DocumentState::OwnedByEditor {
-            Some(semantic.load_files_sema.acquire().await.unwrap())
+            Some(1)
         } else {
             None
         };
@@ -189,7 +187,13 @@ impl AsyncDraft {
             revision,
             source: source.clone(),
         });
-        parse_document(semantic, revision, uri, tx, source, None).await;
+        let doc = parse_document( revision, uri, tx, source, None);
+        drop(permit);
+        semantic
+            .documents
+            .lock()
+            .send_modify(|state| state.update(doc));
+
         info!("opened in {:?}", t.elapsed());
     }
     pub fn open(
@@ -200,7 +204,6 @@ impl AsyncDraft {
     ) -> Self {
         let revision = Instant::now();
         let (tx, rx) = watch::channel(Draft::Unavailable { revision });
-        semantic.revison_counter.fetch_add(1, Ordering::SeqCst);
         spawn(Self::open_raw(tx, revision, text, state, uri, semantic));
 
         Self { state, content: rx }
@@ -214,10 +217,9 @@ impl AsyncDraft {
         let (tx, rx) = watch::channel(Draft::Unavailable { revision });
         let mut old_rx = std::mem::replace(&mut self.content, rx);
         let uri = params.text_document.uri.clone();
-        semantic.revison_counter.fetch_add(1, Ordering::SeqCst);
         spawn(async move {
+            let permit = semantic.parser_active.take();
             let t = Instant::now();
-
             let old = Self::wait_for(&mut old_rx, DraftSync::Tree).await; //Wait for the old document
             info!("waiting {:?} for reparse", t.elapsed());
             let (mut source, mut old_tree) = match old.unwrap() {
@@ -231,25 +233,27 @@ impl AsyncDraft {
                 revision,
                 source: source.clone(),
             });
-            parse_document(
-                semantic,
+            let doc = parse_document(
                 revision,
                 uri,
                 tx,
                 source,
                 if parse_whole { None } else { Some(old_tree) },
-            )
-            .await;
+            );
+            drop(permit);
+            semantic
+                .documents
+                .lock()
+                .send_modify(|state| state.update(doc));
             info!("Updated  in {:?}", t.elapsed());
         });
     }
 }
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DocumentStore {
     pub ast: HashMap<Url, Arc<ast::Document>>,
     file_revision: HashMap<Url, Instant>,
     pub revision: u64,
-
 }
 impl DocumentStore {
     fn update(&mut self, doc: ast::Document) {
@@ -261,8 +265,9 @@ impl DocumentStore {
         {
             return;
         }
+        self.file_revision.insert(doc.uri.clone(), doc.timestamp);
         self.ast.insert(doc.uri.clone(), Arc::new(doc));
-        self.revision +=1;
+        self.revision += 1;
     }
     pub fn delete(&mut self, name: &Url, timestamp: Instant) {
         if self
@@ -273,31 +278,28 @@ impl DocumentStore {
         {
             return;
         }
+
+        self.file_revision.insert(name.clone(), timestamp);
         self.ast.remove(name);
-        self.revision +=1;
+        self.revision += 1;
     }
 }
 
-async fn parse_document(
-    semantic: Arc<semantic::Context>,
+fn parse_document(
     revision: Instant,
     uri: Url,
     draft: watch::Sender<Draft>,
     source: Rope,
     old_tree: Option<Tree>,
-) {
+) -> ast::Document {
     let tree = parse::parse(&source, old_tree.as_ref());
     let _ = draft.send(Draft::Tree {
         revision,
         tree: tree.clone(),
         source: source.clone(),
     });
-    let mut doc = ast::visit_root(source.clone(), tree.clone(), uri.clone(), revision);
+    let mut doc = ast::visit_root(source.clone(), tree.clone(), uri, revision);
     doc.errors.append(&mut check::check_sanity(&tree, &source));
     doc.errors.append(&mut check::check_errors(&tree, &source));
-    semantic.documents.lock().update(doc);
-    semantic
-        .revison_counter_parsed
-        .fetch_add(1, Ordering::SeqCst);
-    semantic.dirty.notify_one();
+    doc
 }

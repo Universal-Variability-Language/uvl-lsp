@@ -7,7 +7,7 @@ use crate::util::*;
 use log::info;
 use ropey::Rope;
 use tower_lsp::lsp_types::*;
-use tree_sitter::{Node, Tree};
+use tree_sitter::{Node};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextObjectKind {
@@ -123,7 +123,7 @@ pub fn find_text_object_impl(
 }
 pub fn find_text_object(draft: &Draft, pos: &Position) -> Option<TextObject> {
     match draft {
-        Draft::Source { source, .. } => {
+        Draft::Source {  .. } => {
             //TODO
             None
         }
@@ -155,7 +155,7 @@ fn find_definitions(
     info!("{:?}",obj);
 
     let file_id = root.file_id(uri)?;
-    let file = root.file(file_id);
+    let _file = root.file(file_id);
     match obj.kind {
         TextObjectKind::ImportPath => {
             for i in root.resolve(file_id, &obj.path.names) {
@@ -167,7 +167,7 @@ fn find_definitions(
         }
         TextObjectKind::FeatureReference | TextObjectKind::AttributeReference => {
             for bind in root.resolve_with_binding(file_id, &obj.path.names) {
-                let last = bind.last().unwrap().0.clone();
+                let last = bind.last().unwrap().0;
                 let dst_file = root.file(last.file);
                 info!("{:?}",bind);
 
@@ -186,7 +186,7 @@ fn find_definitions(
                         .iter()
                         .find_map(|(sym, index)| {
                             if obj.selected_segment < *index {
-                                Some(sym.clone())
+                                Some(*sym)
                             } else {
                                 None
                             }
@@ -200,7 +200,7 @@ fn find_definitions(
             let mut out = Vec::new();
             root.resolve_attributes(
                 file_id,
-                &ctx.as_ref().map(|ctx| ctx.names.as_slice()).unwrap_or(&[]),
+                ctx.as_ref().map(|ctx| ctx.names.as_slice()).unwrap_or(&[]),
                 |sym, prefix| {
                     let common = prefix
                         .iter()
@@ -223,7 +223,7 @@ pub fn goto_definition(
     pos: &Position,
     uri: &Url,
 ) -> Option<GotoDefinitionResponse> {
-    let refs = find_definitions(root, draft, &pos, uri)?;
+    let refs = find_definitions(root, draft, pos, uri)?;
     Some(GotoDefinitionResponse::Array(
         refs.iter()
             .filter_map(|sym| {
@@ -248,10 +248,11 @@ pub fn goto_definition(
 
 fn reverse_resolve(root: &Snapshot,dst_file:&Document,dst_id:FileID,tgt:Symbol)->Vec<RootSymbol>{
     let ty = dst_file.type_of(tgt);
+
     root.imported(dst_id).iter().flat_map(|&src_id|{
         let src_file = root.file(src_id);
         src_file.all_references().filter(move |r| src_file.type_of(*r) == ty).filter(move |r|{
-            root.resolve(src_id, src_file.path(*r)).find(|sym| *sym == RootSymbol{file:dst_id,sym:tgt}).is_some()
+            root.resolve(src_id, src_file.path(*r)).any(|sym| sym == RootSymbol{file:dst_id,sym:tgt})
         }).map(move |i|RootSymbol { file: src_id, sym: i })
     }).collect()
 }
@@ -301,7 +302,7 @@ pub fn find_references(
     pos: &Position,
     uri: &Url,
 ) -> Option<Vec<Location>> {
-    let refs = find_references_symboles(root, draft, &pos, uri)?;
+    let refs = find_references_symboles(root, draft, pos, uri)?;
     Some(
         refs.iter()
             .filter_map(|sym| {

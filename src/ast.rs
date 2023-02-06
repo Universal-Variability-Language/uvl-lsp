@@ -1,7 +1,7 @@
 use crate::check::ErrorInfo;
 use crate::parse::*;
 use crate::util::{lsp_range, node_range};
-use enum_kinds;
+
 use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
@@ -57,7 +57,7 @@ impl Path {
         self.names.len()
     }
     pub fn range(&self) -> Span {
-        if self.spans.len() > 0 {
+        if !self.spans.is_empty() {
             self.spans[0].start..self.spans.last().unwrap().end
         } else {
             0..0
@@ -169,9 +169,9 @@ pub enum Value {
 }
 
 #[derive(Clone, Debug)]
-pub struct ValueDecl{
-    pub value:Value,
-    pub span:Span,
+pub struct ValueDecl {
+    pub value: Value,
+    pub span: Span,
 }
 
 impl Default for Value {
@@ -225,7 +225,7 @@ pub enum AggregateOP {
 }
 
 impl AggregateOP {
-    pub fn parse(source: &String, op: Node) -> Option<Self> {
+    pub fn parse(source: &str, op: Node) -> Option<Self> {
         match &source[op.byte_range()] {
             "avg" => Some(AggregateOP::Avg),
             "sum" => Some(AggregateOP::Sum),
@@ -277,11 +277,10 @@ pub enum Constraint {
 }
 
 #[derive(Clone, Debug)]
-pub struct  ConstraintDecl{
-    pub content:Constraint,
-    pub span:Span,
+pub struct ConstraintDecl {
+    pub content: Constraint,
+    pub span: Span,
 }
-
 
 #[derive(Clone, Debug)]
 pub enum Numeric {
@@ -366,7 +365,7 @@ impl Ast {
             _ => unimplemented!(),
         }
     }
-    fn lookup<'a, F: FnMut(Symbol)>(&'a self, sym: Symbol, prefix: Ustr, mut f: F) {
+    fn lookup<F: FnMut(Symbol)>(&self, sym: Symbol, prefix: Ustr, mut f: F) {
         match sym {
             Symbol::Root => {
                 if let Some(&dst) = self.index.get(&(sym, prefix, SymbolKind::Import)) {
@@ -431,12 +430,12 @@ impl Ast {
                 }
             }
             Symbol::Reference(i) => Some(self.references[i as usize].path.range()),
-            Symbol::Group(i)=>Some(self.groups[i as usize].span.clone()),
-            Symbol::Constraint(i)=>Some(self.constraints[i as usize].span.clone()),
+            Symbol::Group(i) => Some(self.groups[i as usize].span.clone()),
+            Symbol::Constraint(i) => Some(self.constraints[i as usize].span.clone()),
             _ => None,
         }
     }
-    fn children<'a>(&'a self, sym: Symbol) -> impl Iterator<Item = Symbol> + 'a {
+    fn children(&self, sym: Symbol) -> impl Iterator<Item = Symbol> + '_ {
         self.structure
             .children
             .get(&sym)
@@ -457,7 +456,7 @@ impl Ast {
     }
 
     fn all_constraints(&self) -> impl Iterator<Item = Symbol> {
-        (0..self.references.len()).map(|i| Symbol::Constraint(i as u32))
+        (0..self.constraints.len()).map(|i| Symbol::Constraint(i as u32))
     }
     fn find(&self, offset: usize) -> Option<Symbol> {
         self.all_imports()
@@ -476,7 +475,10 @@ struct VisitorState<'a> {
 }
 impl<'a> VisitorState<'a> {
     fn add_constraint(&mut self, constraint: Constraint, scope: Symbol) -> Symbol {
-        self.ast.constraints.push(ConstraintDecl { content: constraint, span: self.cursor.node().byte_range()});
+        self.ast.constraints.push(ConstraintDecl {
+            content: constraint,
+            span: self.cursor.node().byte_range(),
+        });
         let sym = Symbol::Constraint(self.ast.constraints.len() as u32 - 1);
         self.push_child(scope, sym);
         sym
@@ -489,8 +491,8 @@ impl<'a> VisitorState<'a> {
     }
     fn add_ref_direct(&mut self, path: Path, req: Type) -> Symbol {
         self.ast.references.push(Reference { path, ty: req });
-        let sym = Symbol::Reference(self.ast.references.len() as u32 - 1);
-        sym
+
+        Symbol::Reference(self.ast.references.len() as u32 - 1)
     }
     fn skip_extra(&mut self) -> bool {
         loop {
@@ -555,13 +557,13 @@ impl<'a> VisitorState<'a> {
                                 location: self.ast.lsp_range(node, self.source).unwrap(),
                                 severity: DiagnosticSeverity::ERROR,
                                 weight: 20,
-                                msg: format!("duplicate feature",),
+                                msg: "duplicate feature".to_string(),
                             });
                             self.errors.push(ErrorInfo {
                                 location: self.ast.lsp_range(old, self.source).unwrap(),
                                 severity: DiagnosticSeverity::ERROR,
                                 weight: 20,
-                                msg: format!("duplicate feature",),
+                                msg: "duplicate feature".to_string(),
                             })
                         }
                         node
@@ -576,13 +578,13 @@ impl<'a> VisitorState<'a> {
                                 location: self.ast.lsp_range(node, self.source).unwrap(),
                                 severity: DiagnosticSeverity::ERROR,
                                 weight: 20,
-                                msg: format!("duplicate attribute"),
+                                msg: "duplicate attribute".to_string(),
                             });
                             self.errors.push(ErrorInfo {
                                 location: self.ast.lsp_range(old, self.source).unwrap(),
                                 severity: DiagnosticSeverity::ERROR,
                                 weight: 20,
-                                msg: format!("duplicate attribute"),
+                                msg: "duplicate attribute".to_string(),
                             });
                         };
                         self.ast.attributes[i as usize].depth = depth;
@@ -673,7 +675,7 @@ impl<'a> VisitorState<'a> {
     }
     fn push_error<T: Into<String>>(&mut self, w: u32, error: T) {
         self.errors.push(ErrorInfo {
-            location: node_range(self.node(), &self.source),
+            location: node_range(self.node(), self.source),
             severity: DiagnosticSeverity::ERROR,
             weight: w,
             msg: error.into(),
@@ -681,7 +683,7 @@ impl<'a> VisitorState<'a> {
     }
     fn push_error_blk<T: Into<String>>(&mut self, w: u32, error: T) {
         self.errors.push(ErrorInfo {
-            location: node_range(self.header().unwrap(), &self.source),
+            location: node_range(self.header().unwrap(), self.source),
             severity: DiagnosticSeverity::ERROR,
             weight: w,
             msg: error.into(),
@@ -689,7 +691,7 @@ impl<'a> VisitorState<'a> {
     }
     fn push_error_node<T: Into<String>>(&mut self, node: Node, w: u32, error: T) {
         self.errors.push(ErrorInfo {
-            location: node_range(node, &self.source),
+            location: node_range(node, self.source),
             severity: DiagnosticSeverity::ERROR,
             weight: w,
             msg: error.into(),
@@ -706,7 +708,7 @@ fn visit_children<F: FnMut(&mut VisitorState) -> T, T: Default>(
         }
         let out = stacker::maybe_grow(32 * 1024, 1024 * 1024, || f(state));
         state.goto_parent();
-        return out;
+        out
     } else {
         T::default()
     }
@@ -720,13 +722,13 @@ fn visit_children_arg<A, F: FnMut(&mut VisitorState, A) -> T, T: Default>(
     if state.goto_first_child() {
         let out = stacker::maybe_grow(32 * 1024, 1024 * 1024, || f(state, arg));
         state.goto_parent();
-        return out;
+        out
     } else {
         T::default()
     }
 }
 impl<'b> SymbolSlice for VisitorState<'b> {
-    fn slice_raw<'a>(&'a self, node: Span) -> Cow<'a, str> {
+    fn slice_raw(&self, node: Span) -> Cow<'_, str> {
         self.source.byte_slice(node).into()
     }
 }
@@ -750,13 +752,14 @@ impl Document {
             self.ast.structure.parent.get(&sym).cloned()
         }
     }
-    pub fn scope(&self,mut sym: Symbol)->Symbol{
-        while let Some(p) = self.parent(sym, true){
-            match sym{
-                Symbol::Feature(..)=>return sym,
-                Symbol::Root=>return sym,
-                _=>{}
+    pub fn scope(&self, mut sym: Symbol) -> Symbol {
+        while let Some(p) = self.parent(sym, true) {
+            match sym {
+                Symbol::Feature(..) => return sym,
+                Symbol::Root => return sym,
+                _ => {}
             }
+            sym  = p;
         }
         Symbol::Root
     }
@@ -794,7 +797,7 @@ impl Document {
             _ => None,
         }
     }
-    pub fn direct_children<'a>(&'a self, sym: Symbol) -> impl Iterator<Item = Symbol> + 'a {
+    pub fn direct_children(&self, sym: Symbol) -> impl Iterator<Item = Symbol> + '_ {
         self.ast
             .structure
             .children
@@ -808,9 +811,6 @@ impl Document {
     }
     pub fn namespace(&self) -> Option<&Path> {
         self.ast.namespace.as_ref()
-    }
-    pub fn references(&self) -> &[Reference] {
-        &self.ast.references
     }
     pub fn path(&self, sym: Symbol) -> &[Ustr] {
         match sym {
@@ -840,7 +840,7 @@ impl Document {
         let mut stack = vec![(root, path)];
         std::iter::from_fn(move || loop {
             let (cur, base) = stack.pop()?;
-            if base.len() == 0 {
+            if base.is_empty() {
                 return Some(cur);
             }
             self.ast.lookup(cur, base[0], |dst| {
@@ -860,7 +860,7 @@ impl Document {
         let mut stack = vec![(root, path, vec![])];
         std::iter::from_fn(move || loop {
             let (cur, base, bind) = stack.pop()?;
-            if base.len() == 0 {
+            if base.is_empty() {
                 return Some(bind);
             }
             self.ast.lookup(cur, base[0], |dst| {
@@ -937,10 +937,9 @@ impl Document {
                 stack.push((i, 0));
             }
         }
-        let mut path = if matches!(root,Symbol::Feature(..)){
+        let mut path = if matches!(root, Symbol::Feature(..)) {
             vec![self.ast.name(root).unwrap()]
-        }
-        else{
+        } else {
             vec![]
         };
         while let Some((cur, depth)) = stack.pop() {
@@ -985,7 +984,7 @@ impl Document {
             stack.push(i);
         }
         while let Some(cur) = stack.pop() {
-            let mut explore = f(cur);
+            let explore = f(cur);
             if explore {
                 for i in self.ast.children(cur) {
                     if merge_root_features
@@ -1085,11 +1084,11 @@ fn opt_smt_minor(state: &mut VisitorState) -> Option<LanguageLevelSMT> {
         "aggregate-function" => Some(LanguageLevelSMT::Aggregate),
         "group-cardinality" => {
             state.push_error(30, "not allowed under SMT");
-            return None;
+            None
         }
         _ => {
             state.push_error(30, "unknown SMT level");
-            return None;
+            None
         }
     }
 }
@@ -1099,11 +1098,11 @@ fn opt_sat_minor(state: &mut VisitorState) -> Option<LanguageLevelSAT> {
         "group-cardinality" => Some(LanguageLevelSAT::GroupCardinality),
         "feature-cardinality" | "aggregate-function" => {
             state.push_error(30, "not allowed under SAT");
-            return None;
+            None
         }
         _ => {
             state.push_error(30, "unknown SAT level");
-            return None;
+            None
         }
     }
 }
@@ -1212,7 +1211,7 @@ fn visit_import_decl(state: &mut VisitorState) {
                     None
                 };
                 state.ast.import.push(Import { path, alias });
-                return Some(());
+                Some(())
             });
         }
 
@@ -1264,7 +1263,7 @@ fn opt_cardinality(node: Node, state: &mut VisitorState) -> Option<Cardinality> 
 }
 
 fn opt_number(state: &mut VisitorState) -> Option<f64> {
-    if let Some(num) = state.slice(state.node()).parse().ok() {
+    if let Ok(num) = state.slice(state.node()).parse() {
         Some(num)
     } else {
         state.push_error(40, "failed to parse number");
@@ -1499,7 +1498,10 @@ fn visit_attribute_value(state: &mut VisitorState, parent: Symbol) {
     let has_children = matches!(&value, Value::Attributes);
     state.ast.attributes.push(Attribute {
         name,
-        value:ValueDecl{value,span:state.node().byte_range()},
+        value: ValueDecl {
+            value,
+            span: state.node().byte_range(),
+        },
         depth: 0,
     });
     if has_children {
@@ -1602,11 +1604,17 @@ fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode) {
         Symbol::Group(..) => {
             state.push_error(40, "groups have to be separated by features");
         }
+        Symbol::Root=>{
+            state.push_error(40, "groups have to be contained by features");
+        }
         _ => {}
     }
     let sym = Symbol::Group(state.ast.groups.len() as u32);
     state.push_child(parent, sym);
-    state.ast.groups.push(Group { mode,span:state.node().byte_range() });
+    state.ast.groups.push(Group {
+        mode,
+        span: state.node().byte_range(),
+    });
     loop {
         check_no_extra_blk(state, "group");
         if state.kind() == "blk" {
@@ -1632,7 +1640,7 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
                 if state.goto_field("alias") {
                     state.push_error(30, "imported features may not have an alias");
                 }
-                return path;
+                path
             })
             .unwrap();
             visit_ref(state, parent, path);

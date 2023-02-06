@@ -1,14 +1,17 @@
-use crate::ast::*;
-use crate::semantic::{RootGraph, RootSymbol, ReferenceMap, FileID};
+use std::sync::Arc;
+use tokio::select;
+use tokio::sync::mpsc;
+
+use crate::semantic::*;
 use crate::util::*;
+use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
-use hashbrown::HashMap;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tower_lsp::Client;
 use tree_sitter::{Node, QueryCursor, Tree};
-use ustr::Ustr;
+
 /*
  * Most error checking happens in here.
  * Files are checked in three phases if one phase failes checking is stopped.
@@ -64,10 +67,8 @@ fn ts_filterd_visit<F: FnMut(Node) -> bool>(root: Node, mut f: F) {
         return;
     }
     while !reached_root {
-        if f(cursor.node()) {
-            if cursor.goto_first_child() {
-                continue;
-            }
+        if f(cursor.node()) && cursor.goto_first_child() {
+            continue;
         }
         if cursor.goto_next_sibling() {
             continue;
@@ -118,10 +119,10 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
                     }
                 });
                 for i in node.start_position().row..node.end_position().row {
-                    if ok_lines.iter().find(|k| **k == i).is_none() {
+                    if !ok_lines.iter().any(|k| *k == i) {
                         error.push(ErrorInfo {
                             weight: 100,
-                            location: node_range(node, &source),
+                            location: node_range(node, source),
                             severity: DiagnosticSeverity::ERROR,
                             msg: "line breaks are only allowed inside parenthesis".to_string(),
                         });
@@ -133,7 +134,7 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
             if node.start_position().row != node.end_position().row {
                 error.push(ErrorInfo {
                     weight: 100,
-                    location: node_range(node, &source),
+                    location: node_range(node, source),
                     severity: DiagnosticSeverity::ERROR,
                     msg: "line breaks are only allowed inside parenthesis".to_string(),
                 });
@@ -141,7 +142,7 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
             if lines.insert(node.start_position().row, node).is_some() {
                 error.push(ErrorInfo {
                     weight: 100,
-                    location: node_range(node, &source),
+                    location: node_range(node, source),
                     severity: DiagnosticSeverity::ERROR,
                     msg: "features have to be in diffrent lines".to_string(),
                 });
@@ -151,7 +152,7 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
             if node.start_position().row != node.end_position().row {
                 error.push(ErrorInfo {
                     weight: 100,
-                    location: node_range(node, &source),
+                    location: node_range(node, source),
                     severity: DiagnosticSeverity::ERROR,
                     msg: "multiline strings are not supported".to_string(),
                 });
@@ -168,18 +169,18 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
         let err_raw: String = err_source.into();
         if err_raw.contains("=>")
             || err_raw.contains("<=>")
-            || err_raw.contains("&")
-            || err_raw.contains("|")
-            || err_raw.contains("+")
-            || err_raw.contains("-")
-            || err_raw.contains("*")
-            || err_raw.contains("/")
-            || err_raw.contains(">")
-            || err_raw.contains("<")
+            || err_raw.contains('&')
+            || err_raw.contains('|')
+            || err_raw.contains('+')
+            || err_raw.contains('-')
+            || err_raw.contains('*')
+            || err_raw.contains('/')
+            || err_raw.contains('>')
+            || err_raw.contains('<')
             || err_raw.contains("==")
         {
             return ErrorInfo {
-                location: node_range(root, &source),
+                location: node_range(root, source),
                 severity: DiagnosticSeverity::ERROR,
                 weight: 80,
                 msg: "missing lhs or rhs expression".into(),
@@ -187,7 +188,7 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
         }
     }
     ErrorInfo {
-        location: node_range(root, &source),
+        location: node_range(root, source),
         severity: DiagnosticSeverity::ERROR,
         weight: 80,
         msg: "unknown syntax error".into(),
@@ -198,7 +199,7 @@ pub fn check_errors(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
     ts_filterd_visit(tree.root_node(), |i| {
         if i.is_missing() {
             err.push(ErrorInfo {
-                location: node_range(i, &source),
+                location: node_range(i, source),
                 severity: DiagnosticSeverity::ERROR,
                 weight: 80,
                 msg: format!("missing {}", i.kind()),
@@ -214,52 +215,57 @@ pub fn check_errors(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
     err
 }
 
-enum ReferenceResolveState {
-    Unresolved,
-    WrongType(Type),
-    Resolved(RootSymbol),
+pub struct DiagnosticUpdate {
+    pub error_state: HashMap<Url, Vec<ErrorInfo>>,
+    pub timestamp: u64,
 }
-pub fn check_references(
-    root: &RootGraph,
-    src_file_id:FileID,
-    ref_map: &mut ReferenceMap,
-) -> Vec<ErrorInfo> {
-    let src = root.file(src_file_id);
-    let mut errors = Vec::new();
-    for (id, i) in src
-        .references()
-        .iter()
-        .enumerate()
-        .map(|(i, k)| (Symbol::Reference(i as u32), k))
-    {
-        let mut state = ReferenceResolveState::Unresolved;
-        for k in root.resolve(src_file_id, &i.path.names) {
-            let dst = root.file(k.file);
-            if i.ty == dst.type_of(k.sym).unwrap() {
-                state = ReferenceResolveState::Resolved(k);
-                break;
-            } else {
-                state = ReferenceResolveState::WrongType(dst.type_of(k.sym).unwrap());
-            }
+struct DiagnosticState {
+    timestamp: u64,
+    error: Vec<ErrorInfo>,
+}
+async fn maybe_publish(
+    client: &Client,
+    source_map: &mut HashMap<Url, DiagnosticState>,
+    uri: Url,
+    mut err: Vec<ErrorInfo>,
+    timestamp: u64,
+) {
+    if let Some(old) = source_map.get_mut(&uri) {
+
+        if old.timestamp < timestamp {
+            publish(client, &uri, &err).await;
+            old.timestamp = timestamp;
+            old.error = err;
+        } else if old.timestamp == timestamp {
+            old.timestamp = timestamp;
+            old.error.append(&mut err);
+            publish(client, &uri, &old.error).await;
         }
-        match state {
-            ReferenceResolveState::Unresolved => errors.push(ErrorInfo {
-                location: lsp_range(i.path.range(), &src.source).unwrap(),
-                severity: DiagnosticSeverity::ERROR,
-                weight: 30,
-                msg: "unresolved reference".into(),
-            }),
-            ReferenceResolveState::WrongType(ty) => errors.push(ErrorInfo {
-                location: lsp_range(i.path.range(), &src.source).unwrap(),
-                severity: DiagnosticSeverity::ERROR,
-                weight: 30,
-                msg: format!("expected a {:?} got {:?}", i.ty, ty),
-            }),
-            ReferenceResolveState::Resolved(sym) => { 
-                ref_map.insert(RootSymbol{sym:id,file:src_file_id},sym);
+    } else {
+        publish(client, &uri, &err).await;
+        source_map.insert(
+            uri,
+            DiagnosticState {
+                timestamp,
+                error: err,
+            },
+        );
+    }
+}
+
+pub async fn diagnostic_handler(ctx: Arc<Context>, mut rx: mpsc::Receiver<DiagnosticUpdate>) {
+    let mut source_map: HashMap<Url, DiagnosticState> = HashMap::new();
+    loop {
+        select! {
+            _ = ctx.shutdown.cancelled() => return,
+            Some(mut update) = rx.recv()=>{
+                for (uri,err) in update.error_state.drain(){
+                    maybe_publish(&ctx.client,&mut source_map,uri,err,update.timestamp).await
+
+                }
 
             }
+
         }
     }
-    errors
 }

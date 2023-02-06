@@ -41,4 +41,5 @@ halfbrown = "0.1.18"
 enum-kinds = "0.5.1"
 num_cpus = "1.15.0"
 hashbrown = "0.13.2"
+regex = "1"
 

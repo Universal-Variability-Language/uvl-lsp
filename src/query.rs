@@ -70,13 +70,13 @@ pub struct Queries {
 impl Queries {
     pub fn new(lang: &Language) -> Queries {
         Queries {
-            highlight: Query::new(lang.clone(), EXTRACT_SYNTAX_HIGHLIGHTING_SRC).unwrap(),
-            check_sanity: Query::new(lang.clone(), CHECK_SANITY).unwrap(),
+            highlight: Query::new(*lang, EXTRACT_SYNTAX_HIGHLIGHTING_SRC).unwrap(),
+            check_sanity: Query::new(*lang, CHECK_SANITY).unwrap(),
         }
     }
 }
 
-pub fn node_source<'a>(source: &'a Rope) -> impl tree_sitter::TextProvider<'a> {
+pub fn node_source(source: & Rope) -> impl tree_sitter::TextProvider<'_> {
     |node: tree_sitter::Node| {
         source
             .byte_slice(node.byte_range())

@@ -1,15 +1,22 @@
 use crate::{
     ast::*,
     check::ErrorInfo,
-    semantic::{FileID, RootSymbol, Snapshot},
+    semantic::{Component, ComponentErrorState, Context, FileID, RootGraph, RootSymbol},
+    util::maybe_cancel,
 };
 use futures::future::join_all;
 use hashbrown::HashMap;
+use lazy_static::lazy_static;
 use log::info;
 use std::fmt::{Display, Write};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::Command;
-use writeln as write_smt;
+use tokio_util::sync::CancellationToken;
+use tower_lsp::lsp_types::DiagnosticSeverity;
+use write as write_smt;
+
+#[derive(Debug)]
 struct Bind {
     file: u16,
     sym: Symbol,
@@ -18,20 +25,50 @@ struct Bind {
 impl Display for Bind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.sym {
-            Symbol::Feature(..) => write!(f, "f{}_{}", self.file, self.sym.offset()),
-            Symbol::Group(..) => write!(f, "g{}_{}", self.file, self.sym.offset()),
-            Symbol::Attribute(..) => write!(f, "a{}_{}", self.file, self.sym.offset()),
-            Symbol::Constraint(..) => write!(f, "c{}_{}", self.file, self.sym.offset()),
+            Symbol::Feature(..) => write!(f, "f{}_{}", self.sym.offset(), self.file),
+            Symbol::Group(..) => write!(f, "g{}_{}", self.sym.offset(), self.file),
+            Symbol::Attribute(..) => write!(f, "a{}_{}", self.sym.offset(), self.file),
+            Symbol::Constraint(..) => write!(f, "c{}_{}", self.sym.offset(), self.file),
             _ => unimplemented!(),
         }
     }
 }
-struct Component<'a> {
-    root: &'a Snapshot,
+impl Bind {
+    fn parse(src: &str) -> Option<Bind> {
+        let mut numbers = src[1..].split("_").map(|i| i.parse::<usize>());
+        let sym = numbers.next().unwrap().unwrap();
+        let file = numbers.next().unwrap().unwrap();
+
+        match &src[0..1] {
+            "g" => Some(Bind {
+                file: file as u16,
+                sym: Symbol::Group(sym as u32),
+            }),
+
+            "a" => Some(Bind {
+                file: file as u16,
+                sym: Symbol::Attribute(sym as u32),
+            }),
+            "f" => Some(Bind {
+                file: file as u16,
+                sym: Symbol::Feature(sym as u32),
+            }),
+
+            "c" => Some(Bind {
+                file: file as u16,
+                sym: Symbol::Constraint(sym as u32),
+            }),
+
+            _ => None,
+        }
+    }
+}
+struct Binding<'a> {
+    root: &'a RootGraph,
     index: HashMap<FileID, u16>,
     members: &'a [FileID],
 }
-impl<'a> Component<'a> {
+impl<'a> Binding<'a> {
     fn bind(&self, sym: Symbol, file_id: FileID) -> Option<Bind> {
         let tgt = self.root.resolve_sym(RootSymbol { file: file_id, sym })?;
         Some(Bind {
@@ -41,10 +78,9 @@ impl<'a> Component<'a> {
     }
 }
 
-fn declare_features(ctx: &Component, file_id: FileID) -> String {
+fn declare_features(ctx: &Binding, file_id: FileID) -> String {
     let mut out = String::new();
     for i in ctx.root.file(file_id).all_features() {
-        info!("{:?}", i);
         let _ = write_smt!(
             out,
             "(declare-const {} Bool)",
@@ -53,11 +89,11 @@ fn declare_features(ctx: &Component, file_id: FileID) -> String {
     }
     out
 }
-fn declare_attributes(ctx: &Component, file_id: FileID) -> String {
+fn declare_attributes(ctx: &Binding, file_id: FileID) -> String {
     let mut out = String::new();
     let file = ctx.root.file(file_id);
     for i in file.all_features() {
-        file.visit_children(i, true, |sym| match file.value(i) {
+        file.visit_children(i, true, |sym| match file.value(sym) {
             Some(Value::Number(num)) => {
                 let _ = write_smt!(
                     out,
@@ -74,17 +110,17 @@ fn declare_attributes(ctx: &Component, file_id: FileID) -> String {
     }
     out
 }
-fn gather_clause(ctx: &Component, file: &Document, file_id: FileID, g: Symbol) -> Option<String> {
+fn gather_clause(ctx: &Binding, file: &Document, file_id: FileID, g: Symbol) -> Option<String> {
     let mut clause = String::new();
     for c in file.direct_children(g) {
         let _ = write!(clause, " {}", ctx.bind(c, file_id)?);
     }
     Some(clause)
 }
-fn declare_groups(ctx: &Component, file_id: FileID) -> Option<String> {
+fn declare_groups(ctx: &Binding, file_id: FileID) -> Option<String> {
     let mut out = String::new();
     let file = &ctx.root.file(file_id);
-    if file.errors.len() > 0 {
+    if !file.errors.is_empty() {
         return None;
     }
     for p in file.all_features() {
@@ -96,35 +132,61 @@ fn declare_groups(ctx: &Component, file_id: FileID) -> Option<String> {
                 continue;
             }
             let p_bind = ctx.bind(p, file_id)?;
+            let g_bind = ctx.bind(g, file_id)?;
             match file.group_mode(g)? {
                 GroupMode::Or => {
                     let clause = gather_clause(ctx, file, file_id, g);
-                    let _ = write_smt!(out, "(assert (= {} (or {})))", p_bind, clause?);
+                    let _ = write_smt!(
+                        out,
+                        "(assert(!(= {} (or {})):named {})) ",
+                        p_bind,
+                        clause?,
+                        g_bind
+                    );
                 }
                 GroupMode::Alternative => {
                     let clause = gather_clause(ctx, file, file_id, g);
-                    let _ = write_smt!(out, "(assert (=> {} ((_ at-most 1) {})))", p_bind, clause?);
+                    let _ = write_smt!(
+                        out,
+                        "(assert(!(=> {} ((_ at-most 1) {})):named {}))",
+                        p_bind,
+                        clause?,
+                        g_bind
+                    );
                 }
                 GroupMode::Mandatory => {
                     for c in file.direct_children(g) {
-                        let _ =
-                            write_smt!(out, "(assert (= {} {}))", p_bind, ctx.bind(c, file_id)?);
+                        let _ = write_smt!(
+                            out,
+                            "(assert(! (= {} {}):named {}.{}))",
+                            p_bind,
+                            ctx.bind(c, file_id)?,
+                            g_bind,
+                            ctx.bind(c, file_id)?
+                        );
                     }
                 }
                 GroupMode::Optional | GroupMode::Cardinality(Cardinality::Any) => {
                     for c in file.direct_children(g) {
-                        let _ =
-                            write_smt!(out, "(assert (=> {} {}))", p_bind, ctx.bind(c, file_id)?);
+                        let _ = write_smt!(
+                            out,
+                            "(assert(!(=> {} {}):named {}.{}))",
+                            p_bind,
+                            ctx.bind(c, file_id)?,
+                            g_bind,
+                            ctx.bind(c, file_id)?
+                        );
                     }
                 }
                 GroupMode::Cardinality(Cardinality::Max(max)) => {
                     let clause = gather_clause(ctx, file, file_id, g);
                     let _ = write_smt!(
                         out,
-                        "(assert (=> {} ((_ at-most {}) {})))",
+                        "(assert(!(=> {}((_ at-most {}) {})):named {}))",
                         p_bind,
                         max,
-                        clause?
+                        clause?,
+                        g_bind
                     );
                 }
 
@@ -132,27 +194,30 @@ fn declare_groups(ctx: &Component, file_id: FileID) -> Option<String> {
                     let clause = gather_clause(ctx, file, file_id, g);
                     let _ = write_smt!(
                         out,
-                        "(assert (=> {} ((_ at-atleast {}) {})))",
+                        "(assert(!(=> {} ((_ at-atleast {}) {})):named {}))",
                         p_bind,
                         min,
-                        clause?
+                        clause?,
+                        g_bind,
                     );
                 }
                 GroupMode::Cardinality(Cardinality::Range(min, max)) => {
                     let clause = gather_clause(ctx, file, file_id, g)?;
                     let _ = write_smt!(
                         out,
-                        "(assert (=> {} ((_ at-most {}) {})))",
+                        "(assert(!(=> {} ((_ at-most {}) {})):named {}.max))",
                         p_bind,
                         max,
-                        clause
+                        clause,
+                        g_bind
                     );
                     let _ = write_smt!(
                         out,
-                        "(assert (=> {} ((_ at-least {}) {})))",
+                        "(assert(!(=> {} ((_ at-least {}) {})):named {}.min))",
                         p_bind,
                         min,
-                        clause
+                        clause,
+                        g_bind
                     );
                 }
             }
@@ -160,7 +225,7 @@ fn declare_groups(ctx: &Component, file_id: FileID) -> Option<String> {
     }
     Some(out)
 }
-fn encode_numeric(ctx: &Component, file_id: FileID, expr: &Numeric) -> Option<String> {
+fn encode_numeric(ctx: &Binding, file_id: FileID, expr: &Numeric) -> Option<String> {
     match expr {
         Numeric::Number(num) => Some(format!("{:?}", num)),
         Numeric::Ref(id) => Some(format!("{}", ctx.bind(*id, file_id)?)),
@@ -174,8 +239,8 @@ fn encode_numeric(ctx: &Component, file_id: FileID, expr: &Numeric) -> Option<St
             Some(format!(
                 "({} {} {})",
                 op_str,
-                encode_numeric(ctx, file_id, lhs)?,
-                encode_numeric(ctx, file_id, rhs)?
+                stacker::maybe_grow(32 * 1024, 1024 * 1024, || encode_numeric(ctx, file_id, lhs))?,
+                stacker::maybe_grow(32 * 1024, 1024 * 1024, || encode_numeric(ctx, file_id, rhs))?
             ))
         }
         Numeric::Aggregate { op, context, query } => {
@@ -203,6 +268,9 @@ fn encode_numeric(ctx: &Component, file_id: FileID, expr: &Numeric) -> Option<St
                     }
                 },
             );
+            if all_attributes.is_empty() {
+                return Some("0.0".into());
+            }
             match op {
                 AggregateOP::Sum => Some(format!("(+ {})", all_attributes)),
                 AggregateOP::Avg => Some(format!(
@@ -213,11 +281,17 @@ fn encode_numeric(ctx: &Component, file_id: FileID, expr: &Numeric) -> Option<St
         }
     }
 }
-fn encode_constraint(ctx: &Component, file_id: FileID, constraint: &Constraint) -> Option<String> {
+
+fn encode_constraint(ctx: &Binding, file_id: FileID, constraint: &Constraint) -> Option<String> {
     match constraint {
         Constraint::Constant(val) => Some(format!("{}", val)),
         Constraint::Ref(id) => Some(format!("{}", ctx.bind(*id, file_id)?)),
-        Constraint::Not(lhs) => Some(format!("(not {})", encode_constraint(ctx, file_id, &lhs)?)),
+        Constraint::Not(lhs) => Some(format!(
+            "(not {})",
+            stacker::maybe_grow(32 * 1024, 1024 * 1024, || encode_constraint(
+                ctx, file_id, lhs
+            ))?,
+        )),
         Constraint::Logic { op, lhs, rhs } => {
             let op_str = match op {
                 LogicOP::Or => "or",
@@ -228,8 +302,12 @@ fn encode_constraint(ctx: &Component, file_id: FileID, constraint: &Constraint) 
             Some(format!(
                 "({} {} {})",
                 op_str,
-                encode_constraint(ctx, file_id, lhs)?,
-                encode_constraint(ctx, file_id, rhs)?
+                stacker::maybe_grow(32 * 1024, 1024 * 1024, || encode_constraint(
+                    ctx, file_id, lhs
+                ))?,
+                stacker::maybe_grow(32 * 1024, 1024 * 1024, || encode_constraint(
+                    ctx, file_id, rhs
+                ))?,
             ))
         }
         Constraint::Equation { op, lhs, rhs } => {
@@ -241,13 +319,14 @@ fn encode_constraint(ctx: &Component, file_id: FileID, constraint: &Constraint) 
             Some(format!(
                 "({} {} {})",
                 op_str,
-                encode_numeric(ctx, file_id, lhs)?,
-                encode_numeric(ctx, file_id, rhs)?
+                stacker::maybe_grow(32 * 1024, 1024 * 1024, || encode_numeric(ctx, file_id, lhs))?,
+                stacker::maybe_grow(32 * 1024, 1024 * 1024, || encode_numeric(ctx, file_id, rhs))?
             ))
         }
     }
 }
-fn encode_constraints(ctx: &Component, file_id: FileID) -> Option<String> {
+
+fn encode_constraints(ctx: &Binding, file_id: FileID) -> Option<String> {
     let mut out = String::new();
     let file = ctx.root.file(file_id);
     for c in file.all_constraints() {
@@ -276,14 +355,21 @@ fn encode_constraints(ctx: &Component, file_id: FileID) -> Option<String> {
     Some(out)
 }
 
-fn smtlib_model(ctx: &Component) -> Option<String> {
-    let mut out = "(set-option :produce-unsat-cores true)(define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))\n".to_string();
+async fn smtlib_model<'a>(ctx: &'a Binding<'a>) -> Option<String> {
+    if ctx
+        .members
+        .iter()
+        .any(|f| ctx.root.file(*f).errors.len() > 0)
+    {
+        return None;
+    }
+    let mut out = "(set-option :produce-unsat-cores true)(define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))".to_string();
     let _ = write_smt!(
         out,
         "{}",
         ctx.members
             .iter()
-            .map(|f| declare_features(&ctx, *f))
+            .map(|f| declare_features(ctx, *f))
             .collect::<String>()
     );
     let _ = write_smt!(
@@ -291,29 +377,142 @@ fn smtlib_model(ctx: &Component) -> Option<String> {
         "{}",
         ctx.members
             .iter()
-            .map(|f| declare_attributes(&ctx, *f))
+            .map(|f| declare_attributes(ctx, *f))
             .collect::<String>()
     );
     for file in ctx.members.iter() {
-        let _ = write_smt!(out, "{}", declare_groups(&ctx, *file)?);
+        let _ = write_smt!(out, "{}", declare_groups(ctx, *file)?);
     }
     for file in ctx.members.iter() {
-        let _ = write_smt!(out, "{}", encode_constraints(&ctx, *file)?);
+        let _ = write_smt!(out, "{}", encode_constraints(ctx, *file)?);
     }
-    let _ = write_smt!(out, "{}", "(check_sat)");
+    let _ = write_smt!(out, "{}", "(check-sat)\n");
     Some(out)
 }
-pub async fn run_z3(root: Snapshot, members: Vec<FileID>) -> Option<Vec<ErrorInfo>> {
-    let ctx = Component {
-        members: &members,
-        root: &root,
-        index: members
+#[derive(Debug)]
+enum Reason {
+    Single(Bind),
+    GroubMember(Bind, Bind),
+    GroupMin(Bind),
+    GroupMax(Bind),
+}
+impl Reason {
+    fn parse(src: &str) -> Option<Reason> {
+        let mut segs = src.split(".");
+        let head = Bind::parse(segs.next().unwrap())?;
+        if let Some(sub) = segs.next() {
+            match sub {
+                "min" => Some(Reason::GroupMin(head)),
+                "max" => Some(Reason::GroupMin(head)),
+                _ => Some(Self::GroubMember(head, Bind::parse(sub)?)),
+            }
+        } else {
+            Some(Reason::Single(head))
+        }
+    }
+}
+
+fn parse_core(ctx: &Binding, core: String) -> HashMap<FileID, Vec<ErrorInfo>> {
+    let mut out = HashMap::new();
+    for r in core[1..core.len() - 1].split(" ").map(Reason::parse) {
+        //info!("Reason: {:?}",r );
+        match r {
+            Some(Reason::Single(Bind { file, sym })) => {
+                let file = ctx.members[file as usize];
+                match sym {
+                    Symbol::Group(..) => {
+                        insert_multi(
+                            &mut out,
+                            file,
+                            ErrorInfo {
+                                location: ctx.root.file(file).lsp_range(sym).unwrap(),
+                                severity: DiagnosticSeverity::WARNING,
+                                msg: "unsatisfiable group".into(),
+                                weight: 20,
+                            },
+                        );
+                    }
+                    Symbol::Constraint(..) => {
+                        insert_multi(
+                            &mut out,
+                            file,
+                            ErrorInfo {
+                                location: ctx.root.file(file).lsp_range(sym).unwrap(),
+                                severity: DiagnosticSeverity::WARNING,
+                                msg: "unsatisfiable constraint".into(),
+                                weight: 20,
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Some(Reason::GroupMin(Bind { file, sym })) => {
+                let file = ctx.members[file as usize];
+                insert_multi(
+                    &mut out,
+                    file,
+                    ErrorInfo {
+                        location: ctx.root.file(file).lsp_range(sym).unwrap(),
+                        severity: DiagnosticSeverity::WARNING,
+                        msg: "unsatisfiable group minimum".into(),
+                        weight: 20,
+                    },
+                );
+            }
+            Some(Reason::GroupMax(Bind { file, sym })) => {
+                let file = ctx.members[file as usize];
+                insert_multi(
+                    &mut out,
+                    file,
+                    ErrorInfo {
+                        location: ctx.root.file(file).lsp_range(sym).unwrap(),
+                        severity: DiagnosticSeverity::WARNING,
+                        msg: "unsatisfiable group maximum".into(),
+                        weight: 20,
+                    },
+                );
+            }
+            Some(Reason::GroubMember(Bind { .. }, Bind { file, sym })) => {
+                let file = ctx.members[file as usize];
+                insert_multi(
+                    &mut out,
+                    file,
+                    ErrorInfo {
+                        location: ctx.root.file(file).lsp_range(sym).unwrap(),
+                        severity: DiagnosticSeverity::WARNING,
+                        msg: "unsatisfiable group member".into(),
+                        weight: 20,
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+    out
+}
+pub async fn run_z3(
+    root: &RootGraph,
+    comp: &Component,
+    sema: Arc<Context>,
+    cancel: CancellationToken,
+) -> Option<()> {
+    if !comp.dirty || comp.error != ComponentErrorState::Valid {
+        return None;
+    }
+    //info!("SMT check {:#?}", comp);
+    let ctx = Binding {
+        members: &comp.members,
+        root,
+        index: comp
+            .members
             .iter()
             .enumerate()
             .map(|(i, f)| (*f, i as u16))
             .collect(),
     };
-    let model = smtlib_model(&ctx)?;
+    let model = maybe_cancel(&cancel, smtlib_model(&ctx)).await??;
+    //info!("model {}", model);
     let mut cmd = Command::new("z3")
         .arg("-in")
         .arg("-smt2")
@@ -323,22 +522,48 @@ pub async fn run_z3(root: Snapshot, members: Vec<FileID>) -> Option<Vec<ErrorInf
         .kill_on_drop(true)
         .spawn()
         .ok()?;
-    let mut stdin = cmd.stdin.take()?;
-    let mut stdout = BufReader::new(cmd.stdout.take()?);
-    let mut stderr = BufReader::new(cmd.stderr.take()?);
-    let _ =stdin.write(model.as_bytes()).await.ok()?;
-    let mut result = String::new();
-    stdout.read_to_string(&mut result).await.ok()?;
+    let mut stdin = BufWriter::new(cmd.stdin.take()?);
+    let mut stdout = BufReader::new(cmd.stdout.take()?).lines();
+    let mut _stderr = BufReader::new(cmd.stderr.take()?);
+
+    maybe_cancel(&cancel, stdin.write(model.as_bytes()))
+        .await?
+        .ok()?;
+    stdin.flush().await.ok()?;
+
+    let result = stdout.next_line().await.ok()??;
+
     if result == "unsat" {
-        let _ = stdin.write("(get-unsat-core)".as_bytes()).await.ok()?;
-        result.clear();
-        stdout.read_to_string(&mut result).await.ok()?;
-        info!("unsat core {}", result);
+        maybe_cancel(&cancel, stdin.write("(get-unsat-core)\n".as_bytes()))
+            .await?
+            .ok()?;
+        stdin.flush().await.ok()?;
+        let core = maybe_cancel(&cancel, stdout.next_line()).await?.ok()??;
+        //info!("unsat core {}", core);
+        sema.publish_err(parse_core(&ctx, core), root).await;
+    } else {
+        //info!("sat");
     }
     None
 }
-
-pub async fn check_smt(root: Snapshot) {
-    let mut components = root.connected_components();
-    let results = join_all(components.drain(..).map(|c| run_z3(root.clone(), c))).await;
+pub fn can_run_z3() -> bool {
+    Command::new("z3").spawn().is_ok()
+}
+lazy_static! {
+    static ref HAS_Z3: bool = can_run_z3();
+}
+pub async fn check_smt(ctx: Arc<Context>, cancel: CancellationToken) {
+    if *HAS_Z3 {
+        info!("start smt");
+        let root = ctx.root.read().await;
+        let _results = maybe_cancel(
+            &cancel,
+            join_all(
+                root.components()
+                    .iter()
+                    .map(|c| run_z3(&root, c, ctx.clone(), cancel.clone())),
+            ),
+        )
+        .await;
+    }
 }
