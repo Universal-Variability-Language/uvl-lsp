@@ -13,11 +13,13 @@ use std::fmt::{Display, Write};
 use std::sync::Arc;
 use tokio::{
     io::Lines,
-    process::{ChildStdin, ChildStdout, Command},
+    process::{ChildStderr, ChildStdin, ChildStdout, Command},
+    time::Instant,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
     process::Child,
+    spawn,
 };
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::DiagnosticSeverity;
@@ -393,7 +395,7 @@ async fn smtlib_model<'a>(ctx: &'a Binding<'a>) -> Option<String> {
     for file in ctx.members.iter() {
         let _ = write_smt!(out, "{}", encode_constraints(ctx, *file)?);
     }
-    let _ = write_smt!(out, "{}", "\n");
+    let _ = write_smt!(out, "{}", "");
     Some(out)
 }
 #[derive(Debug)]
@@ -518,7 +520,14 @@ impl SmtModel {
 
         let mut stdin = BufWriter::new(proc.stdin.take().unwrap());
         let stdout = BufReader::new(proc.stdout.take().unwrap()).lines();
-        maybe_cancel(&cancel, stdin.write(model.as_bytes())).await??;
+        let mut stderr = BufReader::new(proc.stderr.take().unwrap()).lines();
+        spawn(async move {
+            while let Some(err) = stderr.next_line().await? {
+                info!("smt error {:?}", err);
+            }
+            return tokio::io::Result::Ok(());
+        });
+        maybe_cancel(&cancel, stdin.write_all(model.as_bytes())).await??;
         stdin.flush().await?;
         Ok(SmtModel {
             proc,
@@ -527,7 +536,8 @@ impl SmtModel {
         })
     }
     async fn check_sat(&mut self, cancel: &CancellationToken) -> Result<bool> {
-        maybe_cancel(&cancel, self.stdin.write("(check-sat)\n".as_bytes())).await??;
+        maybe_cancel(&cancel, self.stdin.write_all("(check-sat)\n".as_bytes())).await??;
+
         self.stdin.flush().await?;
         Ok(maybe_cancel(cancel, self.stdout.next_line())
             .await??
@@ -535,14 +545,14 @@ impl SmtModel {
             == "sat")
     }
     async fn get_unsat_core(&mut self, cancel: &CancellationToken) -> Result<String> {
-        maybe_cancel(&cancel, self.stdin.write("(get-unsat-core)\n".as_bytes())).await??;
+        maybe_cancel(&cancel, self.stdin.write_all("(get-unsat-core)\n".as_bytes())).await??;
         self.stdin.flush().await?;
         Ok(maybe_cancel(cancel, self.stdout.next_line())
             .await??
             .unwrap())
     }
     async fn push(&mut self, cmd: String) -> Result<()> {
-        self.stdin.write(cmd.as_bytes()).await?;
+        self.stdin.write_all(cmd.as_bytes()).await?;
         self.stdin.flush().await?;
         Ok(())
     }
@@ -555,7 +565,7 @@ pub async fn run_z3(
     cancel: CancellationToken,
 ) -> Result<()> {
     if !comp.dirty || comp.error != ComponentErrorState::Valid {
-        Err("dirty or syntax errors")?
+        Err("not dirty or syntax errors")?
     }
     //info!("SMT check {:#?}", comp);
     let ctx = Binding {
@@ -571,8 +581,10 @@ pub async fn run_z3(
     let source = maybe_cancel(&cancel, smtlib_model(&ctx))
         .await?
         .ok_or("model generation failure")?;
-    //info!("{}",source);
+    //info!("{}", source);
+
     let mut model = SmtModel::new(source, &cancel).await?;
+
     if !model.check_sat(&cancel).await? {
         let core = model.get_unsat_core(&cancel).await?;
         sema.publish_err(parse_core(&ctx, core), root).await;
@@ -584,6 +596,7 @@ pub async fn run_z3(
                 model
                     .push(format!("(push 1)(assert {})\n", ctx.bind(f, *m).unwrap()))
                     .await?;
+
                 if !model.check_sat(&cancel).await? {
                     insert_multi(
                         &mut err,
@@ -614,16 +627,18 @@ pub async fn check_smt(ctx: Arc<Context>, cancel: CancellationToken) {
     if *HAS_Z3 {
         info!("start smt");
         let root = ctx.root.read().await;
-        let _results =
-            maybe_cancel(
-                &cancel,
-                join_all(root.components().iter().map(|c| async {
-                    if let Err(e) = run_z3(&root, c, ctx.clone(), cancel.clone()).await {
-                        info!("failed to run z3 {}",e);
-
-                    }
-                })),
-            )
-            .await;
+        let _results = maybe_cancel(
+            &cancel,
+            join_all(root.components().iter().map(|c| async {
+                let now = Instant::now();
+                if let Err(e) = run_z3(&root, c, ctx.clone(), cancel.clone()).await {
+                    info!("failed to run z3 {}", e);
+                }
+                else{
+                    info!("SMT success in {:?}",now.elapsed());
+                }
+            })),
+        )
+        .await;
     }
 }

@@ -223,7 +223,7 @@ impl FileSystem {
             }) {
                 dir = e.target();
             } else {
-                return None
+                return None;
             }
         }
         self.graph.edges(dir).find_map(|e| {
@@ -594,6 +594,16 @@ impl RootGraph {
                 }
             }
         }
+        for id in src.all_imports() {
+            if self.fs.resolve(src_file_id, src.path(id)).is_none() {
+                errors.push(ErrorInfo {
+                    location: src.lsp_range(id).unwrap(),
+                    severity: DiagnosticSeverity::ERROR,
+                    weight: 30,
+                    msg: format!("unresolved import"),
+                });
+            }
+        }
         errors
     }
     pub fn new(file_map: &HashMap<Url, Arc<Document>>, revision: u64) -> Self {
@@ -703,23 +713,27 @@ impl RootGraphHandler {
     ) {
         if let Some(token) = self.cancel_smt.take() {
             token.cancel();
+            info!("cancel smt");
         }
         let mut new_root = {
             let docs = documents.borrow_and_update();
             RootGraph::new(&docs.ast, docs.revision)
         };
+        let mut run_smt = false;
         if ctx.parser_active.zero() {
             let timer = Instant::now();
             let mut err = self.collect_changes(&new_root);
             self.check_namespaces(&new_root, &mut err);
             let dirty_fs = ctx.root.read().await.file_paths() != new_root.file_paths();
             let dirty_files = err.keys().cloned().collect();
+            info!("{:#?}", dirty_files);
             self.link(&mut new_root, &mut err, &dirty_files, dirty_fs);
             ctx.publish_err(err, &new_root).await;
             info!("linked root graph {:?}", timer.elapsed());
+            run_smt = true;
         }
         *ctx.root.write().await = new_root;
-        if ctx.parser_active.zero() {
+        if run_smt {
             let token = CancellationToken::new();
             let _ = spawn(check_smt(ctx.clone(), token.clone()));
             self.cancel_smt = Some(token);

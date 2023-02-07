@@ -29,7 +29,7 @@ mod semantic;
 mod smt;
 mod util;
 use semantic::Snapshot;
-static VERSION: &str = "v0.0.10";
+static VERSION: &str = "v0.0.11";
 //The server core, request and respones handling
 struct Backend {
     client: Client,
@@ -52,6 +52,7 @@ impl Backend {
         }
     }
     async fn remove(&self, uri: &Url, by_editor: bool) {
+
         let time = Instant::now();
         if self
             .documents
@@ -60,6 +61,7 @@ impl Backend {
             })
             .is_some()
         {
+            info!("removeing {}",uri);
             self.semantic
                 .documents
                 .lock()
@@ -80,6 +82,7 @@ impl Backend {
         let uri = uri.clone();
 
         tokio::task::spawn_blocking(move || {
+            info!("loading {}",uri);
             load_blocking(uri, &documents, &semantic);
         });
     }
@@ -282,6 +285,10 @@ impl LanguageServer for Backend {
             doc.update(params, self.semantic.clone());
             updated = true;
         }
+        else{
+            info!("missing file {}",params.text_document.uri);
+
+        }
         if updated {
             self.client.publish_diagnostics(uri, vec![], None).await;
         }
@@ -418,7 +425,7 @@ async fn main() {
                 .suppress_timestamp()
                 .suffix("log"),
         )
-        .write_mode(flexi_logger::WriteMode::Async)
+        .write_mode(flexi_logger::WriteMode::Direct)
         .start()
         .expect("Failed to start logger");
     log_panics::init();

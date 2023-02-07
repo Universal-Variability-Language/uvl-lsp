@@ -91,6 +91,7 @@ pub async fn maybe_cancel<'a, F: Future + 'a>(
     token: &CancellationToken,
     f: F,
 ) -> Result<F::Output,&'static str> {
+    let token = token.clone();
     select! {
         _ = token.cancelled() => Err("cancled"),
         out = f => Ok(out)
