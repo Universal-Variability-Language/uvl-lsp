@@ -264,7 +264,7 @@ fn encode_numeric(ctx: &Binding, file_id: FileID, expr: &Numeric) -> Option<Stri
                     {
                         let _ = write!(
                             count_features,
-                            " (ite {}  1.0 0.0)",
+                            "(ite {}  1.0 0.0)",
                             ctx.bind(feature.sym, feature.file).unwrap()
                         );
                         let _ = write!(
@@ -571,7 +571,7 @@ pub async fn run_z3(
     let source = maybe_cancel(&cancel, smtlib_model(&ctx))
         .await?
         .ok_or("model generation failure")?;
-    info!("{}",source);
+    //info!("{}",source);
     let mut model = SmtModel::new(source, &cancel).await?;
     if !model.check_sat(&cancel).await? {
         let core = model.get_unsat_core(&cancel).await?;
@@ -595,9 +595,6 @@ pub async fn run_z3(
                             msg: "dead feature".into(),
                         },
                     );
-                }
-                else{
-                    info!("sat {:?}",f);
                 }
                 model.push(format!("(pop 1)\n")).await?;
             }
