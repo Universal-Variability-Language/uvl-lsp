@@ -86,13 +86,14 @@ pub fn containing_blk(mut node: Node) -> Option<Node> {
 pub fn header_kind(node: Node) -> &str {
     node.child_by_field_name("header").unwrap().kind()
 }
+
 pub async fn maybe_cancel<'a, F: Future + 'a>(
     token: &CancellationToken,
     f: F,
-) -> Option<F::Output> {
+) -> Result<F::Output,&'static str> {
     select! {
-        _ = token.cancelled() => None,
-        out = f => Some(out)
+        _ = token.cancelled() => Err("cancled"),
+        out = f => Ok(out)
     }
 }
 pub struct AtomicSemaphorePermit<'a> {

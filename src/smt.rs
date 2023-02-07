@@ -8,10 +8,17 @@ use futures::future::join_all;
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use log::info;
+use std::error;
 use std::fmt::{Display, Write};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::process::Command;
+use tokio::{
+    io::Lines,
+    process::{ChildStdin, ChildStdout, Command},
+};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
+    process::Child,
+};
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::DiagnosticSeverity;
 use write as write_smt;
@@ -386,7 +393,7 @@ async fn smtlib_model<'a>(ctx: &'a Binding<'a>) -> Option<String> {
     for file in ctx.members.iter() {
         let _ = write_smt!(out, "{}", encode_constraints(ctx, *file)?);
     }
-    let _ = write_smt!(out, "{}", "(check-sat)\n");
+    let _ = write_smt!(out, "{}", "\n");
     Some(out)
 }
 #[derive(Debug)]
@@ -491,14 +498,64 @@ fn parse_core(ctx: &Binding, core: String) -> HashMap<FileID, Vec<ErrorInfo>> {
     }
     out
 }
+type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
+
+struct SmtModel {
+    proc: Child,
+    stdin: BufWriter<ChildStdin>,
+    stdout: Lines<BufReader<ChildStdout>>,
+}
+impl SmtModel {
+    async fn new(model: String, cancel: &CancellationToken) -> Result<Self> {
+        let mut proc = Command::new("z3")
+            .arg("-in")
+            .arg("-smt2")
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+
+        let mut stdin = BufWriter::new(proc.stdin.take().unwrap());
+        let stdout = BufReader::new(proc.stdout.take().unwrap()).lines();
+        maybe_cancel(&cancel, stdin.write(model.as_bytes())).await??;
+        stdin.flush().await?;
+        Ok(SmtModel {
+            proc,
+            stdin,
+            stdout,
+        })
+    }
+    async fn check_sat(&mut self, cancel: &CancellationToken) -> Result<bool> {
+        maybe_cancel(&cancel, self.stdin.write("(check-sat)\n".as_bytes())).await??;
+        self.stdin.flush().await?;
+        Ok(maybe_cancel(cancel, self.stdout.next_line())
+            .await??
+            .unwrap()
+            == "sat")
+    }
+    async fn get_unsat_core(&mut self, cancel: &CancellationToken) -> Result<String> {
+        maybe_cancel(&cancel, self.stdin.write("(get-unsat-core)\n".as_bytes())).await??;
+        self.stdin.flush().await?;
+        Ok(maybe_cancel(cancel, self.stdout.next_line())
+            .await??
+            .unwrap())
+    }
+    async fn push(&mut self, cmd: String) -> Result<()> {
+        self.stdin.write(cmd.as_bytes()).await?;
+        self.stdin.flush().await?;
+        Ok(())
+    }
+}
+
 pub async fn run_z3(
     root: &RootGraph,
     comp: &Component,
     sema: Arc<Context>,
     cancel: CancellationToken,
-) -> Option<()> {
+) -> Result<()> {
     if !comp.dirty || comp.error != ComponentErrorState::Valid {
-        return None;
+        Err("dirty or syntax errors")?
     }
     //info!("SMT check {:#?}", comp);
     let ctx = Binding {
@@ -511,41 +568,45 @@ pub async fn run_z3(
             .map(|(i, f)| (*f, i as u16))
             .collect(),
     };
-    let model = maybe_cancel(&cancel, smtlib_model(&ctx)).await??;
-    //info!("model {}", model);
-    let mut cmd = Command::new("z3")
-        .arg("-in")
-        .arg("-smt2")
-        .stdin(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .ok()?;
-    let mut stdin = BufWriter::new(cmd.stdin.take()?);
-    let mut stdout = BufReader::new(cmd.stdout.take()?).lines();
-    let mut _stderr = BufReader::new(cmd.stderr.take()?);
-
-    maybe_cancel(&cancel, stdin.write(model.as_bytes()))
+    let source = maybe_cancel(&cancel, smtlib_model(&ctx))
         .await?
-        .ok()?;
-    stdin.flush().await.ok()?;
-
-    let result = stdout.next_line().await.ok()??;
-
-    if result == "unsat" {
-        maybe_cancel(&cancel, stdin.write("(get-unsat-core)\n".as_bytes()))
-            .await?
-            .ok()?;
-        stdin.flush().await.ok()?;
-        let core = maybe_cancel(&cancel, stdout.next_line()).await?.ok()??;
-        //info!("unsat core {}", core);
+        .ok_or("model generation failure")?;
+    info!("{}",source);
+    let mut model = SmtModel::new(source, &cancel).await?;
+    if !model.check_sat(&cancel).await? {
+        let core = model.get_unsat_core(&cancel).await?;
         sema.publish_err(parse_core(&ctx, core), root).await;
     } else {
-        //info!("sat");
+        let mut err = HashMap::new();
+        for m in ctx.members.iter() {
+            let file = root.file(*m);
+            for f in file.all_features() {
+                model
+                    .push(format!("(push 1)(assert {})\n", ctx.bind(f, *m).unwrap()))
+                    .await?;
+                if !model.check_sat(&cancel).await? {
+                    insert_multi(
+                        &mut err,
+                        *m,
+                        ErrorInfo {
+                            location: file.lsp_range(f).unwrap(),
+                            severity: DiagnosticSeverity::WARNING,
+                            weight: 20,
+                            msg: "dead feature".into(),
+                        },
+                    );
+                }
+                else{
+                    info!("sat {:?}",f);
+                }
+                model.push(format!("(pop 1)\n")).await?;
+            }
+        }
+        sema.publish_err(err, root).await;
     }
-    None
+    Ok(())
 }
+
 pub fn can_run_z3() -> bool {
     Command::new("z3").spawn().is_ok()
 }
@@ -556,14 +617,16 @@ pub async fn check_smt(ctx: Arc<Context>, cancel: CancellationToken) {
     if *HAS_Z3 {
         info!("start smt");
         let root = ctx.root.read().await;
-        let _results = maybe_cancel(
-            &cancel,
-            join_all(
-                root.components()
-                    .iter()
-                    .map(|c| run_z3(&root, c, ctx.clone(), cancel.clone())),
-            ),
-        )
-        .await;
+        let _results =
+            maybe_cancel(
+                &cancel,
+                join_all(root.components().iter().map(|c| async {
+                    if let Err(e) = run_z3(&root, c, ctx.clone(), cancel.clone()).await {
+                        info!("failed to run z3 {}",e);
+
+                    }
+                })),
+            )
+            .await;
     }
 }

@@ -209,6 +209,34 @@ impl FileSystem {
                 _ => None,
             })
     }
+
+    pub fn resolve(&self, origin: FileID, path: &[Ustr]) -> Option<FileID> {
+        let mut dir = self
+            .graph
+            .neighbors_directed(self.file2node[&origin], Incoming)
+            .find(|n| matches!(self.graph[*n], FSNode::Dir))
+            .unwrap();
+        for i in path[0..path.len() - 1].iter() {
+            if let Some(e) = self.graph.edges(dir).find(|e| match e.weight() {
+                FSEdge::Path(name) => name == i && self.graph[e.target()].is_dir(),
+                _ => false,
+            }) {
+                dir = e.target();
+            } else {
+                return None
+            }
+        }
+        self.graph.edges(dir).find_map(|e| {
+            if let FSEdge::Path(name) = e.weight() {
+                if name == path.last().unwrap() {
+                    if let FSNode::File(id) = self.graph[e.target()] {
+                        return Some(id);
+                    }
+                }
+            }
+            None
+        })
+    }
     //all subfiles from origin under path, returns (prefix,filename,filenode)
     pub fn sub_files<'a>(
         &'a self,

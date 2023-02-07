@@ -29,7 +29,7 @@ mod semantic;
 mod smt;
 mod util;
 use semantic::Snapshot;
-static VERSION: &str = "v0.0.5";
+static VERSION: &str = "v0.0.10";
 //The server core, request and respones handling
 struct Backend {
     client: Client,
