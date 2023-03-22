@@ -34,9 +34,6 @@ mod smt;
 mod util;
 mod webview;
 mod webview_frontend;
-//mod webview_frontend;
-static VERSION: &str = "v0.0.12";
-//The server core, request and respones handling
 
 struct Settings {
     //can the client show websites on its own
@@ -513,7 +510,7 @@ async fn server_main() {
     let stdout = tokio::io::stdout();
     //only needed for vscode auto update
     if std::env::args().any(|a| &a == "-v") {
-        println!("{}", VERSION);
+        println!("v{}", env!("CARGO_PKG_VERSION"));
         return;
     }
 
