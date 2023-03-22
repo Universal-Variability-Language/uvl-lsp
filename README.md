@@ -31,9 +31,9 @@ ext install caradhras.uvls-code
 
 ## Z3 Support
 To enable feature analysis, z3 has to be in PATH.
-Just install it via you're favorite package manager.
+Just install it via your favorite package manager.
 ## Configuration Editor
-![alt text](editors/vscode/assets/show_editor.gif)
+![alt text](img/show_editor.gif)
 ## Why tree-sitter
 We use tree-sitter as an initial parser to create a loose syntax tree of UVL code fragments.
 Because the tree-sitter grammar is more relaxed than the original UVL-grammar and has great error recovery,

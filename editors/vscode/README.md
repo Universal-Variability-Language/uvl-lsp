@@ -14,7 +14,7 @@ Currently supports
 - goto definitions
 - configuration editor
 ## Configuration Editor
-![alt text](assets/show_editor.gif)
+![alt text](https://raw.githubusercontent.com/Universal-Variability-Language/uvl-lsp/master/img/show_editor.gif)
 ## Requirements
 On most common platforms installing this extension should just work, without any dependencies.
 When the automatic install fails you will need to build the server you're self.
