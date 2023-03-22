@@ -19,7 +19,7 @@ Currently supports
 On most common platforms installing this extension should just work, without any dependencies.
 When the automatic install fails you will need to build the server you're self.
 Build instructions can be found [here](https://codeberg.org/caradhras/uvls).
-To use a custom build server specify it's location via `uvls.path` or add it to `PATH`
+To use a custom build server specify its location via `uvls.path` or add it to `PATH`
 ## Extension Settings
 
 * `uvls.path`: Path to the server executable eg. `uvls`t
