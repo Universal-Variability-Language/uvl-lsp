@@ -2,7 +2,7 @@
   "name": "uvls-code",
   "displayName": "UVLS - Universal Variability Language Server",
   "description": "VSCode frontend for UVLS",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "publisher": "caradhras",
   "icon": "assets/uvls-256.png",
   "engines": {
@@ -68,9 +68,9 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-		"compile": "tsc -p ./",
-		"lint": "eslint src --ext ts",
-		"watch": "tsc -watch -p ./"
+    "compile": "esbuild --bundle --sourcemap=external --minify --external:vscode src/extension.ts --outdir=out --platform=node --format=cjs",
+    "watch": "esbuild --watch --bundle --sourcemap=external --external:vscode src/extension.ts --outdir=out --platform=node --format=cjs",
+    "test": "npm run compile && node ./node_modules/vscode/bin/test"
   },
   "devDependencies": {
     "@types/glob": "^8.0.0",

@@ -599,9 +599,9 @@ fn create_module(
                                     let _ = write!(out, "(+ {all_attributes})");
                                 }
                                 AggregateOP::Avg => {
-                                    let _ =
-                                        write!(out,
-                                        "(smooth_divuvl.  (+ {all_attributes}) (+ {count_features}))",
+                                    let _ = write!(
+                                        out,
+                                        "(smooth_div(+ {all_attributes}) (+ {count_features}))",
                                     );
                                 }
                             };
