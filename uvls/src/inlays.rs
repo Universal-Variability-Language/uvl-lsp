@@ -76,42 +76,19 @@ enum InlayEvent {
     SetSource,
 }
 fn generate(root: &RootGraph, model: &SMTModel, id: FileID, range: Span) -> Option<Vec<InlayHint>> {
-    let doc = root.file(id);
-    match model {
-        SMTModel::SAT { values, .. } => Some(
-            doc.all_features()
-                .chain(doc.all_attributes())
-                .chain(doc.all_references())
-                .filter(|f| range.contains(&doc.span(*f).unwrap().start))
-                .filter_map(|sym| {
-                    root.resolve_sym(RootSymbol { sym, file: id })
-                        .and_then(|rs| values.get(&rs))
-                        .map(|val| {
-                            let range = doc.lsp_range(sym).unwrap();
-                            InlayHint {
-                                label: InlayHintLabel::String(format!(": {val}")),
-                                position: range.end,
-                                kind: Some(InlayHintKind::PARAMETER),
-                                data: None,
-                                padding_left: Some(true),
-                                padding_right: Some(true),
-                                tooltip: None,
-                                text_edits: None,
-                            }
-                        })
-                })
-                .collect(),
-        ),
-        SMTModel::UNSAT { reasons } => Some(
-            reasons
-                .iter()
-                .filter_map(|i| {
-                    if id == i.symbol().file
-                        && range.contains(&doc.span(i.symbol().sym).unwrap().start)
-                    {
-                        let range = doc.lsp_range(i.symbol().sym).unwrap();
-                        Some(InlayHint {
-                            label: InlayHintLabel::String("UNSAT! ".into()),
+    root.try_file(id).map(|doc| match model {
+        SMTModel::SAT { values, .. } => doc
+            .all_features()
+            .chain(doc.all_attributes())
+            .chain(doc.all_references())
+            .filter(|f| range.contains(&doc.span(*f).unwrap().start))
+            .filter_map(|sym| {
+                root.resolve_sym(RootSymbol { sym, file: id })
+                    .and_then(|rs| values.get(&rs))
+                    .map(|val| {
+                        let range = doc.lsp_range(sym).unwrap();
+                        InlayHint {
+                            label: InlayHintLabel::String(format!(": {val}")),
                             position: range.end,
                             kind: Some(InlayHintKind::PARAMETER),
                             data: None,
@@ -119,14 +96,32 @@ fn generate(root: &RootGraph, model: &SMTModel, id: FileID, range: Span) -> Opti
                             padding_right: Some(true),
                             tooltip: None,
                             text_edits: None,
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-        ),
-    }
+                        }
+                    })
+            })
+            .collect(),
+        SMTModel::UNSAT { reasons } => reasons
+            .iter()
+            .filter_map(|i| {
+                if id == i.symbol().file && range.contains(&doc.span(i.symbol().sym).unwrap().start)
+                {
+                    let range = doc.lsp_range(i.symbol().sym).unwrap();
+                    Some(InlayHint {
+                        label: InlayHintLabel::String("UNSAT! ".into()),
+                        position: range.end,
+                        kind: Some(InlayHintKind::PARAMETER),
+                        data: None,
+                        padding_left: Some(true),
+                        padding_right: Some(true),
+                        tooltip: None,
+                        text_edits: None,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    })
 }
 async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
     let mut map: Option<(SMTModel, Arc<RootGraph>)> = None;
@@ -149,11 +144,6 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
                     continue;
                 }
                 latest = timestamp;
-                info!("publish {model:?}");
-                client
-                    .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
-                    .await
-                    .unwrap();
                 if initial {
                     let rs = match &model {
                         SMTModel::SAT { values, .. } => values.keys().next().cloned(),

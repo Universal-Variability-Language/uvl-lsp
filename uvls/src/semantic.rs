@@ -80,6 +80,9 @@ impl RootGraph {
     pub fn containes_id(&self, id: FileID) -> bool {
         self.cache.files.contains_key(&id) || self.cache.configs.contains_key(&id)
     }
+    pub fn try_file(&self, id: FileID) -> Option<&AstDocument> {
+        self.cache.files.get(&id).map(|f| &**f)
+    }
     pub fn type_of(&self, sym: RootSymbol) -> Option<Type> {
         if matches!(sym.sym, Symbol::Reference(..)) {
             let module = self.cache.file2module[&sym.file];
