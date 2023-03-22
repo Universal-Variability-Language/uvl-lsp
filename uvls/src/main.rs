@@ -4,6 +4,7 @@ use flexi_logger::FileSpec;
 use get_port::Ops;
 use pipeline::AsyncPipeline;
 use semantic::RootGraph;
+use serde::Serialize;
 use tokio::{join, spawn};
 
 use document::*;
@@ -37,11 +38,23 @@ mod webview_frontend;
 static VERSION: &str = "v0.0.12";
 //The server core, request and respones handling
 
+struct Settings {
+    //can the client show websites on its own
+    //ie client==vscode
+    has_webview: bool,
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { has_webview: false }
+    }
+}
+
 struct Backend {
     client: Client,
     coloring: Arc<color::State>,
     pipeline: AsyncPipeline,
     web_handler_uri: String,
+    settings: parking_lot::Mutex<Settings>,
 }
 impl Backend {
     fn load(&self, uri: Url) {
@@ -55,6 +68,26 @@ impl Backend {
             .snapshot(uri, sync)
             .await
             .map_err(|_| shutdown_error())
+    }
+    async fn open_url(&self, uri: String) {
+        if self.settings.lock().has_webview {
+            #[derive(Serialize)]
+            struct OpenArgs {
+                uri: String,
+            }
+            let _ = self
+                .client
+                .send_request::<request::ExecuteCommand>(ExecuteCommandParams {
+                    command: "uvls.open_web".into(),
+                    arguments: vec![serde_json::to_value(OpenArgs { uri }).unwrap()],
+                    work_done_progress_params: WorkDoneProgressParams {
+                        work_done_token: None,
+                    },
+                })
+                .await;
+        } else {
+            let _ = open::that(uri);
+        }
     }
 }
 //load a file this is tricky because the editor can also load it at the same time
@@ -118,6 +151,13 @@ impl LanguageServer for Backend {
                 .await
             });
         }
+        if init_params
+            .client_info
+            .map(|info| matches!(info.name.as_str(), "Visual Studio Code"))
+            .unwrap_or(false)
+        {
+            self.settings.lock().has_webview = true;
+        }
 
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
@@ -158,7 +198,7 @@ impl LanguageServer for Backend {
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         "uvls/show_config".into(),
-                        "uvls/show_example".into(),
+                        "uvls/hide_config".into(),
                         "uvls/open_config".into(),
                         "uvls/load_config".into(),
                     ],
@@ -175,6 +215,7 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "server initialized!")
             .await;
+
         let watcher_uvl = FileSystemWatcher {
             glob_pattern: GlobPattern::String("**/*.uvl".to_string()),
             kind: None,
@@ -322,17 +363,15 @@ impl LanguageServer for Backend {
         params: ExecuteCommandParams,
     ) -> Result<Option<serde_json::Value>> {
         info!("{:?}", params);
-
         let uri: Url = serde_json::from_value(params.arguments[0].clone()).unwrap();
         match params.command.as_str() {
             "uvls/load_config" => {
                 let target = format!("{}/load{}", self.web_handler_uri, uri.path());
-                let _ = open::that(target); //TODO handle error
+                self.open_url(target).await;
             }
             "uvls/open_config" => {
                 let target = format!("{}/create{}", self.web_handler_uri, uri.path());
-
-                let _ = open::that(target);
+                self.open_url(target).await;
             }
             "uvls/show_config" => {
                 self.pipeline
@@ -342,17 +381,15 @@ impl LanguageServer for Backend {
                     )))
                     .await;
                 self.pipeline.touch(&uri);
-                info!("show {uri}");
+                self.client.code_lens_refresh().await?;
             }
-            "uvls/show_example" => {
+            "uvls/hide_config" => {
                 self.pipeline
                     .inlay_state()
-                    .set_source(inlays::InlaySource::File(semantic::FileID::new(
-                        uri.as_str(),
-                    )))
+                    .set_source(inlays::InlaySource::None)
                     .await;
                 self.pipeline.touch(&uri);
-                info!("show example {uri}");
+                self.client.code_lens_refresh().await?;
             }
             _ => {}
         }
@@ -392,11 +429,24 @@ impl LanguageServer for Backend {
                             character: 0,
                         },
                     },
-                    command: Some(Command {
-                        title: "show".into(),
-                        command: "uvls/show_config".into(),
-                        arguments: Some(vec![uri_json.clone()]),
-                    }),
+                    command: if self
+                        .pipeline
+                        .inlay_state()
+                        .is_active(inlays::InlaySource::File(semantic::FileID::new(
+                            uri.as_str(),
+                        ))) {
+                        Some(Command {
+                            title: "hide".into(),
+                            command: "uvls/hide_config".into(),
+                            arguments: Some(vec![uri_json.clone()]),
+                        })
+                    } else {
+                        Some(Command {
+                            title: "show".into(),
+                            command: "uvls/show_config".into(),
+                            arguments: Some(vec![uri_json.clone()]),
+                        })
+                    },
                     data: None,
                 },
                 CodeLens {
@@ -494,6 +544,7 @@ async fn server_main() {
         .unwrap();
         spawn(webview::web_handler(pipeline.clone(), port));
         Backend {
+            settings: parking_lot::Mutex::new(Settings::default()),
             web_handler_uri: format!("http://localhost:{port}"),
             pipeline,
             coloring: Arc::new(color::State::new()),

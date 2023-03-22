@@ -63,7 +63,7 @@ pub enum UIEntryValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UIEntry {
     pub depth: u32,
-    pub prefix: Vec<Ustr>,
+    pub name: Ustr,
     pub value: UIEntryValue,
     pub open: bool,
 }
@@ -125,7 +125,7 @@ impl UIFileNode {
 #[derive(Debug, Clone, Default)]
 pub struct UIConfigState {
     pub files: IndexMap<FileID, UIFileNode>,
-    pub revision: u64,
+    pub tag: u8,
 }
 impl UIConfigState {
     fn unfold(&mut self) {
@@ -141,18 +141,19 @@ pub struct UIState {
     pub sync: UISyncState,
     pub dir: String,
     pub file_name: String,
+    pub show: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum UIAction {
     TreeDirty,
-    ToggleValue(FileID, Symbol),
-    ToggleFile(FileID),
+    ToggleValue(FileID, Symbol, u8),
+    ToggleFile(FileID, u8),
     UpdateRoot(Arc<RootGraph>),
     UpdateSMTModel(smt::SMTModel, Instant),
     UpdateSMTInvalid(String, Instant),
-    Set(FileID, Symbol, ConfigValue),
-    Unset(FileID, Symbol),
+    Set(FileID, Symbol, u8, ConfigValue),
+    Unset(FileID, Symbol, u8),
     Save,
     Show,
 }
@@ -199,8 +200,7 @@ fn create_file_tree(
                     Symbol::Dir(vdir),
                     UIEntry {
                         depth: depth as u32,
-                        prefix: vec!["attributes".into()],
-
+                        name: "attributes".into(),
                         value: UIEntryValue::Attributes,
                         open: false,
                     },
@@ -216,7 +216,7 @@ fn create_file_tree(
             values.insert(
                 sym,
                 UIEntry {
-                    prefix: prefix.to_vec(),
+                    name: prefix[prefix.len() - 1],
                     open: false,
                     depth: depth as u32,
                     value: match sym {
@@ -283,7 +283,7 @@ fn rebuild_tree(root: &RootGraph, config: &DirectConfig) -> Option<UIConfigState
         .collect();
     Some(UIConfigState {
         files,
-        revision: root.revision(),
+        tag: (root.revision() % 256) as u8,
     })
 }
 
@@ -387,8 +387,10 @@ async fn ui_event_loop(
     ui_config: &UseRef<UIConfigState>,
     ui_state: &UseRef<UIState>,
     pipeline: &AsyncPipeline,
-) {
+) -> Result<()> {
     let mut latest_model = Instant::now();
+    let mut ctag = 0;
+    let mut groot = pipeline.sync_root_global().await?;
     loop {
         let e = select! {Some(e)=rx_ui.next()=>e,Some(e)=rx_sync.recv()=>e, else=>{break;}};
 
@@ -402,6 +404,7 @@ async fn ui_event_loop(
                 tx_config.send_modify(|state| purge_state(&root, state));
                 ui_config.with_mut(|x| {
                     if let Some(tree) = rebuild_tree(&root, &tx_config.borrow()) {
+                        ctag = tree.tag;
                         *x = tree;
                         ui_state.with_mut(|state| {
                             state.sync = UISyncState::Valid;
@@ -413,8 +416,12 @@ async fn ui_event_loop(
                         });
                     }
                 });
+                groot = root.clone()
             }
-            UIAction::ToggleValue(file, index) => {
+            UIAction::ToggleValue(file, index, tag) => {
+                if tag != ctag {
+                    continue;
+                }
                 ui_config.with_mut(|UIConfigState { files, .. }| {
                     if let Some(v) = files
                         .get_mut(&file)
@@ -424,7 +431,10 @@ async fn ui_event_loop(
                     }
                 });
             }
-            UIAction::ToggleFile(file) => {
+            UIAction::ToggleFile(file, tag) => {
+                if tag != ctag {
+                    continue;
+                }
                 ui_config.with_mut(|UIConfigState { files, .. }| {
                     if let Some(file) = files.get_mut(&file) {
                         info!("set!");
@@ -432,27 +442,23 @@ async fn ui_event_loop(
                     }
                 });
             }
-            UIAction::Set(file, sym, val) => {
-                if matches!(ui_state.read().sync, UISyncState::Dirty) {
-                    return;
+            UIAction::Set(file, sym, tag, val) => {
+                if tag != ctag {
+                    continue;
                 }
-                if let Some(prefix) = ui_config.with_mut(|UIConfigState { files, .. }| {
+                ui_config.with_mut(|UIConfigState { files, .. }| {
                     if let Some(node) = files.get_mut(&file).and_then(|e| e.entries.get_mut(&sym)) {
                         node.update_config(Some(val.clone()));
-                        Some(node.prefix.clone())
-                    } else {
-                        None
                     }
-                }) {
-                    tx_config.send_modify(|config| {
-                        if !config.contains_key(&file) {
-                            config.insert(file, HashMap::new());
-                        }
-                        if let Some(cnode) = config.get_mut(&file) {
-                            cnode.insert(prefix, val.clone());
-                        }
-                    });
-                }
+                });
+                tx_config.send_modify(|config| {
+                    if !config.contains_key(&file) {
+                        config.insert(file, HashMap::new());
+                    }
+                    if let Some(cnode) = config.get_mut(&file) {
+                        cnode.insert(groot.file(file).prefix(sym), val.clone());
+                    }
+                });
             }
             UIAction::Save => {
                 let state = ui_state.read();
@@ -464,30 +470,41 @@ async fn ui_event_loop(
                 );
             }
             UIAction::Show => {
-                pipeline
-                    .inlay_state()
-                    .set_source(crate::inlays::InlaySource::Web(id))
-                    .await;
-                tx_config.send_modify(|_| {});
+                let show = ui_state.with_mut(|state| {
+                    state.show = !state.show;
+                    state.show
+                });
+
+                if !show {
+                    pipeline
+                        .inlay_state()
+                        .set_source(crate::inlays::InlaySource::None)
+                        .await;
+                } else {
+                    pipeline
+                        .inlay_state()
+                        .set_source(crate::inlays::InlaySource::Web(id))
+                        .await;
+                    tx_config.send_modify(|_| {});
+                }
             }
-            UIAction::Unset(file, sym) => {
-                if let Some(prefix) = ui_config.with_mut(|UIConfigState { files, .. }| {
+            UIAction::Unset(file, sym, tag) => {
+                if tag != ctag {
+                    continue;
+                }
+                ui_config.with_mut(|UIConfigState { files, .. }| {
                     if let Some(node) = files.get_mut(&file).and_then(|e| e.entries.get_mut(&sym)) {
                         node.update_config(None);
-                        Some(node.prefix.clone())
-                    } else {
-                        None
                     }
-                }) {
-                    tx_config.send_modify(|config| {
-                        if !config.contains_key(&file) {
-                            config.insert(file, HashMap::new());
-                        }
-                        if let Some(cnode) = config.get_mut(&file) {
-                            cnode.remove(&prefix);
-                        }
-                    });
-                }
+                });
+                tx_config.send_modify(|config| {
+                    if !config.contains_key(&file) {
+                        config.insert(file, HashMap::new());
+                    }
+                    if let Some(cnode) = config.get_mut(&file) {
+                        cnode.remove(&groot.file(file).prefix(sym));
+                    }
+                });
             }
             UIAction::UpdateSMTInvalid(msg, timestamp) => {
                 if latest_model > timestamp {
@@ -545,6 +562,7 @@ async fn ui_event_loop(
         }
     }
     info!("exit event");
+    Ok(())
 }
 
 pub async fn ui_main(
@@ -617,7 +635,7 @@ pub async fn ui_main(
     ui_event_loop(
         id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline,
     )
-    .await;
+    .await?;
 
     info!("exit main");
     Ok(())
@@ -711,6 +729,7 @@ pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
                                 .set_source(crate::inlays::InlaySource::None)
                                 .await;
                         }
+                        info!("Exit www");
                     })
                 },
             ),

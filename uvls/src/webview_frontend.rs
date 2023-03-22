@@ -89,6 +89,7 @@ struct ConfigInputProps<'a> {
     unsat: bool,
     file: FileID,
     sym: Symbol,
+    tag: u8,
 }
 fn to_number(input: &str) -> String {
     let mut split = input.split('.');
@@ -123,6 +124,7 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
         base,
         is_attrib: _,
         sym,
+        tag,
         file,
     } = &cx.props;
     let tx = use_coroutine_handle::<UIAction>(cx).unwrap();
@@ -131,7 +133,7 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
             rsx!{button{
                 class:"delete-btn",
                 onclick:move |_|{
-                    tx.send(UIAction::Unset(*file,*sym));
+                    tx.send(UIAction::Unset(*file,*sym,*tag));
                 },
                 Icon{icon:Icon::CircleCross,class:"btn-icon"}
             }}
@@ -147,7 +149,8 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
                 div{
                     class:"value-btn",
                     onclick:move |_|{
-                        tx.send(UIAction::Set(*file,*sym,ConfigValue::Bool(!b)));
+                        tx.send(UIAction::Set(*file,*sym,*tag,ConfigValue::Bool(!b)));
+
                     },
                     "{b}"
                 }
@@ -159,7 +162,7 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
                     required:true,
                     value:"{num}",
                     oninput:move |e|{
-                        tx.send(UIAction::Set(*file,*sym,ConfigValue::Number(to_number(&e.value).parse().unwrap_or(0.0))));
+                        tx.send(UIAction::Set(*file,*sym,*tag,ConfigValue::Number(to_number(&e.value).parse().unwrap_or(0.0))));
                         cx.needs_update();
                     }
                 }
@@ -171,7 +174,7 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
                     value:"{x}",
                     oninput:move |e|{
 
-                        tx.send(UIAction::Set(*file,*sym,ConfigValue::String(e.value.replace('"',""))));
+                        tx.send(UIAction::Set(*file,*sym,*tag,ConfigValue::String(e.value.replace('"',""))));
                         cx.needs_update();
 
                     }
@@ -192,7 +195,7 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
             div{
                 class:"value-slot",
                 onclick:move |_|{
-                    tx.send(UIAction::Set(*file,*sym,base.cloned().unwrap_or(ConfigValue::default(*ty))));
+                    tx.send(UIAction::Set(*file,*sym,*tag,base.cloned().unwrap_or(ConfigValue::default(*ty))));
                 },
                 if let Some(val) = base{
                     if *ty == Type::String{
@@ -211,7 +214,7 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
 }
 
 #[inline_props]
-fn Value(cx: Scope, value: UIEntryValue, file: FileID, sym: Symbol) -> Element {
+fn Value(cx: Scope, value: UIEntryValue, file: FileID, sym: Symbol, tag: u8) -> Element {
     match value {
         UIEntryValue::Attributes => None,
         UIEntryValue::Feature {
@@ -228,6 +231,7 @@ fn Value(cx: Scope, value: UIEntryValue, file: FileID, sym: Symbol) -> Element {
                 ty:*ty,
                 is_attrib:false,
                 file:*file,
+                tag:*tag,
             }
         }),
         UIEntryValue::Attribute {
@@ -243,6 +247,7 @@ fn Value(cx: Scope, value: UIEntryValue, file: FileID, sym: Symbol) -> Element {
                 ty:default.ty(),
                 is_attrib:true,
                 file:*file,
+                tag:*tag,
             }
         }),
     }
@@ -255,11 +260,10 @@ fn icon(value: &UIEntryValue) -> Icon {
     }
 }
 #[inline_props]
-fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: Symbol, file: FileID) -> Element {
-    let name = node.prefix[node.prefix.len() - 1];
+fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: Symbol, file: FileID, tag: u8) -> Element {
     let pad = node.depth * 30;
     let ui_task = use_coroutine_handle::<UIAction>(cx).unwrap();
-    let val = rsx! {Value{value:node.value.clone(),sym:*sym,file:*file}};
+    let val = rsx! {Value{value:node.value.clone(),sym:*sym,file:*file,tag:*tag}};
     let icon = icon(&node.value);
     if *leaf {
         cx.render(rsx! {
@@ -268,7 +272,7 @@ fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: Symbol, file: FileID) ->
                     span{
                         class:"name",
                         style:"padding-left:{pad}px",
-                        "{name}"
+                        "{node.name}"
                         Icon{icon:icon}
                     }
                 }
@@ -288,7 +292,7 @@ fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: Symbol, file: FileID) ->
                         span{
                             class:"toggle",
                             onclick:move |_|{
-                                ui_task.send(UIAction::ToggleValue(*file,*sym))
+                                ui_task.send(UIAction::ToggleValue(*file,*sym,*tag))
                             },
                             if node.open{
                                 rsx!{Icon{icon:Icon::Collapse}}
@@ -302,7 +306,7 @@ fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: Symbol, file: FileID) ->
                         }
                         span{
                             class:"name",
-                            "{name}"
+                            "{node.name}"
                         }
                         Icon{icon:icon}
                     }
@@ -318,6 +322,7 @@ fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: Symbol, file: FileID) ->
 fn file_values_iter<'a, 'b>(
     file: &'b UIFileNode,
     id: FileID,
+    tag: u8,
 ) -> impl Iterator<Item = LazyNodes<'a, 'b>>
 where
     'a: 'b,
@@ -345,7 +350,7 @@ where
                 .map(|(_, vn)| vn.depth <= v.depth)
                 .unwrap_or(true);
             rsx! {
-                FileEntry{node:v.clone(),leaf:leaf,file:id,sym:*k,key:"{k:?}"}
+                FileEntry{node:v.clone(),leaf:leaf,file:id,sym:*k,key:"{k:?}",tag:tag}
             }
         })
 }
@@ -357,6 +362,7 @@ pub fn App(cx: Scope<AppProps>) -> Element {
         sync: UISyncState::Dirty,
         dir: "".into(),
         file_name: "".into(),
+        show: false,
     });
     let ui_tx = use_coroutine(cx, |rx: UnboundedReceiver<UIAction>| {
         let pipeline = cx.props.pipeline.clone();
@@ -390,10 +396,11 @@ pub fn App(cx: Scope<AppProps>) -> Element {
             }
         }),
         UISyncState::Valid => {
+            let tag = lock.tag;
             let files = lock.files.iter().map(|(k, file)| {
                 let id = file.uri;
                 let key = k.ptr();
-                let values = file_values_iter(file, id);
+                let values = file_values_iter(file, id, tag);
                 rsx! {
                     tr {
                         td{}
@@ -409,7 +416,7 @@ pub fn App(cx: Scope<AppProps>) -> Element {
                                     span{
                                         class:"toggle",
                                         onclick:move |_|{
-                                            ui_tx.send(UIAction::ToggleFile(id))
+                                            ui_tx.send(UIAction::ToggleFile(id,tag))
                                         },
                                         if file.open{
                                             rsx!{Icon{icon:Icon::Collapse}}
@@ -482,7 +489,13 @@ pub fn App(cx: Scope<AppProps>) -> Element {
                                 onclick: move |_|{
                                     ui_tx.send(UIAction::Show);
                                 },
-                                "Show"
+                                if !state_lock.show{
+                                    rsx!{"Show"}
+                                }
+                                else{
+                                    rsx!{"Hide"}
+
+                                }
                             }
                         }
                     }

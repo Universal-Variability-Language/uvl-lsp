@@ -13,11 +13,12 @@ use tree_sitter::Node;
 
 //Path resolving on file level
 //imports between files allow for multiple possible meanings hence depth first serach is required
-//we also create util functions for attribute aggregates and path-symbol binding
+//This also containes functions for attribute aggregates and path-symbol binding and type checking
 pub fn common_prefix(a: &[Ustr], b: &[Ustr]) -> usize {
     a.iter().zip(b.iter()).take_while(|(i, k)| i == k).count()
 }
 
+//Find all symboles from origin under path
 pub fn resolve<'a>(
     files: &'a AstFiles,
     fs: &'a FileSystem,
@@ -33,6 +34,7 @@ pub fn resolve<'a>(
                     stack.push((tgt, &tail[common_prefix..]));
                 }
             }
+
             files[&file]
                 .lookup(Symbol::Root, tail, |_| true)
                 .map(move |sym| RootSymbol { file, sym })
@@ -40,6 +42,8 @@ pub fn resolve<'a>(
     })
     .flatten()
 }
+
+//Find all symboles from origin under path while keeping track of what sections path are bound to what symbol
 pub fn resolve_with_bind<'a>(
     files: &'a AstFiles,
     fs: &'a FileSystem,
@@ -98,6 +102,7 @@ pub fn resolve_attributes<'a, F: FnMut(RootSymbol, &[Ustr])>(
         f(attrib, prefix)
     });
 }
+//Find all attributes in orgin under context, allso gives the prefix for each attribut
 pub fn resolve_attributes_with_feature<
     'a,
     F: FnMut(RootSymbol, RootSymbol, &[Ustr], &AstDocument),
@@ -166,7 +171,7 @@ pub enum ResolveState {
     WrongType { expected: Type, found: Type },
     Resolved(RootSymbol),
 }
-
+//Best effort tupe resolving
 pub fn resolve_files(
     files: &[FileID],
     fs: &FileSystem,
@@ -188,11 +193,6 @@ pub fn resolve_files(
     ref_map
 }
 
-//Resolve types and references in  constraints, since there can be multiple possible interpretations,
-//two pases are used for equations.
-//First pass: Gather a set of all possible types for each equation side.
-//Second pass: Pick a common type and resolve each expression with the choosen type
-//We could simply forbid alias import and feature names but thats boring.
 fn resolve_file(ctx: &TypeResolveContext, file: FileID, err: &mut ErrorsAcc, ref_map: &mut RefMap) {
     let file_data = ctx.file(file);
     for i in file_data.constraints() {
@@ -200,19 +200,25 @@ fn resolve_file(ctx: &TypeResolveContext, file: FileID, err: &mut ErrorsAcc, ref
     }
     for r in file_data.all_references() {
         if file_data.parent(r, false).is_some() {
+            let mut ok = false;
             let mut found_some = false;
+
             for i in ctx.resolve(file, file_data.path(r)) {
+                info!("found {i}");
                 if matches!(i.sym, Symbol::Feature(..)) {
                     ref_map.insert(RootSymbol { sym: r, file }, i);
+                    ok = true;
                     break;
                 } else {
                     found_some = true;
                 }
             }
-            if found_some {
-                err.sym(r, file, 30, "expected a feature");
-            } else {
-                err.sym(r, file, 30, "unresolved reference");
+            if !ok {
+                if found_some {
+                    err.sym(r, file, 30, "expected a feature");
+                } else {
+                    err.sym(r, file, 30, "unresolved reference");
+                }
             }
         }
     }
@@ -221,6 +227,12 @@ type RefMap = HashMap<RootSymbol, RootSymbol>;
 fn select_type(flags: BitFlags<Type>) -> Type {
     flags.iter().next().unwrap()
 }
+
+//Since there can be multiple possible interpretations,
+//two pases are used for equations.
+//First pass: Gather a set of all possible types for each equation side.
+//Second pass: Pick a common type and resolve each expression with the choosen type
+//We could simply forbid alias import and feature names but thats boring.
 fn resolve_constraint(
     ctx: &TypeResolveContext,
     file: FileID,
@@ -321,7 +333,7 @@ fn resolve_constraint(
         _ => {}
     }
 }
-
+//Find possible types
 fn gather_expr_options(
     ctx: &TypeResolveContext,
     file: FileID,
@@ -395,7 +407,7 @@ fn gather_expr_options(
         }
     }
 }
-
+//Fix types
 fn commit_expr(
     ctx: &TypeResolveContext,
     file: FileID,

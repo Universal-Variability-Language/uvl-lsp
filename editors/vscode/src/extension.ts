@@ -23,9 +23,9 @@ import { posix } from 'path';
 import AdmZip = require('adm-zip');
 import { start } from 'repl';
 
-let client: LanguageClient|null=null;
-let outputChannel;
-const SOURCE_URI = "https://api.github.com/repos/caradhrass/uvls/releases/latest"
+let client: LanguageClient | null = null;
+let outputChannel:vscode.OutputChannel|null = null ;
+const SOURCE_URI = "https://api.github.com/repos/Universal-Variability-Language/uvl-lsp/releases/latest"
 
 
 
@@ -142,7 +142,7 @@ async function installExecutable(context: ExtensionContext): Promise<string | nu
 		const name = `uvls${def.endsWith("windows") ? ".exe" : ""}`;
 
 		progress.report({ message: "Installing..." });
-		zip.extractEntryTo(`${folder}/${name}`, context.globalStorageUri.fsPath, false,true);
+		zip.extractEntryTo(`${folder}/${name}`, context.globalStorageUri.fsPath, false, true);
 		const installDir = context.globalStorageUri;
 		const uvlsBinPath = vscode.Uri.joinPath(installDir, name).fsPath;
 		fs.chmodSync(uvlsBinPath, 0o755);
@@ -225,13 +225,37 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	vscode.commands.registerCommand('uvls.check_for_updates', async () => {
 		await stopClient();
-		await checkUpdate(context,false);
+		await checkUpdate(context, false);
 		await startClient(context);
 	});
 	vscode.commands.registerCommand('uvls.restart', async () => {
 		await stopClient();
 		await startClient(context);
 	});
+	vscode.commands.registerCommand('uvls.open_web', async (args) => {
+		const uri = args[0].uri;
+		// Create and show a new webview
+		const panel = vscode.window.createWebviewPanel(
+			'uvlsConfig', // Identifies the type of the webview. Used internally
+			'UVLS Configure', // Title of the panel displayed to the user
+			vscode.ViewColumn.One, // Editor column to show the new webview panel in.
+			{
+				enableScripts:true,
+				retainContextWhenHidden: true
+			} // Webview options. More on these later.
+		);
+		outputChannel?.appendLine(`${uri}`);
+		panel.webview.html  = panel.webview.html = `<!DOCTYPE html>
+		<html lang="en"">
+		<head>
+			<meta charset="UTF-8">
+			<title>Preview</title>
+		</head>
+		<body>
+			<iframe src="${uri}" style="position:fixed; top:0; left:0; bottom:0; right:0; width:100%; height:100%; border:none; margin:0; padding:0; overflow:hidden; z-index:999999;"></iframe>
+		</body>
+		</html>`
+	})
 	await checkUpdateMaybe(context);
 	await startClient(context);
 
@@ -257,17 +281,19 @@ async function startClient(context: ExtensionContext) {
 	};
 
 	const clientOptions: LanguageClientOptions = {
-		documentSelector: [{ scheme: "file", language: "uvl" },{scheme:"file",pattern:"**/*.uvl.json"}],
+		documentSelector: [{ scheme: "file", language: "uvl" }, { scheme: "file", pattern: "**/*.uvl.json" }],
 		outputChannel,
-		
-	
 	};
 	outputChannel.appendLine("test")
 	client = new LanguageClient('uvls', serverOptions, clientOptions);
+	client.onRequest("workspace/executeCommand",async (args)=>{
+		await vscode.commands.executeCommand(args.command,args.arguments);
+
+	});
 	client.setTrace(Trace.Verbose);
 	client.start();
 }
 async function stopClient(): Promise<void> {
 	if (client) client.stop();
 	client = null;
-  }
+}

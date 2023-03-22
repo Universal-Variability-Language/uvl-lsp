@@ -1,4 +1,5 @@
 
+                    
 .btn-save {
   float: right;
   border: none;
@@ -22,10 +23,28 @@
   color: white;
 
 }
+.value-btn{
+  padding:   0.1em 1em;
+
+  background-color: #444;
+  border: 1px solid #222;
+
+  
+}
+.value-btn:hover{
+  padding:   0.1em 1em;
+  background-color: #444444;
+  border: 1px solid white;
+  
+
+  
+}
+
 .input-value{
   background: none;
   color: #aaa;
   border: 1px solid white;
+  padding: 0.2em
     
 }       
 .input-value:focus{
@@ -153,6 +172,7 @@ button{
   display:inline-block;
   vertical-align: middle;
   margin-left: 0.1em;
+  float: right
 }
   
 .create-btn{
@@ -163,3 +183,4 @@ button{
   background-color: #333
   
 }
+                

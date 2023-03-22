@@ -150,6 +150,14 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
                         SMTModel::UNSAT { reasons } => reasons.iter().next().map(|i| i.symbol()),
                     };
                     if let Some(rs) = rs {
+                        let _ = client
+                            .show_document(ShowDocumentParams {
+                                uri: rs.file.url().unwrap(),
+                                external: Some(false),
+                                take_focus: Some(true),
+                                selection: Some(Range::default()),
+                            })
+                            .await;
                         //Force VS-Code to refresh inlays since inlay-hints-refresh is sometimes ingored
                         //When the document had no previous inlays
                         //Currently done via a pseudo edit(TODO this sucks)
@@ -167,6 +175,13 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
                                 "1".into(),
                             )],
                         )];
+
+                        client
+                            .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(
+                                (),
+                            )
+                            .await
+                            .unwrap();
                         let _ = client
                             .send_request::<tower_lsp::lsp_types::request::ApplyWorkspaceEdit>(
                                 ApplyWorkspaceEditParams {
@@ -207,19 +222,12 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
                             )
                             .await;
 
-                        let _ = client
-                            .show_document(ShowDocumentParams {
-                                uri: rs.file.url().unwrap(),
-                                external: Some(false),
-                                take_focus: Some(true),
-                                selection: Some(Range::default()),
-                            })
-                            .await;
                         info!("focus");
                     }
                     initial = false;
                 }
                 map = Some((model, root));
+
                 client
                     .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
                     .await

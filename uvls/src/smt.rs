@@ -297,6 +297,7 @@ fn create_modul(
     let mut asserts = Vec::new();
     let mut sym2var = IndexMap::new();
     let mut out = "(set-option :produce-unsat-cores true)(define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))\n".to_string();
+    //Encode features
     for &m in members {
         let file = root.file(m);
         for f in file.all_features() {
@@ -314,6 +315,7 @@ fn create_modul(
         let _ = writeln!(out, "(assert(!(= v{var} {val}):named a{name}))");
         asserts.push(SmtName::Config(rs));
     }
+    //Encode attributes
     for &m in members {
         let file = root.file(m);
         for f in file.all_features() {
@@ -358,7 +360,7 @@ fn create_modul(
             });
         }
     }
-
+    //Encode groups
     for &m in members {
         let file = root.file(m);
         for p in file.all_features() {
@@ -449,6 +451,21 @@ fn create_modul(
             }
         }
     }
+    //make root features mandatory
+    for &m in members {
+        let file = root.file(m);
+        for f in file
+            .direct_children(Symbol::Root)
+            .filter(|f| matches!(f, Symbol::Feature(..)))
+        {
+            let _ = writeln!(
+                out,
+                "(assert {})",
+                pseudo_bool(root, RootSymbol { file: m, sym: f }, &sym2var)?
+            );
+        }
+    }
+    //encode constraints
     #[derive(Debug)]
     enum CExpr<'a> {
         Constraint(&'a ConstraintDecl),
@@ -599,6 +616,7 @@ fn create_modul(
             asserts.push(SmtName::Constraint(RootSymbol { sym: c, file: m }));
         }
     }
+
     //info!("{out}");
     Some((out, SMTModule { sym2var, asserts }))
 }
@@ -779,12 +797,12 @@ async fn check_modules(
                                     if let Some(val) = fixed.get(&RootSymbol { sym, file: m }) {
                                         match val {
                                             SMTValueState::Off => {
-                                                e.sym(sym, m, 10, "dead feature");
+                                                e.sym_info(sym, m, 10, "dead feature");
                                                 false
                                             }
 
                                             SMTValueState::On => {
-                                                e.sym_info(sym, m, 10, "required feature");
+                                                //Is this even a good idea?
                                                 true
                                             }
                                             _ => true,
@@ -802,26 +820,26 @@ async fn check_modules(
                     for i in reasons {
                         match i {
                             SmtName::Attribute(sym) => {
-                                e.sym(sym.sym, sym.file, 12, "UNSAT attribute value");
+                                e.sym_info(sym.sym, sym.file, 12, "UNSAT attribute value");
                             }
                             SmtName::Constraint(sym) => {
-                                e.sym(sym.sym, sym.file, 12, "UNSAT constraint");
+                                e.sym_info(sym.sym, sym.file, 12, "UNSAT constraint");
                             }
 
                             SmtName::Group(sym) => {
-                                e.sym(sym.sym, sym.file, 12, "UNSAT group");
+                                e.sym_info(sym.sym, sym.file, 12, "UNSAT group");
                             }
 
                             SmtName::GroupMin(sym) => {
-                                e.sym(sym.sym, sym.file, 12, "UNSAT group minimum");
+                                e.sym_info(sym.sym, sym.file, 12, "UNSAT group minimum");
                             }
 
                             SmtName::GroupMax(sym) => {
-                                e.sym(sym.sym, sym.file, 12, "UNSAT group maximum");
+                                e.sym_info(sym.sym, sym.file, 12, "UNSAT group maximum");
                             }
 
                             SmtName::GroupMember(sym) => {
-                                e.sym(sym.sym, sym.file, 12, "UNSAT group member");
+                                e.sym_info(sym.sym, sym.file, 12, "UNSAT group member");
                             }
                             _ => {}
                         }
@@ -894,7 +912,7 @@ async fn check_config(
                         &config.attributes,
                     )
                     .ok_or("model generation failed")?;
-                    let model = create_model(&root, module, source, true).await;
+                    let model = create_model(&root, module, source, false).await;
                     if let Ok(model) = model.as_ref() {
                         inlay_handler
                             .maybe_publish(
