@@ -4,22 +4,12 @@ use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Tree};
 
-//The parsing frontend
-//To allow for more nimble and robust parsing, we use 2 stage process to parse 2 diffrent syntax
-//trees with diffrent grammers:
-// - Source code is initally parsed with a very relaxed UVL tree-sitter grammer. This results in
-//   loose syntax tree of UVL codefragments. We call this tree the 'green tree'
-//   it's used for all syntax analysis. Its allso very cheap to parse and incremental so it can be
-//   parsed on every keystroke for syntax highlighting and completion context information.
-//   Furthermore tree-sitter internal error recovery and temporal parsing provide
-//   good error corrections in many cases so parsing alomost never fails.
-// - The green tree is translated into the red tree asynchronously. This second tree follows the UVL
-//   grammar spec and is used for all semantic analysis. During the translation
-//   from green to red tree very specific syntax errors are possible and forwared to the user.
-//   All red trees are lated linked into a single model (the Root Graph) asynchonously.
+
 use ropey::Rope;
 
 //update the document text using text deltas form the editor
+//for some insane reason lsp uses utf16 code points as offsets 
+//so we have to transform utf16->bytes for tree-sitter
 pub fn update_text(
     source: &mut Rope,
     tree: Option<&mut Tree>,

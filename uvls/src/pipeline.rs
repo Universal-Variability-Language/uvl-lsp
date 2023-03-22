@@ -26,6 +26,20 @@ use tokio::{
 };
 use tower_lsp::lsp_types::*;
 use util::Result;
+//The parsing frontend
+//To allow for more nimble and robust parsing, we use 2 stage process to parse 2 different syntax
+//trees with different grammers:
+// - Source code is initally parsed with a very relaxed UVL tree-sitter grammar. This results in
+//   loose syntax tree of UVL codefragments. We call this tree the 'green tree'
+//   it's used for all syntax analysis. Its also very cheap to parse and incremental so it can be
+//   parsed on every keystroke for syntax highlighting and completion context information.
+//   Furthermore tree-sitter internal error recovery and temporal parsing provide
+//   good error corrections in many cases so parsing almost never fails.
+// - The green tree is translated into the red tree asynchronously. This second tree follows the UVL
+//   grammar spec and is used for all semantic analysis. During the translation
+//   from green to red tree very specific syntax errors are possible and forwarded to the user.
+//   All red trees are lated linked into a single model (the Root Graph) asynchronously.
+//Green Trees are stored as Drafts while red trees are stored as an AST-ECS like structure
 enum DraftMsg {
     Delete(Instant),
     Update(DidChangeTextDocumentParams, Instant),
@@ -59,6 +73,8 @@ async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
         }
     }
 }
+
+//This handler handles update for a single draft and parses it incrementally with tree-sitter
 async fn draft_handler(
     mut rx: mpsc::UnboundedReceiver<DraftMsg>,
     uri: Url,
@@ -145,7 +161,7 @@ enum LinkMsg {
     UpdateConfig(Arc<config::ConfigDocument>),
     Shutdown,
 }
-
+//This handler links documents together, it also does type checking
 async fn link_handler(
     mut rx: mpsc::Receiver<LinkMsg>,
     tx_cache: watch::Sender<Arc<RootGraph>>,
@@ -254,9 +270,10 @@ async fn link_handler(
         }
     }
 }
-
+//All the parsing components and their consumers in a central interface
 #[derive(Clone)]
 pub struct AsyncPipeline {
+    //Latest drafts of all known documents
     drafts: Arc<DashMap<Url, DraftState>>,
     tx_link: mpsc::Sender<LinkMsg>,
     tx_err: mpsc::Sender<DiagnosticUpdate>,
@@ -264,10 +281,12 @@ pub struct AsyncPipeline {
     tx_dirty_tree: broadcast::Sender<()>,
     revision_counter: Arc<AtomicU64>,
     client: tower_lsp::Client,
+    //Code inlays are managed globally
     inlay_handler: InlayHandler,
 }
 impl AsyncPipeline {
     pub fn new(client: tower_lsp::Client) -> Self {
+
         let (tx_link, rx_link) = mpsc::channel(1024);
         let (tx_root, rx_root) = watch::channel(Arc::new(RootGraph::default()));
         let (tx_err, rx_err) = mpsc::channel(1024);
@@ -394,6 +413,7 @@ impl AsyncPipeline {
             let _ = state.handler.send(DraftMsg::Update(params, Instant::now()));
         }
     }
+    //Wait for latest draft version
     pub async fn snapshot_draft(&self, uri: &Url) -> Result<Option<Draft>> {
         if let Some(state) = self.drafts.get(uri) {
             let (tx, rx) = oneshot::channel();
@@ -403,6 +423,7 @@ impl AsyncPipeline {
             Ok(None)
         }
     }
+    //Wait until uri is found in the linked root graph
     pub async fn snapshot_root(&self, uri: &Url) -> Result<Arc<RootGraph>> {
         let time = Instant::now();
         let mut rx = self.rx_root.clone();
@@ -421,6 +442,7 @@ impl AsyncPipeline {
     pub fn root(&self) -> watch::Receiver<Arc<RootGraph>> {
         self.rx_root.clone()
     }
+    //wait until uri newer than timestamp in the root graph
     pub async fn snapshot_root_sync(
         &self,
         uri: &Url,
@@ -454,7 +476,7 @@ impl AsyncPipeline {
             rx.changed().await?;
         }
     }
-
+    //wait until ALL parsing is done and root is clean
     pub async fn sync_root_global(&self) -> Result<Arc<RootGraph>> {
         let mut rx = self.rx_root.clone();
         loop {
@@ -472,6 +494,7 @@ impl AsyncPipeline {
             rx.changed().await?;
         }
     }
+    //get latest draft and sync root
     pub async fn snapshot(&self, uri: &Url, sync: bool) -> Result<Option<(Draft, Arc<RootGraph>)>> {
         let time = Instant::now();
         if let Some(draft) = self.snapshot_draft(uri).await? {

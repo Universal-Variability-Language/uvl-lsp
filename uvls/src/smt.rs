@@ -288,7 +288,8 @@ impl Display for Type {
     }
 }
 
-fn create_modul(
+//Encodes a UVL module into an SMT-LIB module
+fn create_module(
     root: &RootGraph,
     members: &[FileID],
     features: &HashMap<RootSymbol, ConfigValue>,
@@ -645,7 +646,8 @@ impl Default for SMTModel {
         }
     }
 }
-
+//find constant boolean values for dead features and other cool analysis
+//this is quite naive and should be improved with a better solver
 async fn find_fixed(
     root: &RootGraph,
     solve: &mut SmtSolver,
@@ -775,7 +777,7 @@ async fn check_modules(
                 let members = members.clone();
                 async move {
                     let (source, module) =
-                        create_modul(&root, &members, &HashMap::new(), &HashMap::new())
+                        create_module(&root, &members, &HashMap::new(), &HashMap::new())
                             .ok_or("model generation failed")?;
                     //info!("HIR: {:#?}", hir);
                     let model = create_model(&root, module, source, true).await;
@@ -905,7 +907,7 @@ async fn check_config(
                 let root = root.clone();
                 let config = v.clone();
                 async move {
-                    let (source, module) = create_modul(
+                    let (source, module) = create_module(
                         &root,
                         v.members.iter().cloned().collect::<Vec<_>>().as_slice(),
                         &config.features,
@@ -990,7 +992,7 @@ async fn check_config(
         .map(|(k, v)| (*k, v.revision))
         .collect()
 }
-
+//SMT-checks modules when the RootGraph changed
 pub async fn check_handler(
     mut rx_root: watch::Receiver<Arc<RootGraph>>,
     tx_err: mpsc::Sender<DiagnosticUpdate>,
@@ -1071,10 +1073,11 @@ async fn config_create_model2(
     attribs: &HashMap<RootSymbol, ConfigValue>,
 ) -> Result<SMTModel> {
     let (source, modul) =
-        create_modul(root, members, &features, &attribs).ok_or("Model Generation Failure")?;
+        create_module(root, members, &features, &attribs).ok_or("Model Generation Failure")?;
     create_model(root, modul, source, false).await
 }
 use crate::webview::UIAction;
+//Check a single config, used in the config editor
 pub async fn create_config_model(
     timestamp: Instant,
     root: Arc<RootGraph>,

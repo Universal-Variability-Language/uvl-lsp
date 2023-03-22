@@ -268,13 +268,15 @@ impl FileSystem {
     }
 }
 
-//When to files are related through imports they form a cluster
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelErrorState {
     SyntaxError,
     LinkError,
     Valid,
 }
+//When to files are related through imports they form a module
+//Modules are linked and cached
 #[derive(Debug, Clone)]
 pub struct ModuleState {
     pub members: Vec<FileID>,
@@ -287,6 +289,8 @@ pub struct LinkedModule {
     pub revision: u64,
     pub ref_map: HashMap<RootSymbol, RootSymbol>,
 }
+//each config file forms a special module with preset values for attributes and features
+//also cached between iterations
 #[derive(Clone, Debug)]
 pub struct ConfigModule {
     pub revision: u64,
@@ -430,6 +434,7 @@ impl Cache {
         info!("updating cache dirty {:?}", dirty);
         let time = Instant::now();
         let mut file2module = HashMap::new();
+        //build modules
         let modules: IndexMap<Vec<FileID>, Arc<LinkedModule>> = find_modules(&files, &fs)
             .map(|members| {
                 let dirty = members.iter().any(|f| dirty.contains(f));
@@ -457,6 +462,7 @@ impl Cache {
                 (k, v)
             })
             .collect();
+        //build cached modules
         let config_modules = configs
             .values()
             .map(|doc| {

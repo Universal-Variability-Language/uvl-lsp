@@ -286,7 +286,7 @@ fn rebuild_tree(root: &RootGraph, config: &DirectConfig) -> Option<UIConfigState
         tag: (root.revision() % 256) as u8,
     })
 }
-
+//Keeps the UI in sync with its context
 async fn ui_sync(
     id: u64,
     pipeline: AsyncPipeline,
@@ -378,18 +378,18 @@ fn save_config(config: &DirectConfig, dir: String, file_name: String, root: &Roo
         let _ = std::fs::write(&path, json);
     });
 }
-
+//redux style state management
 async fn ui_event_loop(
     id: u64,
-    tx_config: watch::Sender<DirectConfig>,
-    mut rx_ui: UnboundedReceiver<UIAction>,
-    mut rx_sync: mpsc::Receiver<UIAction>,
-    ui_config: &UseRef<UIConfigState>,
-    ui_state: &UseRef<UIState>,
+    tx_config: watch::Sender<DirectConfig>,//The current configuration
+    mut rx_ui: UnboundedReceiver<UIAction>,//Incoming events from the ui
+    mut rx_sync: mpsc::Receiver<UIAction>,//Incoming events from the server
+    ui_config: &UseRef<UIConfigState>,//Displayed configuration tree
+    ui_state: &UseRef<UIState>,//Displayed meta parameters 
     pipeline: &AsyncPipeline,
 ) -> Result<()> {
     let mut latest_model = Instant::now();
-    let mut ctag = 0;
+    let mut ctag = 0; //Shortend root revision
     let mut groot = pipeline.sync_root_global().await?;
     loop {
         let e = select! {Some(e)=rx_ui.next()=>e,Some(e)=rx_sync.recv()=>e, else=>{break;}};
@@ -564,7 +564,7 @@ async fn ui_event_loop(
     info!("exit event");
     Ok(())
 }
-
+//UI coroutine handles all state managment and creation
 pub async fn ui_main(
     id: u64,
     pipeline: AsyncPipeline,
@@ -640,7 +640,7 @@ pub async fn ui_main(
     info!("exit main");
     Ok(())
 }
-
+//HTTP server for the configuration interface
 pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
     info!("Starting web handler");
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
@@ -698,7 +698,7 @@ pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
             get(
                 move |ws: WebSocketUpgrade, Path((op, path)): Path<(String, String)>| async move {
                     ws.on_upgrade(move |socket| async move {
-                        // When the WebSocket is upgraded, launch the LiveView with the app component
+                        // When the WebSocket is upgraded, launch the LiveView with the App component
                         lazy_static::lazy_static! {
                             pub static ref COUNTER:AtomicU64= AtomicU64::new(0);
                         }
