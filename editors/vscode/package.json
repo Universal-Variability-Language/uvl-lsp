@@ -2,7 +2,7 @@
   "name": "uvls-code",
   "displayName": "UVLS - Universal Variability Language Server",
   "description": "VSCode frontend for UVLS",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "publisher": "caradhras",
   "icon": "assets/uvls-256.png",
   "engines": {
@@ -13,7 +13,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://codeberg.org/caradhras/uvls"
+    "url": "https://github.com/Universal-Variability-Language/uvl-lsp"
   },
   "activationEvents": [
     "onLanguage:uvl",

@@ -11,8 +11,10 @@ Currently supports
 - decent error messages and robust parsing using [tree-sitter](https://tree-sitter.github.io/tree-sitter/)
 - Z3 based configuration 
 - Inlays
-- Goto definitions
-
+- goto definitions
+- configuration editor
+## Configuration Editor
+![alt text](assets/show_editor.gif)
 ## Requirements
 On most common platforms installing this extension should just work, without any dependencies.
 When the automatic install fails you will need to build the server you're self.
