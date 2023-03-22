@@ -509,9 +509,6 @@ async fn ui_event_loop(
                         ui_state.with_mut(|state| state.sat = SatState::SAT);
                         for (k, v) in values {
                             if let Some(file) = files.get_mut(&k.file) {
-                                if matches!(k.sym, Symbol::Attribute(..)) {
-                                    info!("{k:?}: {v}");
-                                }
                                 if let Some(entry) = file.entries.get_mut(&k.sym) {
                                     entry.update_smt(Some(v));
                                     entry.unsat(false);

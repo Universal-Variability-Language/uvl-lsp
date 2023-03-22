@@ -1,0 +1,94 @@
+{
+  "name": "uvls-code",
+  "displayName": "UVLS - Universal Variability Language Server",
+  "description": "VSCode frontend for UVLS",
+  "version": "0.0.8",
+  "publisher": "caradhras",
+  "icon": "assets/uvls-256.png",
+  "engines": {
+    "vscode": "^1.73.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://codeberg.org/caradhras/uvls"
+  },
+  "activationEvents": [
+    "onLanguage:uvl",
+    "onLanguage:json"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "uvls.check_for_updates",
+        "title": "Check for updates",
+        "category": "UVLS"
+      },
+      {
+        "command": "uvls.restart",
+        "title": "Restart the server",
+        "category": "UVLS"
+      }
+    ],
+    "languages": [
+      {
+        "id": "uvl",
+        "extensions": [
+          ".uvl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "UVL Language Server",
+      "properties": {
+        "uvls.path": {
+          "scope": "resource",
+          "type": "string",
+          "description": "Path to `uvls` executable. Example: `C:/uvls/target/release/uvls.exe`.",
+          "format": "path"
+        },
+        "uvls.auto_update": {
+          "scope": "resource",
+          "type": "boolean",
+          "description": "check for updates",
+          "default": true
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+		"compile": "tsc -p ./",
+		"lint": "eslint src --ext ts",
+		"watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.0.0",
+    "@types/mocha": "^10.0.0",
+    "@types/node": "^16.18.9",
+    "@types/vscode": "^1.73.0",
+    "@types/which": "^2.0.1",
+    "@typescript-eslint/eslint-plugin": "^5.42.0",
+    "@typescript-eslint/parser": "^5.42.0",
+    "@vscode/test-electron": "^2.2.0",
+    "esbuild": "^0.15.18",
+    "eslint": "^8.26.0",
+    "glob": "^8.0.3",
+    "mocha": "^10.1.0",
+    "typescript": "^4.8.4"
+  },
+  "dependencies": {
+    "@types/adm-zip": "^0.5.0",
+    "@types/mkdirp": "^1.0.2",
+    "adm-zip": "^0.5.9",
+    "axios": "^0.27.2",
+    "mkdirp": "^1.0.4",
+    "vscode-languageclient": "^8.0.2",
+    "which": "^3.0.0"
+  }
+}
