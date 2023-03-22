@@ -1,24 +1,33 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    fmt::Display,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use crate::query::Queries;
 use futures::Future;
 use lazy_static::lazy_static;
 use ropey::Rope;
+use std::error;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
-use tower_lsp::lsp_types::{Position, Range};
+use tower_lsp::lsp_types::{Position, Range, Url};
 use tree_sitter::{Language, Node};
 
 pub struct ParseConstants {
     pub queries: Queries,
-    pub lang: Language,
+    pub uvl: Language,
+    pub json: Language,
 }
 
 impl ParseConstants {
     pub fn new() -> ParseConstants {
         let lang = tree_sitter_uvl::language();
         let queries = Queries::new(&lang);
-        ParseConstants { queries, lang }
+        ParseConstants {
+            queries,
+            uvl: lang,
+            json: tree_sitter_json::language(),
+        }
     }
 }
 
@@ -87,14 +96,50 @@ pub fn header_kind(node: Node) -> &str {
     node.child_by_field_name("header").unwrap().kind()
 }
 
+pub type Result<T> = std::result::Result<T, Box<dyn error::Error + Send + Sync>>;
+fn shutdown_error() -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error {
+        code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+        message: "".into(),
+        data: None,
+    }
+}
+
+#[derive(Debug)]
+struct CancelledError {}
+impl Display for CancelledError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cancelled")
+    }
+}
+impl error::Error for CancelledError {}
+
 pub async fn maybe_cancel<'a, F: Future + 'a>(
     token: &CancellationToken,
     f: F,
-) -> Result<F::Output,&'static str> {
+) -> Result<F::Output> {
     let token = token.clone();
     select! {
-        _ = token.cancelled() => Err("cancled"),
+        _ = token.cancelled() => Err(CancelledError{})?,
         out = f => Ok(out)
+    }
+}
+
+pub async fn retry<'a, T, R, F>(f: F) -> Result<T>
+where
+    F: Fn() -> R,
+    R: Future<Output = Result<T>> + 'a,
+{
+    loop {
+        match f().await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if e.downcast_ref::<CancelledError>().is_none() {
+                    return Err(e);
+                }
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
 }
 pub struct AtomicSemaphorePermit<'a> {
@@ -121,4 +166,23 @@ impl<'a> Drop for AtomicSemaphorePermit<'a> {
     fn drop(&mut self) {
         self.owner.counter.fetch_sub(1, Ordering::SeqCst);
     }
+}
+pub fn is_config(uri: &Url) -> bool {
+    uri.to_file_path()
+        .map(|fp| {
+            fp.extension()
+                .map(|ext| ext.to_str().unwrap() == "json")
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+pub fn is_uvl(uri: &Url) -> bool {
+    uri.to_file_path()
+        .map(|fp| {
+            fp.extension()
+                .map(|ext| ext.to_str().unwrap() == "uvl")
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
 }

@@ -10,16 +10,40 @@ use tokio::time::Instant;
 use tree_sitter::*;
 use ustr::Ustr;
 thread_local! {
-    static PARSER:RefCell<Parser> = RefCell::new(Parser::new())
+    static PARSER_UVL:RefCell<Parser> = RefCell::new(Parser::new());
+    static PARSER_JSON:RefCell<Parser> = RefCell::new(Parser::new());
 }
 pub fn parse(src: &Rope, old_tree: Option<&Tree>) -> Tree {
     let t = Instant::now();
-    let tree = PARSER
+    let tree = PARSER_UVL
         .with(|parser| {
             if parser.borrow().language().is_none() {
-                let _ = parser.borrow_mut().set_language(TS.lang);
+                let _ = parser.borrow_mut().set_language(TS.uvl);
             }
 
+            parser.borrow_mut().parse_with(
+                &mut |byte_offset: usize, _: Point| {
+                    if byte_offset > src.len_bytes() {
+                        ""
+                    } else {
+                        src.byte_slice(byte_offset..).chunks().next().unwrap_or("")
+                    }
+                },
+                old_tree,
+            )
+        })
+        .unwrap();
+    info!("Parsed in {:?}", t.elapsed());
+    tree
+}
+
+pub fn parse_json(src: &Rope, old_tree: Option<&Tree>) -> Tree {
+    let t = Instant::now();
+    let tree = PARSER_JSON
+        .with(|parser| {
+            if parser.borrow().language().is_none() {
+                let _ = parser.borrow_mut().set_language(TS.json);
+            }
             parser.borrow_mut().parse_with(
                 &mut |byte_offset: usize, _: Point| {
                     if byte_offset > src.len_bytes() {
@@ -50,7 +74,6 @@ impl SymbolSlice for str {
         Cow::Borrowed(&self[node])
     }
 }
-
 
 impl SymbolSlice for String {
     fn slice_raw(&self, node: Span) -> Cow<str> {
@@ -122,7 +145,7 @@ pub fn parse_lang_lvl<S: SymbolSlice>(node: Node, source: &S) -> Option<SymbolSp
     }
 }
 pub fn parse_lang_lvl_path<S: SymbolSlice>(node: Node, source: &S) -> Option<Path> {
-    info!("{:?}",node);
+    info!("{:?}", node);
     if let Some(name) = parse_lang_lvl(node, source) {
         Some(Path {
             names: vec![name.name],
@@ -148,15 +171,9 @@ pub fn parse_lang_lvl_path<S: SymbolSlice>(node: Node, source: &S) -> Option<Pat
     }
 }
 pub fn parse_or_lang_lvl<S: SymbolSlice>(node: Node, source: &S) -> Option<Path> {
-    parse_path(node,source).or_else(||parse_lang_lvl_path(node,source))
-}
-pub fn parse_path_from_source(span:Span,source:&Rope){
-    let _path = Path::default();
-    for _c in source.slice(span).chars(){
-    
-
-    }
-
-
+    parse_path(node, source).or_else(|| parse_lang_lvl_path(node, source))
 }
 
+pub fn move_span(span: Span, offset: usize) -> Span {
+    span.start + offset..span.end + offset
+}

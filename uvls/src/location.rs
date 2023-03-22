@@ -2,8 +2,10 @@ use crate::ast::*;
 use crate::completion::*;
 use crate::document::Draft;
 use crate::parse::*;
+use crate::resolve;
 use crate::semantic::*;
 use crate::util::*;
+use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
 use tower_lsp::lsp_types::*;
@@ -13,8 +15,8 @@ use tree_sitter::Node;
 pub enum TextObjectKind {
     Attribute,
     Feature,
-    AttributeReference,
     FeatureReference,
+    Reference(Type),
     ImportPath,
     ImportAlias,
     Aggregate(Option<Path>),
@@ -43,12 +45,21 @@ pub fn attribute_prefix(node: Node, source: &Rope) -> Option<Path> {
         _ => None,
     }
 }
+pub fn whole_expr(node: Node) -> Node {
+    match node.parent().map(|i| i.kind()) {
+        Some("blk") => node,
+        Some(_) => whole_expr(node.parent().unwrap()),
+        _ => node,
+    }
+}
 
 pub fn find_text_object_impl(
     node: Node,
     source: &Rope,
     pos: &Position,
     offset: usize,
+    file: FileID,
+    root: &Snapshot,
 ) -> Option<TextObject> {
     match find_section(node) {
         Section::Imports => {
@@ -98,16 +109,30 @@ pub fn find_text_object_impl(
             let (path, p_node) = longest_path(node, source)?;
 
             match estimate_expr(p_node, pos, source) {
-                CompletionEnv::Numeric => Some(TextObject {
-                    kind: TextObjectKind::AttributeReference,
-                    selected_segment: path.segment(offset),
-                    path,
-                }),
-                CompletionEnv::Constraint => Some(TextObject {
-                    kind: TextObjectKind::FeatureReference,
-                    selected_segment: path.segment(offset),
-                    path,
-                }),
+                CompletionEnv::Numeric | CompletionEnv::Constraint => {
+                    let mut ty_map = HashMap::new();
+                    resolve::estimate_types(
+                        whole_expr(p_node),
+                        Type::Bool.into(),
+                        source,
+                        &mut ty_map,
+                        file,
+                        root,
+                    );
+
+                    Some(TextObject {
+                        kind: TextObjectKind::Reference(
+                            ty_map
+                                .get(&p_node.id())
+                                .iter()
+                                .next()
+                                .map(|t| **t)
+                                .unwrap_or(Type::Bool),
+                        ),
+                        selected_segment: path.segment(offset),
+                        path,
+                    })
+                }
 
                 CompletionEnv::Aggregate { context } => Some(TextObject {
                     kind: TextObjectKind::Aggregate(context),
@@ -120,13 +145,18 @@ pub fn find_text_object_impl(
         _ => None,
     }
 }
-pub fn find_text_object(draft: &Draft, pos: &Position) -> Option<TextObject> {
+pub fn find_text_object(
+    draft: &Draft,
+    pos: &Position,
+    file: FileID,
+    root: &Snapshot,
+) -> Option<TextObject> {
     match draft {
-        Draft::Source { .. } => {
+        Draft::JSON { .. } => {
             //TODO
             None
         }
-        Draft::Tree { source, tree, .. } => {
+        Draft::UVL { source, tree, .. } => {
             let start = char_offset(pos, source);
             let end = start + 1;
             find_text_object_impl(
@@ -137,9 +167,10 @@ pub fn find_text_object(draft: &Draft, pos: &Position) -> Option<TextObject> {
                 source,
                 pos,
                 source.try_char_to_byte(start).ok()?,
+                file,
+                root,
             )
         }
-        _ => None,
     }
 }
 
@@ -149,10 +180,10 @@ fn find_definitions(
     pos: &Position,
     uri: &Url,
 ) -> Option<Vec<RootSymbol>> {
-    let obj = find_text_object(draft, pos)?;
+    let file_id = root.file_id(uri)?;
+    let obj = find_text_object(draft, pos, file_id, root)?;
     info!("{:?}", obj);
 
-    let file_id = root.file_id(uri)?;
     let _file = root.file(file_id);
     match obj.kind {
         TextObjectKind::ImportAlias => {
@@ -164,13 +195,33 @@ fn find_definitions(
             }
             None
         }
-        TextObjectKind::ImportPath => root.fs.resolve(file_id, &obj.path.names).map(|f| {
+        TextObjectKind::ImportPath => root.fs().resolve(file_id, &obj.path.names).map(|f| {
             vec![RootSymbol {
                 file: f,
                 sym: Symbol::Root,
             }]
         }),
-        TextObjectKind::FeatureReference | TextObjectKind::AttributeReference => {
+        TextObjectKind::FeatureReference => {
+            for bind in root.resolve_with_binding(file_id, &obj.path.names) {
+                let last = bind.last().unwrap().0;
+                info!("{:?}", bind);
+                if matches!(last.sym, Symbol::Feature(..)) {
+                    return Some(vec![bind
+                        .iter()
+                        .find_map(|(sym, index)| {
+                            if obj.selected_segment < *index {
+                                Some(*sym)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(last)]);
+                }
+            }
+            None
+        }
+
+        TextObjectKind::Reference(ty) => {
             for bind in root.resolve_with_binding(file_id, &obj.path.names) {
                 let last = bind.last().unwrap().0;
                 let dst_file = root.file(last.file);
@@ -178,13 +229,28 @@ fn find_definitions(
 
                 if dst_file
                     .type_of(last.sym)
-                    .map(|ty| {
-                        if obj.kind == TextObjectKind::FeatureReference {
-                            ty == Type::Feature
-                        } else {
-                            ty == Type::Number
-                        }
-                    })
+                    .map(|dty| ty == dty)
+                    .unwrap_or(false)
+                {
+                    return Some(vec![bind
+                        .iter()
+                        .find_map(|(sym, index)| {
+                            if obj.selected_segment < *index {
+                                Some(*sym)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(last)]);
+                }
+            }
+            for bind in root.resolve_with_binding(file_id, &obj.path.names) {
+                let last = bind.last().unwrap().0;
+                let dst_file = root.file(last.file);
+                info!("{:?}", bind);
+                if dst_file
+                    .type_of(last.sym)
+                    .map(|dty| matches!(dty, Type::String | Type::Real | Type::Bool))
                     .unwrap_or(false)
                 {
                     return Some(vec![bind
@@ -251,21 +317,24 @@ pub fn goto_definition(
     ))
 }
 
-fn reverse_resolve(
-    root: &Snapshot,
-    dst_file: &Document,
-    dst_id: FileID,
-    tgt: Symbol,
-) -> Vec<RootSymbol> {
-    let ty = dst_file.type_of(tgt);
-
-    root.imported(dst_id)
+fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<RootSymbol> {
+    let ty = root.type_of(RootSymbol {
+        sym: tgt,
+        file: dst_id,
+    });
+    root.fs()
+        .recursive_imported(dst_id)
         .iter()
         .flat_map(|&src_id| {
             let src_file = root.file(src_id);
             src_file
                 .all_references()
-                .filter(move |r| src_file.type_of(*r) == ty)
+                .filter(move |r| {
+                    root.type_of(RootSymbol {
+                        sym: *r,
+                        file: src_id,
+                    }) == ty
+                })
                 .filter(move |r| {
                     root.resolve(src_id, src_file.path(*r)).any(|sym| {
                         sym == RootSymbol {
@@ -290,7 +359,7 @@ fn find_references_symboles(
 ) -> Option<Vec<RootSymbol>> {
     let file_id = root.file_id(uri)?;
     let file = root.file(file_id);
-    let obj = find_text_object(draft, pos)?;
+    let obj = find_text_object(draft, pos, file_id, root)?;
     info!("{:?}", obj);
     match obj.kind {
         TextObjectKind::Feature => file
@@ -298,25 +367,26 @@ fn find_references_symboles(
                 matches!(sym, Symbol::Feature(..))
             })
             .next()
-            .map(|f| reverse_resolve(root, file, file_id, f)),
+            .map(|f| reverse_resolve(root, file_id, f)),
 
         TextObjectKind::Attribute => file
             .lookup(Symbol::Root, &obj.path.names, |sym| {
                 matches!(sym, Symbol::Feature(..) | Symbol::Attribute(..))
             })
             .next()
-            .map(|a| reverse_resolve(root, file, file_id, a)),
+            .map(|a| reverse_resolve(root, file_id, a)),
 
         TextObjectKind::FeatureReference
-        | TextObjectKind::AttributeReference
+        | TextObjectKind::Reference(..)
         | TextObjectKind::Aggregate(..) => find_definitions(root, draft, pos, uri).map(|defs| {
             defs.iter()
-                .flat_map(|def| reverse_resolve(root, root.file(def.file), def.file, def.sym))
+                .flat_map(|def| reverse_resolve(root, def.file, def.sym))
                 .collect()
         }),
         _ => None,
     }
 }
+
 pub fn find_references(
     root: &Snapshot,
     draft: &Draft,

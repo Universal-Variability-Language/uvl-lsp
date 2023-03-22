@@ -1,0 +1,506 @@
+#![allow(dead_code)]
+
+use flexi_logger::FileSpec;
+use get_port::Ops;
+use pipeline::AsyncPipeline;
+use semantic::RootGraph;
+use tokio::{join, spawn};
+
+use document::*;
+use log::info;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::SystemTime;
+use tower_lsp::jsonrpc::Result;
+use tower_lsp::lsp_types::*;
+use tower_lsp::{Client, LanguageServer, LspService, Server};
+mod ast;
+mod cache;
+mod check;
+mod color;
+mod completion;
+mod config;
+mod document;
+mod inlays;
+mod location;
+mod parse;
+mod pipeline;
+mod query;
+mod resolve;
+mod semantic;
+mod smt;
+mod util;
+mod webview;
+mod webview_frontend;
+//mod webview_frontend;
+static VERSION: &str = "v0.0.12";
+//The server core, request and respones handling
+
+struct Backend {
+    client: Client,
+    coloring: Arc<color::State>,
+    pipeline: AsyncPipeline,
+    web_handler_uri: String,
+}
+impl Backend {
+    fn load(&self, uri: Url) {
+        let pipeline = self.pipeline.clone();
+        tokio::task::spawn_blocking(move || {
+            load_blocking(uri, &pipeline);
+        });
+    }
+    async fn snapshot(&self, uri: &Url, sync: bool) -> Result<Option<(Draft, Arc<RootGraph>)>> {
+        self.pipeline
+            .snapshot(uri, sync)
+            .await
+            .map_err(|_| shutdown_error())
+    }
+}
+//load a file this is tricky because the editor can also load it at the same time
+fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
+    if let Err(e) = std::fs::File::open(uri.path()).and_then(|mut f| {
+        let meta = f.metadata()?;
+        let modified = meta.modified()?;
+
+        if !pipeline.should_load(&uri, modified) {
+            return Ok(());
+        }
+        let mut data = String::new();
+        f.read_to_string(&mut data)?;
+        pipeline.open(uri.clone(), data, DocumentState::OwnedByOs(modified));
+        Ok(())
+    }) {
+        info!("Failed to load file {} : {}", uri, e);
+    }
+}
+//load all files under given a path
+fn load_all_blocking(path: &Path, pipeline: AsyncPipeline) {
+    for e in walkdir::WalkDir::new(path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|e| e == std::ffi::OsStr::new("uvl"))
+                .unwrap_or(false)
+        })
+    {
+        load_blocking(Url::from_file_path(e.path()).unwrap(), &pipeline)
+    }
+}
+fn shutdown_error() -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error {
+        code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+        message: "".into(),
+        data: None,
+    }
+}
+
+#[tower_lsp::async_trait]
+impl LanguageServer for Backend {
+    async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
+        #[allow(deprecated)]
+        let root_folder = init_params
+            .root_path
+            .as_deref()
+            .or_else(|| init_params.root_uri.as_ref().map(|p| p.path()))
+            .map(PathBuf::from);
+        if let Some(root_folder) = root_folder {
+            let semantic = self.pipeline.clone();
+            //cheap fix for better intial load, we should really use priority model to prefer
+            //editor owned files
+            spawn(async move {
+                tokio::task::spawn_blocking(move || {
+                    load_all_blocking(&root_folder, semantic);
+                })
+                .await
+            });
+        }
+
+        Ok(InitializeResult {
+            server_info: Some(ServerInfo {
+                name: String::from("uvl lsp"),
+                version: None,
+            }),
+            capabilities: ServerCapabilities {
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::INCREMENTAL,
+                )),
+                completion_provider: Some(CompletionOptions {
+                    resolve_provider: Some(false),
+                    all_commit_characters: None,
+                    trigger_characters: Some(vec![".".to_string()]),
+                    ..Default::default()
+                }),
+                definition_provider: Some(OneOf::Left(true)),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            work_done_progress_options: WorkDoneProgressOptions {
+                                work_done_progress: None,
+                            },
+                            legend: SemanticTokensLegend {
+                                token_types: color::token_types(),
+                                token_modifiers: color::modifiers(),
+                            },
+                            range: None,
+                            full: Some(SemanticTokensFullOptions::Delta { delta: Some(true) }),
+                        },
+                    ),
+                ),
+                references_provider: Some(OneOf::Left(true)),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(true),
+                }),
+                inlay_hint_provider: Some(OneOf::Left(true)),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![
+                        "uvls/show_config".into(),
+                        "uvls/show_example".into(),
+                        "uvls/open_config".into(),
+                        "uvls/load_config".into(),
+                    ],
+                    work_done_progress_options: WorkDoneProgressOptions {
+                        work_done_progress: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        self.client
+            .log_message(MessageType::INFO, "server initialized!")
+            .await;
+        let watcher_uvl = FileSystemWatcher {
+            glob_pattern: GlobPattern::String("**/*.uvl".to_string()),
+            kind: None,
+        };
+        let watcher_config = FileSystemWatcher {
+            glob_pattern: GlobPattern::String("**/*.uvl.json".to_string()),
+            kind: None,
+        };
+        let reg = Registration {
+            id: "watcher".to_string(),
+            method: "workspace/didChangeWatchedFiles".to_string(),
+            register_options: serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                watchers: vec![watcher_config, watcher_uvl],
+            })
+            .ok(),
+        };
+        if self.client.register_capability(vec![reg]).await.is_err() {
+            info!("failed to initialize file watchers");
+        }
+    }
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        info!("received did_open {:?}", params.text_document.uri);
+        self.pipeline.open(
+            params.text_document.uri,
+            params.text_document.text,
+            DocumentState::OwnedByEditor,
+        );
+        info!("done did_open");
+    }
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let uri = params.text_document.uri.clone();
+        self.pipeline.update(params);
+        self.client.publish_diagnostics(uri, vec![], None).await;
+        info!("done did_change");
+    }
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        info!("received completion request");
+        if let Some((draft, root)) = self
+            .snapshot(&params.text_document_position.text_document.uri, false)
+            .await?
+        {
+            return Ok(Some(CompletionResponse::List(
+                completion::compute_completions(root, &draft, params.text_document_position),
+            )));
+        }
+        Ok(None)
+    }
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        if let Some((draft, root)) = self.snapshot(uri, true).await? {
+            Ok(location::goto_definition(
+                &root,
+                &draft,
+                &params.text_document_position_params.position,
+                uri,
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = &params.text_document_position.text_document.uri;
+        if let Some((draft, root)) = self.snapshot(uri, true).await? {
+            Ok(location::find_references(
+                &root,
+                &draft,
+                &params.text_document_position.position,
+                uri,
+            ))
+        } else {
+            return Ok(None);
+        }
+    }
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let uri = params.text_document.uri;
+        if let Some((draft, root)) = self.snapshot(&uri, false).await? {
+            let color = self.coloring.clone();
+            match draft {
+                Draft::UVL { source, tree, .. } => Ok(Some(SemanticTokensResult::Tokens(
+                    color.get(root, uri, tree, source),
+                ))),
+                Draft::JSON { .. } => Ok(None),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+    async fn semantic_tokens_full_delta(
+        &self,
+        params: SemanticTokensDeltaParams,
+    ) -> Result<Option<SemanticTokensFullDeltaResult>> {
+        let uri = params.text_document.uri;
+        if let Some((draft, root)) = self.snapshot(&uri, false).await? {
+            let color = self.coloring.clone();
+            match draft {
+                Draft::UVL { source, tree, .. } => Ok(Some(color.delta(root, uri, tree, source))),
+                Draft::JSON { .. } => Ok(None),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+    async fn did_save(&self, _: DidSaveTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "file saved!")
+            .await;
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "file closed!")
+            .await;
+        self.pipeline
+            .delete(&params.text_document.uri, DocumentState::OwnedByEditor)
+            .await;
+        self.load(params.text_document.uri);
+    }
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        info!("file change {:?}", params);
+        for i in params.changes {
+            match i.typ {
+                FileChangeType::CREATED => {
+                    self.load(i.uri);
+                }
+                FileChangeType::CHANGED => {
+                    self.load(i.uri);
+                }
+                FileChangeType::DELETED => {
+                    self.pipeline
+                        .delete(&i.uri, DocumentState::OwnedByOs(SystemTime::now()))
+                        .await;
+                }
+                _ => {}
+            }
+        }
+    }
+    async fn execute_command(
+        &self,
+        params: ExecuteCommandParams,
+    ) -> Result<Option<serde_json::Value>> {
+        info!("{:?}", params);
+
+        let uri: Url = serde_json::from_value(params.arguments[0].clone()).unwrap();
+        match params.command.as_str() {
+            "uvls/load_config" => {
+                let target = format!("{}/load{}", self.web_handler_uri, uri.path());
+                let _ = open::that(target); //TODO handle error
+            }
+            "uvls/open_config" => {
+                let target = format!("{}/create{}", self.web_handler_uri, uri.path());
+
+                let _ = open::that(target);
+            }
+            "uvls/show_config" => {
+                self.pipeline
+                    .inlay_state()
+                    .set_source(inlays::InlaySource::File(semantic::FileID::new(
+                        uri.as_str(),
+                    )))
+                    .await;
+                self.pipeline.touch(&uri);
+                info!("show {uri}");
+            }
+            "uvls/show_example" => {
+                self.pipeline
+                    .inlay_state()
+                    .set_source(inlays::InlaySource::File(semantic::FileID::new(
+                        uri.as_str(),
+                    )))
+                    .await;
+                self.pipeline.touch(&uri);
+                info!("show example {uri}");
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri;
+        if let Some((draft, _)) = self.snapshot(&uri, true).await? {
+            let source = draft.source();
+            let start = util::byte_offset(&params.range.start, source);
+            let end = util::byte_offset(&params.range.end, source);
+            info!("update inlays {:?}", params.range);
+            Ok(self.pipeline.inlay_state().get(&uri, start..end).await)
+        } else {
+            Err(tower_lsp::jsonrpc::Error {
+                code: tower_lsp::jsonrpc::ErrorCode::ServerError(1),
+                message: "failed to get context".into(),
+                data: None,
+            })?
+        }
+    }
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        let uri = params.text_document.uri;
+        let uri_json =
+            serde_json::to_value(&uri).map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?;
+        if util::is_config(&uri) {
+            Ok(Some(vec![
+                CodeLens {
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                    },
+                    command: Some(Command {
+                        title: "show".into(),
+                        command: "uvls/show_config".into(),
+                        arguments: Some(vec![uri_json.clone()]),
+                    }),
+                    data: None,
+                },
+                CodeLens {
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                    },
+                    command: Some(Command {
+                        title: "configure".into(),
+                        command: "uvls/load_config".into(),
+                        arguments: Some(vec![uri_json]),
+                    }),
+                    data: None,
+                },
+            ]))
+        } else {
+            Ok(Some(vec![CodeLens {
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                },
+                command: Some(Command {
+                    title: "configure".into(),
+                    command: "uvls/open_config".into(),
+                    arguments: Some(vec![uri_json]),
+                }),
+                data: None,
+            }]))
+        }
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn main() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(16)
+        .thread_stack_size(8 * 1024 * 1024)
+        .build()
+        .unwrap();
+    runtime.block_on(server_main());
+}
+async fn server_main() {
+    std::env::set_var("RUST_BACKTRACE", "1");
+    log_panics::Config::new()
+        .backtrace_mode(log_panics::BacktraceMode::Unresolved)
+        .install_panic_hook();
+
+    let stdin = tokio::io::stdin();
+    let stdout = tokio::io::stdout();
+    //only needed for vscode auto update
+    if std::env::args().any(|a| &a == "-v") {
+        println!("{}", VERSION);
+        return;
+    }
+
+    let _logger = flexi_logger::Logger::try_with_env_or_str("info")
+        .expect("Log spec string broken")
+        .log_to_file(
+            FileSpec::default()
+                .directory(std::env::temp_dir())
+                .basename("UVLS")
+                .suppress_timestamp()
+                .suffix("log"),
+        )
+        .write_mode(flexi_logger::WriteMode::Direct)
+        .start()
+        .expect("Failed to start logger");
+    log_panics::init();
+    info!("UVLS start");
+    let (service, socket) = LspService::new(|client| {
+        let pipeline = AsyncPipeline::new(client.clone());
+        info!("create service");
+        let port = get_port::tcp::TcpPort::in_range(
+            "127.0.0.1",
+            get_port::Range {
+                min: 3000,
+                max: 6000,
+            },
+        )
+        .unwrap();
+        spawn(webview::web_handler(pipeline.clone(), port));
+        Backend {
+            web_handler_uri: format!("http://localhost:{port}"),
+            pipeline,
+            coloring: Arc::new(color::State::new()),
+            client,
+        }
+    });
+
+    join!(Server::new(stdin, stdout, socket).serve(service));
+}

@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use tokio::select;
-use tokio::sync::mpsc;
-
+use crate::ast::insert_multi;
+use crate::ast::AstDocument;
+use crate::ast::*;
 use crate::semantic::*;
 use crate::util::*;
 use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tower_lsp::Client;
@@ -30,6 +30,12 @@ pub struct ErrorInfo {
     pub severity: DiagnosticSeverity,
     pub weight: u32,
     pub msg: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileErrorInfo {
+    pub error: ErrorInfo,
+    pub file: FileID,
 }
 
 impl ErrorInfo {
@@ -214,35 +220,35 @@ pub fn check_errors(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
     });
     err
 }
-
+#[derive(Debug, Clone)]
 pub struct DiagnosticUpdate {
-    pub error_state: HashMap<Url, Vec<ErrorInfo>>,
+    pub error_state: HashMap<FileID, Vec<ErrorInfo>>,
     pub timestamp: u64,
 }
+
 struct DiagnosticState {
     timestamp: u64,
     error: Vec<ErrorInfo>,
 }
 async fn maybe_publish(
     client: &Client,
-    source_map: &mut HashMap<Url, DiagnosticState>,
-    uri: Url,
+    source_map: &mut HashMap<FileID, DiagnosticState>,
+    uri: FileID,
     mut err: Vec<ErrorInfo>,
     timestamp: u64,
 ) {
     if let Some(old) = source_map.get_mut(&uri) {
-
         if old.timestamp < timestamp {
-            publish(client, &uri, &err).await;
+            publish(client, &uri.url().unwrap(), &err).await;
             old.timestamp = timestamp;
             old.error = err;
         } else if old.timestamp == timestamp {
             old.timestamp = timestamp;
             old.error.append(&mut err);
-            publish(client, &uri, &old.error).await;
+            publish(client, &uri.url().unwrap(), &old.error).await;
         }
     } else {
-        publish(client, &uri, &err).await;
+        publish(client, &uri.url().unwrap(), &err).await;
         source_map.insert(
             uri,
             DiagnosticState {
@@ -253,19 +259,100 @@ async fn maybe_publish(
     }
 }
 
-pub async fn diagnostic_handler(ctx: Arc<Context>, mut rx: mpsc::Receiver<DiagnosticUpdate>) {
-    let mut source_map: HashMap<Url, DiagnosticState> = HashMap::new();
-    loop {
-        select! {
-            _ = ctx.shutdown.cancelled() => return,
-            Some(mut update) = rx.recv()=>{
-                for (uri,err) in update.error_state.drain(){
-                    maybe_publish(&ctx.client,&mut source_map,uri,err,update.timestamp).await
-
-                }
-
+pub async fn diagnostic_handler(mut rx: mpsc::Receiver<DiagnosticUpdate>, client: Client) {
+    let mut source_map: HashMap<FileID, DiagnosticState> = HashMap::new();
+    while let Some(mut update) = rx.recv().await {
+        for (uri, err) in update.error_state.drain() {
+            if uri.is_virtual() {
+                continue;
             }
-
+            maybe_publish(&client, &mut source_map, uri, err, update.timestamp).await
         }
+    }
+}
+pub fn check_includes(_doc: &AstDocument) -> Vec<ErrorInfo> {
+    Default::default()
+}
+
+pub struct ErrorsAcc<'a> {
+    pub errors: HashMap<FileID, Vec<ErrorInfo>>,
+    pub files: &'a AstFiles,
+    pub configs: &'a ConfigFiles,
+}
+impl<'a> ErrorsAcc<'a> {
+    pub fn new(root: &'a RootGraph) -> Self {
+        Self {
+            errors: HashMap::new(),
+            files: &root.cache().files,
+            configs: &root.cache().configs,
+        }
+    }
+    pub fn has_error(&self, file: FileID) -> bool {
+        self.errors
+            .get(&file)
+            .map(|u| !u.is_empty())
+            .unwrap_or(false)
+    }
+    pub fn sym<S: Into<String>>(&mut self, sym: Symbol, file: FileID, weight: u32, s: S) {
+        insert_multi(
+            &mut self.errors,
+            file,
+            ErrorInfo {
+                location: self.files[&file].lsp_range(sym).unwrap(),
+                severity: DiagnosticSeverity::ERROR,
+                weight,
+                msg: s.into(),
+            },
+        );
+    }
+
+    pub fn sym_info<S: Into<String>>(&mut self, sym: Symbol, file: FileID, weight: u32, s: S) {
+        insert_multi(
+            &mut self.errors,
+            file,
+            ErrorInfo {
+                location: self.files[&file].lsp_range(sym).unwrap(),
+                severity: DiagnosticSeverity::INFORMATION,
+                weight,
+                msg: s.into(),
+            },
+        );
+    }
+    pub fn span<S: Into<String>>(&mut self, span: Span, file: FileID, weight: u32, s: S) {
+        let source = self
+            .configs
+            .get(&file)
+            .map(|i| &i.source)
+            .or_else(|| self.files.get(&file).map(|i| &i.source))
+            .unwrap();
+        insert_multi(
+            &mut self.errors,
+            file,
+            ErrorInfo {
+                location: lsp_range(span, &source).unwrap(),
+                severity: DiagnosticSeverity::ERROR,
+                weight,
+                msg: s.into(),
+            },
+        );
+    }
+
+    pub fn span_info<S: Into<String>>(&mut self, span: Span, file: FileID, weight: u32, s: S) {
+        let source = self
+            .configs
+            .get(&file)
+            .map(|i| &i.source)
+            .or_else(|| self.files.get(&file).map(|i| &i.source))
+            .unwrap();
+        insert_multi(
+            &mut self.errors,
+            file,
+            ErrorInfo {
+                location: lsp_range(span, &source).unwrap(),
+                severity: DiagnosticSeverity::INFORMATION,
+                weight,
+                msg: s.into(),
+            },
+        );
     }
 }

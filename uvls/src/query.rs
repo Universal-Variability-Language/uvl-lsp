@@ -51,7 +51,7 @@ static EXTRACT_SYNTAX_HIGHLIGHTING_SRC: &str = r#"
     ".."
 ] @operator
 
-(aggregate op:(_) @function)
+(function op:(_) @function)
 
 (attribute_value name:(_)@enumMember)
 
@@ -60,6 +60,7 @@ static EXTRACT_SYNTAX_HIGHLIGHTING_SRC: &str = r#"
 (blk
     header: [(name)] @parameter)
 
+(typed_feature type:(_) @class name:(_) @parameter)
 (path)@parameter
 "#;
 
@@ -76,7 +77,7 @@ impl Queries {
     }
 }
 
-pub fn node_source(source: & Rope) -> impl tree_sitter::TextProvider<'_> {
+pub fn node_source(source: &Rope) -> impl tree_sitter::TextProvider<'_> {
     |node: tree_sitter::Node| {
         source
             .byte_slice(node.byte_range())

@@ -36,7 +36,22 @@ pub fn token_types() -> Vec<SemanticTokenType> {
         SemanticTokenType::MACRO,
         SemanticTokenType::PARAMETER,
         SemanticTokenType::NUMBER,
+
     ]
+}
+pub fn modifiers()->Vec<SemanticTokenModifier>{
+
+    vec![
+
+        SemanticTokenModifier::DEPRECATED,
+        SemanticTokenModifier::READONLY,
+        SemanticTokenModifier::MODIFICATION,
+        SemanticTokenModifier::ASYNC,
+        SemanticTokenModifier::STATIC,
+        SemanticTokenModifier::ABSTRACT,
+        SemanticTokenModifier::ASYNC
+    ]
+
 }
 fn token_index(name: &str) -> u32 {
     match name {
@@ -54,6 +69,15 @@ fn token_index(name: &str) -> u32 {
         "number" => 11,
         _ => 0,
     }
+}
+fn modifier_bitset(name:&str)->u32{
+    match name{
+        "deprecated"=>0b1, 
+        "readonly"=>0b10,
+        _=>0,
+    }
+
+
 }
 
 pub enum ColorUpdate {
@@ -135,7 +159,7 @@ impl FileState {
         origin: Node,
         _root: &Snapshot,
         source: &Rope,
-        _file: &Document,
+        _file: &AstDocument,
         utf16_line: &HashSet<usize>,
         token: &mut Vec<AbsToken>,
     ) {
@@ -218,7 +242,7 @@ impl FileState {
                         },
                         length: len,
                         token_type: i.kind,
-                        token_modifiers_bitset: 0,
+                        token_modifiers_bitset:  0
                     })
                 } else {
                     filtered.push(SemanticToken {
@@ -226,7 +250,7 @@ impl FileState {
                         delta_start: next_col,
                         length: len,
                         token_type: i.kind,
-                        token_modifiers_bitset: 0,
+                        token_modifiers_bitset: 0,                   
                     })
                 }
             } else {
