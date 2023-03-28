@@ -91,7 +91,7 @@ fn generate(model: &OwnedSMTModel, id: FileID, range: Span) -> Option<Vec<InlayH
             .modul
             .instances()
             .filter(|(_, i)| doc.id == i.id)
-            .flat_map(|(m, _)| match &model.model {
+            .flat_map(|(m, i)| match &model.model {
                 SMTModel::SAT { values, .. } => doc
                     .all_features()
                     .chain(doc.all_attributes())
@@ -119,7 +119,9 @@ fn generate(model: &OwnedSMTModel, id: FileID, range: Span) -> Option<Vec<InlayH
                     .filter_map(|AssertInfo(sym, name)| {
                         if id == model.modul.file(sym.instance).id
                             && range.contains(&doc.span(sym.sym).unwrap().start)
+                            && m == sym.instance
                         {
+                            info!("{reasons:?}");
                             let range = doc.lsp_range(sym.sym).unwrap();
                             Some(InlayHint {
                                 label: InlayHintLabel::String(format!("UNSAT {}!", name)),

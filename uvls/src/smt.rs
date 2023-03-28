@@ -891,7 +891,7 @@ async fn check_config(
                     if matches!(r.1, AssertName::Config) {
                         e.span(
                             module.source_map[&r.0].clone(),
-                            module.module.file(r.0.instance).id,
+                            root_file,
                             12,
                             format!("UNSAT!"),
                         );
