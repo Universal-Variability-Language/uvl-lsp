@@ -25,6 +25,7 @@ mod config;
 mod document;
 mod inlays;
 mod location;
+mod module;
 mod parse;
 mod pipeline;
 mod query;
@@ -502,10 +503,12 @@ fn main() {
 }
 async fn server_main() {
     std::env::set_var("RUST_BACKTRACE", "1");
+    /*
     log_panics::Config::new()
         .backtrace_mode(log_panics::BacktraceMode::Unresolved)
         .install_panic_hook();
 
+    */
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     //only needed for vscode auto update

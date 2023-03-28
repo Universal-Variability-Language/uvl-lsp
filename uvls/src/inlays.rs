@@ -1,8 +1,9 @@
 use crate::ast::*;
+use crate::module::InstanceID;
 use crate::semantic::FileID;
-use crate::semantic::RootGraph;
-use crate::semantic::RootSymbol;
-use crate::smt::SMTModel;
+
+use crate::smt::AssertInfo;
+use crate::smt::{OwnedSMTModel, SMTModel};
 use log::info;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tower_lsp::Client;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum InlaySource {
     None,
     File(FileID),
@@ -35,21 +36,25 @@ impl InlayHandler {
         *self.source.lock() == source
     }
     pub async fn set_source(&self, source: InlaySource) {
+        info!("set {source:?}");
         *self.source.lock() = source;
         let _ = self.tx.send(InlayEvent::SetSource).await;
     }
-    pub async fn maybe_publish(
+    pub async fn maybe_publish<F: FnOnce() -> Arc<OwnedSMTModel>>(
         &self,
         source: InlaySource,
-        root: &Arc<RootGraph>,
-        model: &SMTModel,
         timestamp: Instant,
+        f: F,
     ) {
         if *self.source.lock() == source {
-            let _ = self
-                .tx
-                .send(InlayEvent::Publish(model.clone(), root.clone(), timestamp))
-                .await;
+            info!("publish");
+            let _ = self.tx.send(InlayEvent::Publish(f(), timestamp)).await;
+        }
+    }
+    pub async fn maybe_reset(&self, source: InlaySource) {
+        if *self.source.lock() == source {
+            info!("reset");
+            let _ = self.tx.send(InlayEvent::Reset(Instant::now())).await;
         }
     }
     pub async fn get(&self, uri: &Url, span: Span) -> Option<Vec<InlayHint>> {
@@ -72,22 +77,31 @@ struct InlayRequest {
 }
 enum InlayEvent {
     Get(InlayRequest),
-    Publish(SMTModel, Arc<RootGraph>, Instant),
+    Publish(Arc<OwnedSMTModel>, Instant),
+    Reset(Instant),
     SetSource,
 }
-fn generate(root: &RootGraph, model: &SMTModel, id: FileID, range: Span) -> Option<Vec<InlayHint>> {
-    root.try_file(id).map(|doc| match model {
-        SMTModel::SAT { values, .. } => doc
-            .all_features()
-            .chain(doc.all_attributes())
-            .chain(doc.all_references())
-            .filter(|f| range.contains(&doc.span(*f).unwrap().start))
-            .filter_map(|sym| {
-                root.resolve_sym(RootSymbol { sym, file: id })
-                    .and_then(|rs| values.get(&rs))
-                    .map(|val| {
+fn generate(model: &OwnedSMTModel, id: FileID, range: Span) -> Option<Vec<InlayHint>> {
+    if !model.modul.ok {
+        return None;
+    }
+    model.modul.files.get(&id).map(|doc| {
+        let doc = &doc.content;
+        model
+            .modul
+            .instances()
+            .filter(|(_, i)| doc.id == i.id)
+            .flat_map(|(m, _)| match &model.model {
+                SMTModel::SAT { values, .. } => doc
+                    .all_features()
+                    .chain(doc.all_attributes())
+                    .chain(doc.all_references())
+                    .filter(|f| range.contains(&doc.span(*f).unwrap().start))
+                    .filter_map(|sym| {
+                        let tgt = model.modul.resolve_value(m.sym(sym));
+                        let val = values.get(&tgt)?;
                         let range = doc.lsp_range(sym).unwrap();
-                        InlayHint {
+                        Some(InlayHint {
                             label: InlayHintLabel::String(format!(": {val}")),
                             position: range.end,
                             kind: Some(InlayHintKind::PARAMETER),
@@ -96,137 +110,146 @@ fn generate(root: &RootGraph, model: &SMTModel, id: FileID, range: Span) -> Opti
                             padding_right: Some(true),
                             tooltip: None,
                             text_edits: None,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+                SMTModel::UNSAT { reasons } => reasons
+                    .iter()
+                    .filter_map(|AssertInfo(sym, name)| {
+                        if id == model.modul.file(sym.instance).id
+                            && range.contains(&doc.span(sym.sym).unwrap().start)
+                        {
+                            let range = doc.lsp_range(sym.sym).unwrap();
+                            Some(InlayHint {
+                                label: InlayHintLabel::String(format!("UNSAT {}!", name)),
+                                position: range.end,
+                                kind: Some(InlayHintKind::PARAMETER),
+                                data: None,
+                                padding_left: Some(true),
+                                padding_right: Some(true),
+                                tooltip: None,
+                                text_edits: None,
+                            })
+                        } else {
+                            None
                         }
                     })
+                    .collect::<Vec<_>>()
+                    .into_iter(),
             })
-            .collect(),
-        SMTModel::UNSAT { reasons } => reasons
-            .iter()
-            .filter_map(|i| {
-                if id == i.symbol().file && range.contains(&doc.span(i.symbol().sym).unwrap().start)
-                {
-                    let range = doc.lsp_range(i.symbol().sym).unwrap();
-                    Some(InlayHint {
-                        label: InlayHintLabel::String("UNSAT! ".into()),
-                        position: range.end,
-                        kind: Some(InlayHintKind::PARAMETER),
-                        data: None,
-                        padding_left: Some(true),
-                        padding_right: Some(true),
-                        tooltip: None,
-                        text_edits: None,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect(),
+            .collect()
     })
 }
 async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
-    let mut map: Option<(SMTModel, Arc<RootGraph>)> = None;
+    let mut map: Option<Arc<OwnedSMTModel>> = None;
     let mut latest = Instant::now();
     let mut initial = false;
     while let Some(e) = rx.recv().await {
         match e {
             InlayEvent::Get(request) => {
                 info!("get");
-                if let Some((model, root)) = map.as_ref() {
+                if let Some(model) = map.as_ref() {
                     let _ = request
                         .out
-                        .send(generate(root, model, request.target, request.span));
+                        .send(generate(model, request.target, request.span));
                 } else {
                     let _ = request.out.send(None);
                 }
+                info!("done");
             }
-            InlayEvent::Publish(model, root, timestamp) => {
+            InlayEvent::Reset(timestamp) => {
+                if timestamp <= latest {
+                    continue;
+                }
+                latest = timestamp;
+                map = None;
+                client
+                    .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
+                    .await
+                    .unwrap();
+            }
+            InlayEvent::Publish(model, timestamp) => {
                 if timestamp <= latest {
                     continue;
                 }
                 latest = timestamp;
                 if initial {
-                    let rs = match &model {
-                        SMTModel::SAT { values, .. } => values.keys().next().cloned(),
-                        SMTModel::UNSAT { reasons } => reasons.iter().next().map(|i| i.symbol()),
-                    };
-                    if let Some(rs) = rs {
-                        let _ = client
-                            .show_document(ShowDocumentParams {
-                                uri: rs.file.url().unwrap(),
-                                external: Some(false),
-                                take_focus: Some(true),
-                                selection: Some(Range::default()),
-                            })
-                            .await;
-                        //Force VS-Code to refresh inlays since inlay-hints-refresh is sometimes ingored
-                        //When the document had no previous inlays
-                        //Currently done via a pseudo edit(TODO this sucks)
-                        //Insert a '0'
-                        let changes = [(
-                            rs.file.url().unwrap(),
-                            vec![TextEdit::new(
-                                Range {
-                                    start: Position::default(),
-                                    end: Position {
-                                        line: 0,
-                                        character: 0,
-                                    },
+                    let file = model.modul.file(InstanceID(0));
+                    let _ = client
+                        .show_document(ShowDocumentParams {
+                            uri: file.uri.clone(),
+                            external: Some(false),
+                            take_focus: Some(true),
+                            selection: Some(Range::default()),
+                        })
+                        .await;
+                    //Force VS-Code to refresh inlays since inlay-hints-refresh is sometimes ingored
+                    //When the document had no previous inlays
+                    //Currently done via a pseudo edit(TODO this sucks)
+                    //Insert a '0'
+                    let changes = [(
+                        file.uri.clone(),
+                        vec![TextEdit::new(
+                            Range {
+                                start: Position::default(),
+                                end: Position {
+                                    line: 0,
+                                    character: 0,
                                 },
-                                "1".into(),
-                            )],
-                        )];
+                            },
+                            "1".into(),
+                        )],
+                    )];
 
-                        client
-                            .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(
-                                (),
-                            )
-                            .await
-                            .unwrap();
-                        let _ = client
-                            .send_request::<tower_lsp::lsp_types::request::ApplyWorkspaceEdit>(
-                                ApplyWorkspaceEditParams {
-                                    label: None,
-                                    edit: WorkspaceEdit {
-                                        changes: Some(changes.into()),
-                                        document_changes: None,
-                                        change_annotations: None,
-                                    },
+                    client
+                        .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
+                        .await
+                        .unwrap();
+                    let _ = client
+                        .send_request::<tower_lsp::lsp_types::request::ApplyWorkspaceEdit>(
+                            ApplyWorkspaceEditParams {
+                                label: None,
+                                edit: WorkspaceEdit {
+                                    changes: Some(changes.into()),
+                                    document_changes: None,
+                                    change_annotations: None,
                                 },
-                            )
-                            .await;
+                            },
+                        )
+                        .await;
 
-                        //Remove it
-                        let changes = [(
-                            rs.file.url().unwrap(),
-                            vec![TextEdit::new(
-                                Range {
-                                    start: Position::default(),
-                                    end: Position {
-                                        line: 0,
-                                        character: 1,
-                                    },
+                    //Remove it
+                    let changes = [(
+                        file.uri.clone(),
+                        vec![TextEdit::new(
+                            Range {
+                                start: Position::default(),
+                                end: Position {
+                                    line: 0,
+                                    character: 1,
                                 },
-                                "".into(),
-                            )],
-                        )];
-                        let _ = client
-                            .send_request::<tower_lsp::lsp_types::request::ApplyWorkspaceEdit>(
-                                ApplyWorkspaceEditParams {
-                                    label: None,
-                                    edit: WorkspaceEdit {
-                                        changes: Some(changes.into()),
-                                        document_changes: None,
-                                        change_annotations: None,
-                                    },
+                            },
+                            "".into(),
+                        )],
+                    )];
+                    let _ = client
+                        .send_request::<tower_lsp::lsp_types::request::ApplyWorkspaceEdit>(
+                            ApplyWorkspaceEditParams {
+                                label: None,
+                                edit: WorkspaceEdit {
+                                    changes: Some(changes.into()),
+                                    document_changes: None,
+                                    change_annotations: None,
                                 },
-                            )
-                            .await;
+                            },
+                        )
+                        .await;
 
-                        info!("focus");
-                    }
+                    info!("focus");
                     initial = false;
                 }
-                map = Some((model, root));
+                map = Some(model);
 
                 client
                     .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())

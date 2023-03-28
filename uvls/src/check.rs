@@ -283,8 +283,8 @@ impl<'a> ErrorsAcc<'a> {
     pub fn new(root: &'a RootGraph) -> Self {
         Self {
             errors: HashMap::new(),
-            files: &root.cache().files,
-            configs: &root.cache().configs,
+            files: &root.files,
+            configs: &root.configs,
         }
     }
     pub fn has_error(&self, file: FileID) -> bool {

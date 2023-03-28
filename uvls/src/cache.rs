@@ -2,17 +2,17 @@ use crate::ast::*;
 use crate::check::ErrorsAcc;
 use crate::config::ConfigDocument;
 use crate::config::ConfigValue;
+use crate::module::ConfigModule;
+use crate::module::Module;
 use crate::resolve::*;
 use crate::semantic::*;
-use indexmap::IndexMap;
 
 use compact_str::CompactStringExt;
 use hashbrown::{HashMap, HashSet};
+use indexmap::IndexSet;
 use log::info;
 use petgraph::prelude::*;
-use petgraph::unionfind::UnionFind;
 use std::sync::Arc;
-use tokio::time::Instant;
 use ustr::Ustr;
 #[derive(Debug, Clone, PartialEq)]
 enum FSEdge {
@@ -109,9 +109,13 @@ impl FileSystem {
         }
         //resolve imports
         for (&n, f) in files.iter() {
-            for i in f.all_imports() {
+            for i in f.all_imports().rev() {
                 if let Some(node) = Self::goto_file(&graph, file2node[&n], f.path(i)) {
-                    graph.add_edge(file2node[&n], node, FSEdge::Import(i));
+                    if graph.contains_edge(node, file2node[&n]) {
+                        errors.sym(i, n, 50, "cyclic import not allowed");
+                    } else {
+                        graph.add_edge(file2node[&n], node, FSEdge::Import(i));
+                    }
                 } else {
                     errors.sym(i, n, 50, "unresolved import");
                     info!("Cant find {:?} ", f.path(i));
@@ -268,158 +272,33 @@ impl FileSystem {
     }
 }
 
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModelErrorState {
-    SyntaxError,
-    LinkError,
-    Valid,
-}
-//When to files are related through imports they form a module
-//Modules are linked and cached
 #[derive(Debug, Clone)]
-pub struct ModuleState {
-    pub members: Vec<FileID>,
-    pub state: ModelErrorState,
-}
-
-#[derive(Debug, Clone)]
-pub struct LinkedModule {
-    pub ok: bool,
-    pub revision: u64,
-    pub ref_map: HashMap<RootSymbol, RootSymbol>,
-}
-//each config file forms a special module with preset values for attributes and features
-//also cached between iterations
-#[derive(Clone, Debug)]
-pub struct ConfigModule {
+pub struct LinkedAstDocument {
+    pub content: Arc<AstDocument>,
+    pub resolved: HashMap<Symbol, RootSymbol>,
     pub revision: u64,
     pub ok: bool,
-    pub members: HashSet<FileID>,
-    pub source_map: HashMap<RootSymbol, Span>,
-    pub attributes: HashMap<RootSymbol, ConfigValue>,
-    pub features: HashMap<RootSymbol, ConfigValue>,
-    pub doc: Arc<ConfigDocument>,
-}
-fn find_modules(files: &AstFiles, fs: &FileSystem) -> impl Iterator<Item = Vec<FileID>> {
-    let file_names: Vec<FileID> = files.keys().cloned().collect();
-    let file_index: HashMap<FileID, usize> = file_names
-        .iter()
-        .enumerate()
-        .map(|(i, f)| (*f, i))
-        .collect();
-    let mut union_find = UnionFind::new(files.len());
-    for e in fs
-        .graph
-        .edge_references()
-        .filter(|e| matches!(e.weight(), FSEdge::Import(..)))
-    {
-        let (a, b) = (e.source(), e.target());
-        // union the two vertices of the edge
-        if let (FSNode::File(a), FSNode::File(b)) = (&fs.graph[a], &fs.graph[b]) {
-            union_find.union(file_index[a], file_index[b]);
-        }
-    }
-    let mut map = HashMap::new();
-    for i in 0..files.len() {
-        let rep = union_find.find(i);
-        insert_multi(&mut map, rep, i);
-    }
-    map.into_values()
-        .map(move |i| i.iter().map(|j| file_names[*j]).collect::<Vec<_>>())
-}
-fn config_members(
-    fs: &FileSystem,
-    doc: &ConfigDocument,
-    errors: &mut ErrorsAcc,
-) -> (HashSet<FileID>, HashMap<usize, FileID>) {
-    let mut members = HashSet::new();
-    let mut resolved = HashMap::new();
-    for (i, c) in doc.files.iter().enumerate() {
-        let path = [&doc.path[0..doc.path.len() - 1], &c.file.names].concat();
-        if let Some(tgt) = fs.resolve_abs(&path) {
-            resolved.insert(i, tgt);
-            if members.insert(tgt) {
-                for i in fs.recursive_imports(tgt) {
-                    members.insert(i);
-                }
-            }
-        } else {
-            errors.span(c.file.range(), doc.id, 50, "unresolved file");
-        }
-    }
-    (members, resolved)
 }
 
-fn link_config(
-    files: &AstFiles,
-    doc: &ConfigDocument,
-    resolved: HashMap<usize, FileID>,
-    fs: &FileSystem,
-    err: &mut ErrorsAcc,
-) -> (
-    HashMap<RootSymbol, ConfigValue>,
-    HashMap<RootSymbol, ConfigValue>,
-    HashMap<RootSymbol, Span>,
-) {
-    let mut attributes = HashMap::new();
-    let mut features = HashMap::new();
-    let mut source_map = HashMap::new();
-    for (file_id, conf) in doc
-        .files
-        .iter()
-        .enumerate()
-        .flat_map(|(i, c)| resolved.get(&i).into_iter().map(move |k| (*k, c)))
-    {
-        for (path, val) in conf.config.iter() {
-            let mut state = ResolveState::Unresolved;
-            for sym in resolve(files, fs, file_id, &path.names) {
-                let dst_file = &files[&sym.file];
-                if dst_file.type_of(sym.sym).unwrap() == val.ty() {
-                    state = ResolveState::Resolved(sym)
-                } else {
-                    state = ResolveState::WrongType {
-                        expected: val.ty(),
-                        found: dst_file.type_of(sym.sym).unwrap(),
-                    }
-                }
-            }
-
-            match state {
-                ResolveState::Resolved(sym) => {
-                    source_map.insert(sym, path.range());
-                    match sym.sym {
-                        Symbol::Feature(..) => features.insert(sym, val.clone()),
-
-                        Symbol::Attribute(..) => attributes.insert(sym, val.clone()),
-                        _ => unimplemented!(),
-                    };
-                }
-                ResolveState::WrongType { expected, found } => {
-                    err.span(
-                        path.range(),
-                        doc.id,
-                        40,
-                        format!("expected {:?} only found {:?}", expected, found),
-                    );
-                }
-                ResolveState::Unresolved => {
-                    err.span(path.range(), doc.id, 40, "unresolved reference");
-                }
-            }
+fn find_root_files<'a>(fs: &FileSystem, files: &'a AstFiles) -> impl Iterator<Item = FileID> + 'a {
+    let mut not_root = HashSet::new();
+    for i in files.keys().cloned() {
+        for (_, tgt) in fs.imports(i) {
+            not_root.insert(tgt);
         }
     }
-    (features, attributes, source_map)
+    files
+        .keys()
+        .filter(move |&i| !not_root.contains(i))
+        .cloned()
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Cache {
     pub fs: FileSystem,
-    pub files: AstFiles,
-    pub configs: ConfigFiles,
-    pub modules: IndexMap<Vec<FileID>, Arc<LinkedModule>>,
     pub config_modules: HashMap<FileID, Arc<ConfigModule>>,
-    pub file2module: HashMap<FileID, usize>,
+    pub ast: HashMap<FileID, Arc<LinkedAstDocument>>,
+    pub modules: HashMap<FileID, Arc<Module>>,
 }
 impl Cache {
     pub fn new(
@@ -430,80 +309,94 @@ impl Cache {
         revision: u64,
         errors: &mut ErrorsAcc,
     ) -> Cache {
-        let fs = FileSystem::new(&files, errors);
-        info!("updating cache dirty {:?}", dirty);
-        let time = Instant::now();
-        let mut file2module = HashMap::new();
-        //build modules
-        let modules: IndexMap<Vec<FileID>, Arc<LinkedModule>> = find_modules(&files, &fs)
-            .map(|members| {
-                let dirty = members.iter().any(|f| dirty.contains(f));
-                if !dirty {
-                    if let Some(old) = old.modules.get(&members).cloned() {
-                        return (members, old);
-                    }
+        let mut trans_dirty = dirty.clone();
+        let fs = FileSystem::new(files, errors);
+        for i in dirty.iter() {
+            if !i.is_config() {
+                for k in fs.recursive_imported(*i) {
+                    trans_dirty.insert(k);
                 }
-                let ref_map = resolve_files(&members, &fs, errors);
-                let ok = !members.iter().any(|f| errors.has_error(*f));
-                (
-                    members,
-                    Arc::new(LinkedModule {
-                        ok,
-                        revision,
-                        ref_map,
-                    }),
-                )
-            })
-            .enumerate()
-            .map(|(l, (k, v))| {
-                for i in k.iter() {
-                    file2module.insert(*i, l);
-                }
-                (k, v)
-            })
+            }
+        }
+        for i in trans_dirty.iter() {
+            if !errors.errors.contains_key(i) {
+                errors.errors.insert(*i, Vec::new());
+            }
+        }
+        let mut linked_ast: HashMap<_, _> = old
+            .ast
+            .iter()
+            .filter(|(k, _)| files.contains_key(*k))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        //build cached modules
-        let config_modules = configs
-            .values()
-            .map(|doc| {
-                let (members, resolved) = config_members(&fs, doc, errors);
 
-                info!("{:?} members: {:?}", doc.id, members);
-                let dirty = members.iter().any(|f| dirty.contains(f)) || dirty.contains(&doc.id);
-                info!("{:?} dirty: {dirty}", doc.id);
-                if !dirty {
-                    if let Some(old) = old.config_modules.get(&doc.id) {
-                        if old.members == members {
-                            return (doc.id, old.clone());
-                        }
-                    }
-                }
-                let (features, attribs, source_map) =
-                    link_config(&files, doc, resolved, &fs, errors);
-                let ok = !members.iter().any(|f| errors.has_error(*f)) && !errors.has_error(doc.id);
-                info!("{:?} ok: {ok}", doc.id);
-                (
-                    doc.id,
-                    Arc::new(ConfigModule {
-                        members,
-                        ok,
-                        doc: doc.clone(),
+        info!("updating cache dirty {:?}", trans_dirty);
+        for i in trans_dirty.iter() {
+            if !i.is_config() {
+                linked_ast.insert(
+                    *i,
+                    Arc::new(LinkedAstDocument {
+                        content: files[i].clone(),
                         revision,
-                        features,
-                        attributes: attribs,
-                        source_map,
+                        resolved: resolve_file(*i, &fs, errors),
+                        ok: !errors.has_error(*i),
                     }),
-                )
+                );
+            }
+        }
+
+        let modules: HashMap<_, _> = find_root_files(&fs, files)
+            .map(|root| {
+                let imports = fs.recursive_imports(root);
+                if imports.iter().any(|i| trans_dirty.contains(i))
+                    || !old.modules.contains_key(&root)
+                {
+                    (root, Arc::new(Module::new(root, &fs, &linked_ast)))
+                } else {
+                    (root, old.modules[&root].clone())
+                }
             })
             .collect();
-        info!("Updated cache in {:?}", time.elapsed());
+        let mut config_modules = HashMap::new();
+        for (k, v) in configs.iter() {
+            if let Some(content) = v.config.as_ref() {
+                info!("uri {}", content.file.as_str());
+                if files.contains_key(&content.file) {
+                    let dirty = trans_dirty.contains(&content.file)
+                        || dirty.contains(k)
+                        || !old.config_modules.contains_key(k);
+                    if dirty {
+                        let mut module = Module::new(content.file, &fs, &linked_ast);
+                        if !module.ok {
+                            continue;
+                        }
+                        let (values, source_map) = module
+                            .resolve_config(&content.config, |span, err| {
+                                errors.span(span, *k, 20, err)
+                            });
+                        module.ok &= !errors.has_error(*k);
+                        config_modules.insert(
+                            *k,
+                            Arc::new(ConfigModule {
+                                module: Arc::new(module),
+                                values,
+                                source_map,
+                            }),
+                        );
+                    } else {
+                        config_modules.insert(*k, old.config_modules[k].clone());
+                    }
+                } else {
+                    errors.span(content.file_span.clone(), *k, 100, "file no found");
+                }
+            }
+        }
+
         Cache {
-            files: files.clone(),
-            file2module,
-            config_modules,
-            modules,
-            configs: configs.clone(),
             fs,
+            config_modules,
+            ast: linked_ast,
+            modules,
         }
     }
 }

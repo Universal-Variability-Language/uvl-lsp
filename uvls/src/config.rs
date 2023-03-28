@@ -8,6 +8,7 @@ use crate::{
     semantic::{FileID, RootGraph},
     util::*,
 };
+use itertools::Itertools;
 use log::info;
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
@@ -51,21 +52,69 @@ impl Display for ConfigValue {
         }
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FileConfigRaw {
-    file: String,
-    config: BTreeMap<String, ConfigValue>,
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigEntry {
+    Value(Path, ConfigValue),
+    Import(Path, Vec<ConfigEntry>),
+}
+
+impl Serialize for ConfigEntry {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        info!("{self:?}");
+
+        match self {
+            ConfigEntry::Value(..) => panic!(),
+            ConfigEntry::Import(_, v) => {
+                let mut s = serializer.serialize_map(Some(v.len()))?;
+                for i in v.iter() {
+                    match i {
+                        ConfigEntry::Value(p, k) => {
+                            s.serialize_entry(&p.to_string(), k)?;
+                        }
+                        ConfigEntry::Import(p, _) => {
+                            s.serialize_entry(p, i)?;
+                        }
+                    }
+                }
+                s.end()
+            }
+        }
+    }
+}
+
+impl ConfigEntry {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            ConfigEntry::Value(..) => true,
+            ConfigEntry::Import(_, v) => v.is_empty(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct FileConfig {
-    pub file: Path,
-    pub config: Vec<(Path, ConfigValue)>,
+    pub file: FileID,
+    pub file_span: Span,
+    pub config: Vec<ConfigEntry>,
+}
+
+impl Serialize for Path {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.names.iter().map(|i| i.as_str()).join("."))
+    }
 }
 
 #[derive(Debug)]
 pub struct ConfigDocument {
-    pub files: Vec<FileConfig>,
+    pub config: Option<FileConfig>,
     pub source: Rope,
     pub uri: Url,
     pub timestamp: Instant,
@@ -74,10 +123,10 @@ pub struct ConfigDocument {
     pub id: FileID,
 }
 struct State<'a> {
-    files: Vec<FileConfig>,
     err: Vec<ErrorInfo>,
     cursor: TreeCursor<'a>,
     source: &'a Rope,
+    owner: FileID,
 }
 impl<'a> Visitor<'a> for State<'a> {
     fn cursor(&self) -> &TreeCursor<'a> {
@@ -94,7 +143,7 @@ impl<'a> Visitor<'a> for State<'a> {
     }
 }
 
-fn opt_configs(state: &mut State) -> Vec<(Path, ConfigValue)> {
+fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
     let mut acc = Vec::new();
     visit_siblings(state, |state| {
         if state.kind() == "pair" {
@@ -106,15 +155,15 @@ fn opt_configs(state: &mut State) -> Vec<(Path, ConfigValue)> {
                 let val = state.child_by_name("value").unwrap();
                 match val.kind() {
                     "true" => {
-                        acc.push((key, ConfigValue::Bool(true)));
+                        acc.push(ConfigEntry::Value(key, ConfigValue::Bool(true)));
                     }
 
                     "false" => {
-                        acc.push((key, ConfigValue::Bool(false)));
+                        acc.push(ConfigEntry::Value(key, ConfigValue::Bool(false)));
                     }
                     "number" => {
                         if let Ok(num) = state.source.slice_raw(val.byte_range()).parse() {
-                            acc.push((key, ConfigValue::Number(num)));
+                            acc.push(ConfigEntry::Value(key, ConfigValue::Number(num)));
                         } else {
                             state.push_error_node(val, 30, "cant parse number");
                         }
@@ -124,7 +173,16 @@ fn opt_configs(state: &mut State) -> Vec<(Path, ConfigValue)> {
                             .source
                             .slice_raw(val.start_byte() + 1..val.end_byte() - 1)
                             .replace(r#"\""#, "\"");
-                        acc.push((key, ConfigValue::String(text)));
+                        acc.push(ConfigEntry::Value(key, ConfigValue::String(text)));
+                    }
+                    "object" => {
+                        let children = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
+                            visit_children(state, |state| {
+                                state.goto_field("value");
+                                visit_children(state, opt_configs)
+                            })
+                        });
+                        acc.push(ConfigEntry::Import(key, children));
                     }
                     _ => {
                         state.push_error_node(val, 30, "expected a number or bool");
@@ -135,7 +193,7 @@ fn opt_configs(state: &mut State) -> Vec<(Path, ConfigValue)> {
     });
     acc
 }
-fn visit_file(state: &mut State) {
+fn visit_file(state: &mut State) -> Option<FileConfig> {
     visit_children(state, |state| {
         let mut file = None;
         let mut config = None;
@@ -150,9 +208,12 @@ fn visit_file(state: &mut State) {
                     Some("file") => {
                         let val = state.child_by_name("value").unwrap();
                         if val.kind() == "string" {
-                            file = Some(parse_json_key(
-                                state.source,
-                                val.named_child(0).unwrap().byte_range(),
+                            file = Some((
+                                state
+                                    .source
+                                    .slice(val.named_child(0).unwrap().byte_range())
+                                    .to_string(),
+                                val.byte_range(),
                             ))
                         } else {
                             state.push_error_node(val, 30, "expected string");
@@ -172,40 +233,45 @@ fn visit_file(state: &mut State) {
                 }
             }
         });
-        if let Some(file) = file {
+        if let Some((file, span)) = file {
             let config = config.unwrap_or(Vec::new());
-            state.files.push(FileConfig { file, config });
+            let mut dir = state
+                .owner
+                .url()?
+                .to_file_path()
+                .ok()?
+                .parent()?
+                .to_path_buf();
+            dir.push(file);
+            Some(FileConfig {
+                file: FileID::new(&format!("file://{}", dir.to_str()?)),
+                file_span: span,
+                config,
+            })
         } else {
             state.push_error(40, "missing file key");
-        };
+            None
+        }
     })
 }
-fn visit_root(state: &mut State) {
+fn visit_root(state: &mut State) -> Option<FileConfig> {
     state.goto_first_child();
-
-    if state.kind() == "array" {
-        visit_children(state, |state| {
-            visit_siblings(state, |state| {
-                if state.kind() == "object" {
-                    visit_file(state);
-                } else if state.node().is_named() {
-                    state.push_error(40, "expected a file object");
-                }
-            })
-        })
+    if state.kind() == "object" {
+        visit_file(state)
     } else {
-        state.push_error(40, "expected an array of files");
+        state.push_error(40, "expected file object");
+        None
     }
 }
 pub fn parse_json(tree: Tree, source: Rope, uri: Url, timestamp: Instant) -> ConfigDocument {
-    let (err, files) = {
+    let id = FileID::new(uri.as_str());
+    let (file, err) = {
         let mut state = State {
             cursor: tree.walk(),
             err: Vec::new(),
-            files: Vec::new(),
             source: &source,
+            owner: id,
         };
-
         if tree_sitter_traversal::traverse_tree(&tree, tree_sitter_traversal::Order::Pre)
             .any(|n| n.is_error() || n.is_missing())
         {
@@ -224,16 +290,16 @@ pub fn parse_json(tree: Tree, source: Rope, uri: Url, timestamp: Instant) -> Con
                 severity: DiagnosticSeverity::ERROR,
                 msg: "JSON syntax errors".into(),
             });
+            (None, state.err)
         } else {
-            visit_root(&mut state);
+            (visit_root(&mut state), state.err)
         }
-        (state.err, state.files)
     };
     ConfigDocument {
         syntax_errors: err,
         path: uri_to_path(&uri).unwrap(),
-        files,
-        id: FileID::new(uri.as_str()),
+        config: file,
+        id,
         uri,
         timestamp,
         source,
@@ -250,6 +316,7 @@ fn json_path<'a>(mut node: Node, rope: &'a Rope) -> Vec<std::borrow::Cow<'a, str
         }
         node = p;
     }
+    ctx.reverse();
     ctx
 }
 
@@ -397,13 +464,15 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
                 .chars()
                 .all(|c| c.is_alphanumeric() || c.is_whitespace() || c == '.')
             {
+                info!("{slice}");
                 info!("clean line");
                 let start = slice
                     .char_indices()
                     .take_while(|(_, c)| c.is_whitespace())
                     .last()
                     .unwrap_or_default()
-                    .0;
+                    .0
+                    + 1;
                 let last = slice[start..]
                     .char_indices()
                     .take_while(|(_, c)| !c.is_whitespace())
@@ -429,7 +498,8 @@ fn parse_json_key(text: &Rope, key: Span) -> Path {
     //TODO this does not handle escaped strings with dots inside
     //decoding them is not determinstic so we should simply frobid them
     //or use a special token
-    let text_raw = text.slice(key.clone()).to_string().replace('"', "");
+    let text_raw = text.slice(key.clone()).to_string().replace('\\', "");
+    info!("{text_raw}");
     text_raw
         .split('.')
         .map(|i| {
@@ -441,23 +511,22 @@ fn parse_json_key(text: &Rope, key: Span) -> Path {
         })
         .fold(Path::default(), |acc, i| acc.append(&i))
 }
-pub fn estimate_env_json(
+pub fn estimate_env_json<'a>(
     _key_path: &[Ustr],
     tree: &Tree,
-    source: &Rope,
+    source: &'a Rope,
     pos: &Position,
-) -> Option<CompletionEnv> {
+) -> Option<(CompletionEnv, Vec<std::borrow::Cow<'a, str>>)> {
     let offset = byte_offset(pos, source);
     let node = tree
         .root_node()
         .named_descendant_for_byte_range(offset, offset + 1)?;
     let path = json_path(node, source);
     info!("path {:?}", path);
-
-    if path.len() >= 1 && path.len() <= 2 && path[0] == "config" {
-        Some(CompletionEnv::ConfigEntryKey)
+    if path.len() >= 1 && path[0] == "config" {
+        Some((CompletionEnv::ConfigEntryKey, path))
     } else if path.len() <= 1 {
-        Some(CompletionEnv::ConfigRootKey)
+        Some((CompletionEnv::ConfigRootKey, path))
     } else {
         None
     }
@@ -468,33 +537,42 @@ pub fn completion_query(source: &Rope, tree: &Tree, pos: &Position) -> Option<Co
         character: pos.character.saturating_sub(1),
         line: pos.line,
     };
+
     let char = char_offset(&pos, source);
     let ctx = estimate_json_item(&pos, source);
     info!("{:#?}", ctx);
     match ctx? {
         JSONItem::Key { key, .. } => {
             let path = parse_json_key(source, key.clone());
+            let (env, outer_path) = estimate_env_json(&path.names, tree, source, &pos)?;
+            let prefix = outer_path
+                .iter()
+                .skip(1)
+                .map(|i| Ustr::from(&*i))
+                .chain(path.names.iter().cloned())
+                .collect();
+
             if source.char(char) == '.' {
                 Some(CompletionQuery {
                     offset: CompletionOffset::Dot,
-                    env: estimate_env_json(&path.names, tree, source, &pos)?,
+                    env,
                     format: CompletionFormater::JSONKey {
                         postfix_range: lsp_range(key, source)?,
                     },
-                    prefix: path.names,
+                    prefix,
                     postfix: CompactString::new_inline(""),
                 })
             } else {
                 Some(CompletionQuery {
                     offset: CompletionOffset::Continous,
-                    env: estimate_env_json(&path.names, tree, source, &pos)?,
+                    env,
                     format: CompletionFormater::JSONKey {
                         postfix_range: lsp_range(
                             path.spans.last().cloned().unwrap_or(key),
                             source,
                         )?,
                     },
-                    prefix: path.names[..path.names.len().saturating_sub(1)].to_vec(),
+                    prefix: prefix[..prefix.len().saturating_sub(1)].to_vec(),
                     postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
                 })
             }
@@ -502,13 +580,21 @@ pub fn completion_query(source: &Rope, tree: &Tree, pos: &Position) -> Option<Co
         JSONItem::FreeKey(key) => {
             info!(" free {:?}", key);
             let path = parse_json_key(source, key.clone());
+            info!("{path:?}");
+            let (env, outer_path) = estimate_env_json(&path.names, tree, source, &pos)?;
+            let prefix: Vec<Ustr> = outer_path
+                .iter()
+                .skip(1)
+                .flat_map(|i| i.split(".").map(|i| i.replace('\\', "").into()))
+                .chain(path.names.iter().cloned())
+                .collect();
             Some(CompletionQuery {
                 offset: CompletionOffset::Continous,
-                env: estimate_env_json(&path.names, tree, source, &pos)?,
+                env,
                 format: CompletionFormater::FreeJSONKey {
                     whole_key: lsp_range(key, source)?,
                 },
-                prefix: path.names[..path.names.len().saturating_sub(1)].to_vec(),
+                prefix: prefix[..prefix.len().saturating_sub(1)].to_vec(),
                 postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
             })
         }
@@ -524,14 +610,17 @@ pub fn find_file_id(
 ) -> Option<FileID> {
     find_selected_json_key(tree, pos, source, &["file".into()]).and_then(|n| {
         if n.kind() == "string" {
-            n.named_child(0)
-                .map(|n| parse_json_key(source, n.byte_range()))
-                .and_then(|base| {
-                    info!("JSON base is {:?}", base);
-                    let path = uri_to_path(uri)?;
-                    let abs_path = [&path[0..path.len() - 1], &base.names].concat();
-                    root.fs().resolve_abs(&abs_path)
-                })
+            n.named_child(0).and_then(|base| {
+                info!("JSON base is {:?}", base);
+                let mut dir = uri.to_file_path().ok()?.parent()?.to_path_buf();
+                dir.push(&*source.slice_raw(base.byte_range()));
+                let id = FileID::new(Url::from_file_path(dir).unwrap().as_str());
+                if root.containes_id(id) {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
         } else {
             None
         }

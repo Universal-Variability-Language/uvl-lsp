@@ -1,4 +1,6 @@
-use crate::{ast::*, config::*, pipeline::AsyncPipeline, semantic::*, smt, util::Result};
+use crate::{
+    ast::*, config::*, module::*, pipeline::AsyncPipeline, semantic::*, smt, util::Result,
+};
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
     response::Html,
@@ -12,7 +14,7 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use log::info;
 use serde::Serialize;
-use std::sync::Arc;
+use std::{borrow::Borrow, sync::Arc};
 use std::{collections::BTreeMap, sync::atomic::AtomicU64};
 use tokio_util::sync::CancellationToken;
 
@@ -46,14 +48,20 @@ pub enum SatState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UIEntryValue {
-    Attributes,
+    Attributes(Ustr),
+    File {
+        alias: Option<Ustr>,
+        name: String,
+    },
     Feature {
+        name: Ustr,
         config: Option<ConfigValue>,
         smt_value: Option<ConfigValue>,
         ty: Type,
         unsat: bool,
     },
     Attribute {
+        name: Ustr,
         config: Option<ConfigValue>,
         default: ConfigValue,
         unsat: bool,
@@ -63,9 +71,9 @@ pub enum UIEntryValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UIEntry {
     pub depth: u32,
-    pub name: Ustr,
-    pub value: UIEntryValue,
+
     pub open: bool,
+    pub value: UIEntryValue,
 }
 impl UIEntry {
     fn update_smt(&mut self, val: Option<ConfigValue>) {
@@ -101,38 +109,22 @@ impl UIEntry {
         }
     }
 }
-#[derive(Debug, Clone)]
-pub struct UIFileNode {
-    pub uri: FileID,
-    pub name: String,
-    pub entries: IndexMap<Symbol, UIEntry>,
-    pub open: bool,
-}
-impl UIFileNode {
+
+impl UIConfigState {
     fn unfold(&mut self) {
         let mut is_open = HashSet::new();
         for i in self.entries.values_mut().rev() {
-            i.open = is_open.remove(&(i.depth)) || i.should_open();
+            i.open = is_open.remove(&(i.depth as i32)) || i.should_open();
             if i.open {
-                is_open.insert(i.depth - 1);
+                is_open.insert(i.depth as i32 - 1);
             }
-        }
-        if is_open.get(&0).is_some() {
-            self.open = true;
         }
     }
 }
 #[derive(Debug, Clone, Default)]
 pub struct UIConfigState {
-    pub files: IndexMap<FileID, UIFileNode>,
+    pub entries: IndexMap<ModuleSymbol, UIEntry>,
     pub tag: u8,
-}
-impl UIConfigState {
-    fn unfold(&mut self) {
-        for i in self.files.values_mut() {
-            i.unfold();
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -143,17 +135,22 @@ pub struct UIState {
     pub file_name: String,
     pub show: bool,
 }
+pub struct ConfigSource {
+    pub root: FileID,
+    pub module: ConfigModule,
+    pub tag: u8,
+    pub cancel: CancellationToken,
+}
 
 #[derive(Debug, Clone)]
 pub enum UIAction {
     TreeDirty,
-    ToggleValue(FileID, Symbol, u8),
-    ToggleFile(FileID, u8),
-    UpdateRoot(Arc<RootGraph>),
-    UpdateSMTModel(smt::SMTModel, Instant),
-    UpdateSMTInvalid(String, Instant),
-    Set(FileID, Symbol, u8, ConfigValue),
-    Unset(FileID, Symbol, u8),
+    ToggleEntry(ModuleSymbol, u8),
+    UpdateRoot(Arc<Module>, u8),
+    UpdateSMTModel(smt::SMTModel, u8),
+    UpdateSMTInvalid(String, u8),
+    Set(ModuleSymbol, u8, ConfigValue),
+    Unset(ModuleSymbol, u8),
     Save,
     Show,
 }
@@ -180,15 +177,19 @@ impl PartialEq for AppProps {
         self.initial == other.initial
     }
 }
+
 fn create_file_tree(
     file: &AstDocument,
-    config: Option<&HashMap<Vec<Ustr>, ConfigValue>>,
-) -> UIFileNode {
-    let mut values: IndexMap<Symbol, UIEntry> = IndexMap::new();
+    base_depth: u32,
+    instance: InstanceID,
+    config: &HashMap<ModuleSymbol, ConfigValue>,
+    entries: &mut IndexMap<ModuleSymbol, UIEntry>,
+) {
     let mut last = Symbol::Root;
     let mut vdir = 0;
     file.visit_named_children_depth(Symbol::Root, true, |sym, prefix, depth| match sym {
         Symbol::Feature(_) | Symbol::Attribute(_) => {
+            let depth = depth as u32 + base_depth - 1;
             match file.type_of(sym).unwrap() {
                 Type::String | Type::Real | Type::Bool | Type::Attributes => {}
                 _ => {
@@ -196,12 +197,11 @@ fn create_file_tree(
                 }
             }
             if matches!((sym, last), (Symbol::Attribute(..), Symbol::Feature(..))) {
-                values.insert(
-                    Symbol::Dir(vdir),
+                entries.insert(
+                    instance.sym(Symbol::Dir(vdir)),
                     UIEntry {
-                        depth: depth as u32,
-                        name: "attributes".into(),
-                        value: UIEntryValue::Attributes,
+                        depth,
+                        value: UIEntryValue::Attributes("attributes".into()),
                         open: false,
                     },
                 );
@@ -212,37 +212,44 @@ fn create_file_tree(
             } else {
                 depth
             };
+            let name = prefix[prefix.len() - 1];
 
-            values.insert(
-                sym,
+            let ms = instance.sym(sym);
+            let config = config.get(&ms).cloned();
+
+            entries.insert(
+                ms,
                 UIEntry {
-                    name: prefix[prefix.len() - 1],
                     open: false,
-                    depth: depth as u32,
+                    depth,
                     value: match sym {
                         Symbol::Feature(..) => UIEntryValue::Feature {
-                            config: config.and_then(|config| config.get(prefix).cloned()),
+                            name,
                             unsat: false,
+                            config,
                             smt_value: None,
                             ty: file.type_of(sym).unwrap(),
                         },
                         Symbol::Attribute(..) => match file.value(sym).unwrap() {
                             Value::Bool(num) => UIEntryValue::Attribute {
-                                config: config.and_then(|config| config.get(prefix).cloned()),
+                                name,
+                                config,
                                 unsat: false,
                                 default: ConfigValue::Bool(*num),
                             },
                             Value::Number(num) => UIEntryValue::Attribute {
-                                config: config.and_then(|config| config.get(prefix).cloned()),
+                                name,
+                                config,
                                 unsat: false,
                                 default: ConfigValue::Number(*num),
                             },
                             Value::String(s) => UIEntryValue::Attribute {
-                                config: config.and_then(|config| config.get(prefix).cloned()),
+                                name,
+                                config,
                                 unsat: false,
                                 default: ConfigValue::String(s.clone()),
                             },
-                            Value::Attributes => UIEntryValue::Attributes,
+                            Value::Attributes => UIEntryValue::Attributes(name),
                             _ => unimplemented!(),
                         },
                         _ => unimplemented!(),
@@ -254,74 +261,94 @@ fn create_file_tree(
         }
         _ => false,
     });
-    UIFileNode {
-        uri: file.id,
-        name: file.path[file.path.len() - 1].as_str().into(),
-        open: true,
-        entries: values,
-    }
 }
 
-fn rebuild_tree(root: &RootGraph, config: &DirectConfig) -> Option<UIConfigState> {
-    let mut members = HashSet::new();
-    for &i in config.keys() {
-        if root.containes_id(i) {
-            for i in root.fs().recursive_imports(i) {
-                members.insert(i);
-            }
-        }
-    }
-    if members
-        .iter()
-        .any(|i| !root.cache().modules[root.cache().file2module[i]].ok)
-    {
+fn rebuild_tree(source: &ConfigSource) -> Option<UIConfigState> {
+    let module = &source.module;
+    if !module.ok {
         return None;
     }
-    let files = members
-        .iter()
-        .map(|&m| (m, create_file_tree(root.file(m), config.get(&m))))
-        .collect();
+    let root_file = source.module.file(InstanceID(0));
+    let uri_head = root_file.uri.path().rfind("/").unwrap();
+    let file_name = |uri: &tower_lsp::lsp_types::Url| uri.path()[uri_head + 1..].to_string();
+    let mut entries: IndexMap<ModuleSymbol, UIEntry> = IndexMap::new();
+    let mut content: Vec<(u32, InstanceID)> = vec![];
+    for (origin, instance, tgt, depth) in module.instances_depth() {
+        loop {
+            if content.last().map(|l| l.0 > depth).unwrap_or(false) {
+                let (depth, instance) = content.pop().unwrap();
+                create_file_tree(
+                    module.file(instance),
+                    depth,
+                    instance,
+                    &source.module.values,
+                    &mut entries,
+                );
+            } else {
+                break;
+            }
+        }
+        let file = module.file(origin.instance);
+        entries.insert(
+            origin,
+            UIEntry {
+                depth,
+                open: false,
+                value: UIEntryValue::File {
+                    alias: if matches!(origin.sym, Symbol::Import(_)) {
+                        file.imports()[origin.sym.offset()]
+                            .alias
+                            .as_ref()
+                            .map(|p| p.name)
+                    } else {
+                        None
+                    },
+                    name: file_name(&tgt.uri),
+                },
+            },
+        );
+        content.push((depth + 1, instance));
+    }
+    for (depth, instance) in content.into_iter().rev() {
+        create_file_tree(
+            module.file(instance),
+            depth,
+            instance,
+            &source.module.values,
+            &mut entries,
+        );
+    }
     Some(UIConfigState {
-        files,
-        tag: (root.revision() % 256) as u8,
+        entries,
+        tag: source.tag,
     })
 }
+
 //Keeps the UI in sync with its context
 async fn ui_sync(
     id: u64,
     pipeline: AsyncPipeline,
     tx_sync: mpsc::Sender<UIAction>,
-    mut rx_config: watch::Receiver<DirectConfig>,
+    target: FileID,
 ) -> Result<()> {
     let mut dirty = pipeline.subscribe_dirty_tree();
-    let mut root = {
-        let root = pipeline.sync_root_global().await?;
-        tx_sync.send(UIAction::UpdateRoot(root.clone())).await?;
-        root
-    };
-    let mut cancel = CancellationToken::new();
     loop {
         select! {
             _=dirty.recv()=>{
                 info!("dirty");
                 tx_sync.send(UIAction::TreeDirty).await?;
-                let new_root =pipeline.sync_root_global().await?;
-                tx_sync.send(UIAction::UpdateRoot(root.clone())).await?;
-                root = new_root;
-                cancel.cancel();
-                cancel = CancellationToken::new();
-                spawn(smt::create_config_model(Instant::now(),root.clone(),cancel.clone(),
-                    rx_config.borrow_and_update().clone(),
-                    tx_sync.clone(),pipeline.inlay_state().clone(),id));
+                let root =pipeline.sync_root_global().await?;
+                if root.containes_id(target){
 
+                tx_sync
+                    .send(UIAction::UpdateRoot(
+                        Arc::new(Module::new(target, root.fs(), &root.cache().ast)),
+                        (root.revision() % 256) as u8,
+                    ))
 
-            },
-            Ok(_) = rx_config.changed()=>{
-                cancel.cancel();
-                cancel = CancellationToken::new();
-                spawn(smt::create_config_model(Instant::now(),root.clone(),cancel.clone(),
-                    rx_config.borrow_and_update().clone(),
-                    tx_sync.clone(),pipeline.inlay_state().clone(),id));
+                    .await?;
+                }
+
             },
             else =>{
                 break;
@@ -330,17 +357,7 @@ async fn ui_sync(
     }
     Ok(())
 }
-fn purge_state(root: &RootGraph, config: &mut DirectConfig) {
-    config.retain(|k, _| root.containes_id(*k));
-    for (k, v) in config.iter_mut() {
-        let file = root.file(*k);
-        v.retain(|k, _| {
-            file.lookup(Symbol::Root, k.as_slice(), |_| true)
-                .find(|sym| matches!(sym, Symbol::Attribute(..) | Symbol::Feature(..)))
-                .is_some()
-        });
-    }
-}
+/*
 fn save_config(config: &DirectConfig, dir: String, file_name: String, root: &RootGraph) {
     #[derive(Serialize)]
     struct RawFileConfig {
@@ -378,96 +395,124 @@ fn save_config(config: &DirectConfig, dir: String, file_name: String, root: &Roo
         let _ = std::fs::write(&path, json);
     });
 }
+*/
 //redux style state management
+
+fn rebuild_config(
+    ui_state: &UseRef<UIState>,
+    ui_config: &UseRef<UIConfigState>,
+    source: &ConfigSource,
+) {
+    ui_config.with_mut(|x| {
+        if let Some(tree) = rebuild_tree(&source) {
+            *x = tree;
+            ui_state.with_mut(|state| {
+                state.sync = UISyncState::Valid;
+            });
+            x.unfold();
+        } else {
+            ui_state.with_mut(|state| {
+                state.sync = UISyncState::InternalError("sources invalid".into());
+            });
+        }
+    });
+}
+fn transfer_config(source: &mut ConfigSource, new: Arc<Module>) {
+    if !new.ok {
+        return;
+    }
+    info!("tarns");
+    let ser = source.module.serialize();
+    let (new_values, _) = new.resolve_config(&ser, |_, _| {});
+    source.module.module = new;
+    source.module.values = new_values;
+}
+
 async fn ui_event_loop(
     id: u64,
-    tx_config: watch::Sender<DirectConfig>,//The current configuration
-    mut rx_ui: UnboundedReceiver<UIAction>,//Incoming events from the ui
-    mut rx_sync: mpsc::Receiver<UIAction>,//Incoming events from the server
-    ui_config: &UseRef<UIConfigState>,//Displayed configuration tree
-    ui_state: &UseRef<UIState>,//Displayed meta parameters 
+    tx_config: watch::Sender<ConfigSource>, //The current configuration
+    mut rx_ui: UnboundedReceiver<UIAction>, //Incoming events from the ui
+    mut rx_sync: mpsc::Receiver<UIAction>,  //Incoming events from the server
+    ui_config: &UseRef<UIConfigState>,      //Displayed configuration tree
+    ui_state: &UseRef<UIState>,             //Displayed meta parameters
     pipeline: &AsyncPipeline,
+    tgt_path: String,
 ) -> Result<()> {
-    let mut latest_model = Instant::now();
-    let mut ctag = 0; //Shortend root revision
-    let mut groot = pipeline.sync_root_global().await?;
+    let mut ctag = tx_config.borrow().tag; //Shortend root revision
+    rebuild_config(ui_state, ui_config, &tx_config.borrow());
     loop {
         let e = select! {Some(e)=rx_ui.next()=>e,Some(e)=rx_sync.recv()=>e, else=>{break;}};
-
         match e {
             UIAction::TreeDirty => {
                 ui_state.with_mut(|state| {
                     state.sync = UISyncState::Dirty;
                 });
             }
-            UIAction::UpdateRoot(root) => {
-                tx_config.send_modify(|state| purge_state(&root, state));
-                ui_config.with_mut(|x| {
-                    if let Some(tree) = rebuild_tree(&root, &tx_config.borrow()) {
-                        ctag = tree.tag;
-                        *x = tree;
-                        ui_state.with_mut(|state| {
-                            state.sync = UISyncState::Valid;
-                        });
-                        x.unfold();
-                    } else {
-                        ui_state.with_mut(|state| {
-                            state.sync = UISyncState::InternalError("sources invalid".into());
-                        });
-                    }
+            UIAction::UpdateRoot(root, tag) => {
+                ctag = tag;
+
+                let ok = root.ok;
+                tx_config.send_modify(|state| {
+                    transfer_config(state, root);
+                    state.tag = tag;
+                    state.cancel.cancel();
+                    state.cancel = CancellationToken::new();
                 });
-                groot = root.clone()
+                if ok {
+                    rebuild_config(ui_state, ui_config, &tx_config.borrow());
+                } else {
+                    ui_state.with_mut(|x| {
+                        x.sync = UISyncState::InternalError("invalid sources".into());
+                    })
+                }
             }
-            UIAction::ToggleValue(file, index, tag) => {
+            UIAction::ToggleEntry(sym, tag) => {
                 if tag != ctag {
                     continue;
                 }
-                ui_config.with_mut(|UIConfigState { files, .. }| {
-                    if let Some(v) = files
-                        .get_mut(&file)
-                        .and_then(|file| file.entries.get_mut(&index))
-                    {
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    if let Some(v) = entries.get_mut(&sym) {
                         v.open = !v.open;
                     }
                 });
             }
-            UIAction::ToggleFile(file, tag) => {
+            UIAction::Set(sym, tag, val) => {
                 if tag != ctag {
                     continue;
                 }
-                ui_config.with_mut(|UIConfigState { files, .. }| {
-                    if let Some(file) = files.get_mut(&file) {
-                        info!("set!");
-                        file.open = !file.open;
-                    }
-                });
-            }
-            UIAction::Set(file, sym, tag, val) => {
-                if tag != ctag {
-                    continue;
-                }
-                ui_config.with_mut(|UIConfigState { files, .. }| {
-                    if let Some(node) = files.get_mut(&file).and_then(|e| e.entries.get_mut(&sym)) {
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    if let Some(node) = entries.get_mut(&sym) {
                         node.update_config(Some(val.clone()));
                     }
                 });
+                tx_config.borrow().cancel.cancel();
                 tx_config.send_modify(|config| {
-                    if !config.contains_key(&file) {
-                        config.insert(file, HashMap::new());
-                    }
-                    if let Some(cnode) = config.get_mut(&file) {
-                        cnode.insert(groot.file(file).prefix(sym), val.clone());
-                    }
+                    config.module.values.insert(sym, val);
+                    config.cancel.cancel();
+                    config.cancel = CancellationToken::new();
                 });
             }
             UIAction::Save => {
-                let state = ui_state.read();
-                save_config(
-                    &tx_config.borrow(),
-                    state.dir.clone(),
-                    state.file_name.clone(),
-                    &pipeline.root().borrow(),
-                );
+                let module = tx_config.borrow().module.clone();
+                let output_name = ui_state.read().file_name.clone();
+                let tgt_path = tgt_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    if !module.ok {
+                        return;
+                    }
+                    let ser = module.serialize();
+                    #[derive(Serialize)]
+                    struct RawConfig {
+                        file: String,
+                        config: ConfigEntry,
+                    }
+                    let config = RawConfig {
+                        file: tgt_path,
+                        config: ConfigEntry::Import(Default::default(), ser),
+                    };
+                    let out = serde_json::to_string_pretty(&config).unwrap();
+                    std::fs::write(output_name, out);
+                });
             }
             UIAction::Show => {
                 let show = ui_state.with_mut(|state| {
@@ -485,73 +530,63 @@ async fn ui_event_loop(
                         .inlay_state()
                         .set_source(crate::inlays::InlaySource::Web(id))
                         .await;
-                    tx_config.send_modify(|_| {});
+                    tx_config.send_modify(|config| {
+                        config.cancel.cancel();
+                        config.cancel = CancellationToken::new();
+                    });
                 }
             }
-            UIAction::Unset(file, sym, tag) => {
+            UIAction::Unset(sym, tag) => {
                 if tag != ctag {
                     continue;
                 }
-                ui_config.with_mut(|UIConfigState { files, .. }| {
-                    if let Some(node) = files.get_mut(&file).and_then(|e| e.entries.get_mut(&sym)) {
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    if let Some(node) = entries.get_mut(&sym) {
                         node.update_config(None);
                     }
                 });
+                tx_config.borrow().cancel.cancel();
                 tx_config.send_modify(|config| {
-                    if !config.contains_key(&file) {
-                        config.insert(file, HashMap::new());
-                    }
-                    if let Some(cnode) = config.get_mut(&file) {
-                        cnode.remove(&groot.file(file).prefix(sym));
-                    }
+                    config.module.values.remove(&sym);
+                    config.cancel.cancel();
+                    config.cancel = CancellationToken::new();
                 });
             }
-            UIAction::UpdateSMTInvalid(msg, timestamp) => {
-                if latest_model > timestamp {
+            UIAction::UpdateSMTInvalid(msg, tag) => {
+                if tag != ctag {
                     continue;
                 }
-                latest_model = timestamp;
-                info!("SMT invalid");
-                ui_state.with_mut(|state| {
-                    state.sat = SatState::ERR(msg);
-                });
+                ui_state.with_mut(|state| state.sat = SatState::ERR(msg))
             }
-            UIAction::UpdateSMTModel(model, timestamp) => {
-                if latest_model > timestamp {
+            UIAction::UpdateSMTModel(model, tag) => {
+                if tag != ctag {
                     continue;
                 }
-                latest_model = timestamp;
-                ui_config.with_mut(|UIConfigState { files, .. }| match model {
+                ui_config.with_mut(|UIConfigState { entries, .. }| match model {
                     smt::SMTModel::SAT { values, .. } => {
                         ui_state.with_mut(|state| state.sat = SatState::SAT);
                         for (k, v) in values {
-                            if let Some(file) = files.get_mut(&k.file) {
-                                if let Some(entry) = file.entries.get_mut(&k.sym) {
-                                    entry.update_smt(Some(v));
-                                    entry.unsat(false);
-                                }
-                            }
-                        }
-                        for i in files.values_mut() {
-                            i.unfold();
+                            let entry = &mut entries[&k];
+
+                            entry.unsat(false);
+                            entry.update_smt(Some(v));
                         }
                     }
                     smt::SMTModel::UNSAT { reasons } => {
                         ui_state.with_mut(|state| {
                             state.sat = SatState::UNSAT;
                         });
-                        for i in files.values_mut().flat_map(|i| i.entries.values_mut()) {
+                        for i in entries.values_mut() {
                             i.update_smt(None);
                             i.unsat(false);
                         }
                         for i in reasons {
                             match i {
-                                smt::SmtName::Config(k) | smt::SmtName::Attribute(k) => {
-                                    if let Some(file) = files.get_mut(&k.file) {
-                                        if let Some(entry) = file.entries.get_mut(&k.sym) {
-                                            entry.unsat(true);
-                                        }
-                                    }
+                                smt::AssertInfo(
+                                    k,
+                                    smt::AssertName::Config | smt::AssertName::Attribute,
+                                ) => {
+                                    entries[&k].unsat(true);
                                 }
                                 _ => {}
                             }
@@ -573,20 +608,26 @@ pub async fn ui_main(
     ui_rx: UnboundedReceiver<UIAction>,
     initial: AppInitialParams,
 ) -> Result<()> {
-    let (initial_config, dest) = match initial {
+    let (initial_config, dest, tgt_path) = match initial {
         AppInitialParams::Create(path) => {
             let root = pipeline.sync_root_global().await?;
             let id = FileID::new(format!("file:///{path}").as_str());
-
-            let mut c = HashMap::new();
             if root.containes_id(id) {
-                c.insert(id, HashMap::new());
-                for i in root.fs().recursive_imports(id) {
-                    c.insert(i, HashMap::new());
-                }
-                let mut dest = id.url().unwrap().to_file_path().unwrap();
+                let c = ConfigSource {
+                    root: id,
+                    module: ConfigModule {
+                        module: Arc::new(Module::new(id, root.fs(), &root.cache().ast)),
+                        values: HashMap::new(),
+                        source_map: HashMap::new(),
+                    },
+                    tag: (root.revision() % 256) as u8,
+                    cancel: CancellationToken::new(),
+                };
+                let path = id.url().unwrap().to_file_path().unwrap();
+                let mut dest = path.clone();
+                let tgt_path = path.file_name().unwrap().to_str().unwrap().to_string();
                 dest.set_extension("uvl.json");
-                Ok((c, dest))
+                Ok((c, dest, tgt_path))
             } else {
                 Err("source model not found")
             }
@@ -595,30 +636,36 @@ pub async fn ui_main(
             let root = pipeline.sync_root_global().await?;
             let path = FileID::new(format!("file:///{path}").as_str());
             if let Some(src) = root.cache().config_modules.get(&path) {
-                let mut dst = HashMap::new();
-                for &m in src.members.iter() {
-                    let file = root.file(m);
-                    let mut file_dst = HashMap::new();
-                    file.visit_named_children(Symbol::Root, true, |sym, prefix| match sym {
-                        Symbol::Feature(..) => {
-                            if let Some(c) = src.features.get(&RootSymbol { sym, file: m }) {
-                                file_dst.insert(prefix.to_vec(), c.clone());
-                            }
-                            true
-                        }
-                        Symbol::Attribute(..) => {
-                            if let Some(c) = src.attributes.get(&RootSymbol { sym, file: m }) {
-                                file_dst.insert(prefix.to_vec(), c.clone());
-                            }
-                            true
-                        }
-                        _ => false,
-                    });
-                    dst.insert(m, file_dst);
+                info!("{src:?}");
+                if !src.ok {
+                    Err("invalid config")?;
                 }
-                Ok((dst, path.url().unwrap().to_file_path().unwrap()))
+                let id = src.file(InstanceID(0)).id;
+
+                let src: &ConfigModule = &**src;
+                let c = ConfigSource {
+                    root: id,
+                    module: src.clone(),
+                    tag: (root.revision() % 256) as u8,
+                    cancel: CancellationToken::new(),
+                };
+                let dest = path.url().unwrap().to_file_path().unwrap();
+                let tgt_path = src
+                    .module
+                    .file(InstanceID(0))
+                    .id
+                    .url()
+                    .unwrap()
+                    .to_file_path()
+                    .unwrap();
+                let tgt_path = tgt_path.strip_prefix(dest.parent().unwrap()).unwrap();
+                Ok((
+                    c,
+                    path.url().unwrap().to_file_path().unwrap(),
+                    tgt_path.to_str().unwrap().to_string(),
+                ))
             } else {
-                Err("confuguartion not found")
+                Err("configuration not found")
             }
         }
         AppInitialParams::InvalidOP => Err("invalid server operation"),
@@ -627,13 +674,21 @@ pub async fn ui_main(
         if let Some(p) = dest.parent() {
             state.dir = p.to_str().unwrap().to_string();
         }
+        state.sync = UISyncState::Valid;
         state.file_name = dest.file_name().unwrap().to_str().unwrap().to_string();
     });
+    let root = initial_config.root;
     let (tx_sync, rx_sync) = mpsc::channel(32);
     let (tx_config, rx_config) = watch::channel(initial_config);
-    spawn(ui_sync(id, pipeline.clone(), tx_sync, rx_config));
+    spawn(smt::web_view_handler(
+        rx_config,
+        tx_sync.clone(),
+        pipeline.inlay_state().clone(),
+        crate::inlays::InlaySource::Web(id),
+    ));
+    spawn(ui_sync(id, pipeline.clone(), tx_sync, root));
     ui_event_loop(
-        id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline,
+        id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline, tgt_path,
     )
     .await?;
 

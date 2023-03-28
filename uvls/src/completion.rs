@@ -393,13 +393,7 @@ impl CompletionFormater {
                 }
             }
             (Self::FreeJSONKey { whole_key }, TextOP::Put(text)) => {
-                let whole_path = make_path(
-                    prefix
-                        .iter()
-                        .map(|i| i.as_str())
-                        .chain(std::iter::once(text.as_str())),
-                );
-                let key = format!(r#""{}""#, whole_path.replace('"', r#"\""#));
+                let key = format!(r#""{}""#, text.replace('"', r#"\""#));
                 TextEdit {
                     new_text: key,
                     range: whole_key.clone(),
@@ -731,6 +725,13 @@ fn completion_symbol_local(
             info!("skip {:?}", sym_prefix);
             return true;
         }
+        if matches!(
+            query.env,
+            CompletionEnv::Numeric | CompletionEnv::Constraint
+        ) && matches!(sym, Symbol::Dir(_))
+        {
+            return true;
+        }
         if query.env == CompletionEnv::Feature
             && root.file == origin
             && matches!(sym, Symbol::Feature(..))
@@ -738,6 +739,7 @@ fn completion_symbol_local(
             return true;
         }
         let text = make_path(prefix.iter().chain(sym_prefix.iter()));
+        info!("{text}");
         top.push(CompletionOpt::new(
             ty.into(),
             *sym_prefix.last().unwrap(),

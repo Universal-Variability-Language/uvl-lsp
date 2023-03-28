@@ -8,6 +8,7 @@ edition = "2021"
 
 [dependencies]
 futures-util = "0.3.21"
+serde-tuple-vec-map = "1.0.1"
 segment-tree = "2.0.0"
 indexmap = "1.9.2"
 petgraph = "0.6.2"

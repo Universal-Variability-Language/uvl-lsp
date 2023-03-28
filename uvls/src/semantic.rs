@@ -37,6 +37,9 @@ impl FileID {
     pub fn is_config(&self) -> bool {
         self.0.as_str().ends_with(".json") | self.is_virtual()
     }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 impl Debug for FileID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -67,6 +70,8 @@ pub struct RootGraph {
     cache: Cache,
     revision: u64,
     cancel: CancellationToken,
+    pub files: AstFiles,
+    pub configs: ConfigFiles,
 }
 impl RootGraph {
     pub fn containes(&self, uri: &Url) -> bool {
@@ -78,17 +83,16 @@ impl RootGraph {
             .or(self.file_by_uri(uri).map(|i| i.timestamp))
     }
     pub fn containes_id(&self, id: FileID) -> bool {
-        self.cache.files.contains_key(&id) || self.cache.configs.contains_key(&id)
+        self.files.contains_key(&id) || self.configs.contains_key(&id)
     }
     pub fn try_file(&self, id: FileID) -> Option<&AstDocument> {
-        self.cache.files.get(&id).map(|f| &**f)
+        self.cache.ast.get(&id).map(|f| &*f.content)
     }
     pub fn type_of(&self, sym: RootSymbol) -> Option<Type> {
         if matches!(sym.sym, Symbol::Reference(..)) {
-            let module = self.cache.file2module[&sym.file];
-            self.cache.modules[module]
-                .ref_map
-                .get(&sym)
+            let file = &self.cache.ast[&sym.file];
+            file.resolved
+                .get(&sym.sym)
                 .and_then(|sym| self.type_of(*sym))
         } else {
             self.file(sym.file).type_of(sym.sym)
@@ -102,23 +106,20 @@ impl RootGraph {
         self.file(sym.file).lsp_range(sym.sym)
     }
     pub fn config_by_uri(&self, name: &Url) -> Option<&ConfigDocument> {
-        self.cache
-            .configs
-            .get(&FileID::new(name.as_str()))
-            .map(|i| &**i)
+        self.configs.get(&FileID::new(name.as_str())).map(|i| &**i)
     }
     pub fn file_by_uri(&self, name: &Url) -> Option<&AstDocument> {
         self.cache
-            .files
+            .ast
             .get(&FileID::new(name.as_str()))
-            .map(|i| &**i)
+            .map(|i| &*i.content)
     }
     pub fn file(&self, id: FileID) -> &AstDocument {
-        &self.cache.files[&id]
+        &self.cache.ast[&id].content
     }
     pub fn file_id(&self, name: &Url) -> Option<FileID> {
         let id = FileID::new(name.as_str());
-        if self.cache.configs.contains_key(&id) || self.cache.files.contains_key(&id) {
+        if self.cache.ast.contains_key(&id) || self.configs.contains_key(&id) {
             Some(id)
         } else {
             None
@@ -137,12 +138,12 @@ impl RootGraph {
         origin: FileID,
         path: &'a [Ustr],
     ) -> impl Iterator<Item = RootSymbol> + 'a {
-        resolve::resolve(&self.cache.files, &self.cache.fs, origin, path)
+        resolve::resolve(&self.files, &self.cache.fs, origin, path)
     }
     pub fn resolve_sym<'a>(&'a self, sym: RootSymbol) -> Option<RootSymbol> {
         if matches!(sym.sym, Symbol::Reference(..)) {
-            let module = self.cache.file2module[&sym.file];
-            self.cache.modules[module].ref_map.get(&sym).cloned()
+            let module = &self.cache.ast[&sym.file];
+            module.resolved.get(&sym.sym).cloned()
         } else {
             Some(sym)
         }
@@ -157,7 +158,7 @@ impl RootGraph {
         origin: FileID,
         path: &'a [Ustr],
     ) -> impl Iterator<Item = Vec<(RootSymbol, usize)>> + 'a {
-        resolve::resolve_with_bind(&self.cache.files, &self.cache.fs, origin, path)
+        resolve::resolve_with_bind(&self.files, &self.cache.fs, origin, path)
     }
     //find all attributes from origin under context, usefull for aggregates
     pub fn resolve_attributes<'a, F: FnMut(RootSymbol, &[Ustr])>(
@@ -166,7 +167,7 @@ impl RootGraph {
         context: &'a [Ustr],
         f: F,
     ) {
-        resolve::resolve_attributes(&self.cache.files, &self.cache.fs, origin, context, f)
+        resolve::resolve_attributes(&self.files, &self.cache.fs, origin, context, f)
     }
     //find all attributes from origin under context, usefull for aggregates, also keep track
     //of the owner feature and file
@@ -179,22 +180,13 @@ impl RootGraph {
         context: &'a [Ustr],
         f: F,
     ) {
-        resolve::resolve_attributes_with_feature(
-            &self.cache.files,
-            &self.cache.fs,
-            origin,
-            context,
-            f,
-        )
-    }
-    pub fn iter_files(&self) -> impl Iterator<Item = (FileID, &'_ AstDocument)> + '_ {
-        self.cache.files.iter().map(|(i, v)| (*i, &**v))
+        resolve::resolve_attributes_with_feature(&self.files, &self.cache.fs, origin, context, f)
     }
     pub fn fs(&self) -> &FileSystem {
         &self.cache.fs
     }
     pub fn dump(&self) {
-        info!("{:#?}", &self.cache.files);
+        info!("{:#?}", self);
     }
     pub fn cache(&self) -> &Cache {
         &self.cache
@@ -248,6 +240,8 @@ impl RootGraph {
             cancel: CancellationToken::new(),
             cache: Cache::new(old, files, configs, &dirty, revision, err),
             revision,
+            files: files.clone(),
+            configs: configs.clone(),
         }
     }
 }

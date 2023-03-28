@@ -3,12 +3,15 @@ use crate::{
     check::{DiagnosticUpdate, ErrorsAcc},
     config::*,
     inlays::{InlayHandler, InlaySource},
+    module::*,
     semantic::*,
     util::{maybe_cancel, Result},
+    webview,
 };
 use futures::future::join_all;
-use hashbrown::HashMap;
-use indexmap::IndexMap;
+use hashbrown::{HashMap, HashSet};
+use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::info;
 use regex::Regex;
@@ -134,37 +137,54 @@ lazy_static! {
     static ref HAS_Z3: bool = can_run_z3();
 }
 #[derive(Clone, Debug)]
-pub enum SmtName {
-    Config(RootSymbol),
-    Attribute(RootSymbol),
-    Constraint(RootSymbol),
-    GroupMember(RootSymbol),
-    Group(RootSymbol),
-    GroupMin(RootSymbol),
-    GroupMax(RootSymbol),
+pub enum AssertName {
+    Config,
+    Constraint,
+    Attribute,
+    Group,
+    GroupMember,
+    GroupMin,
+    GroupMax,
 }
-impl SmtName {
-    pub fn symbol(&self) -> RootSymbol {
+impl Display for AssertName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SmtName::Config(s)
-            | SmtName::Attribute(s)
-            | SmtName::Constraint(s)
-            | SmtName::GroupMember(s)
-            | SmtName::Group(s)
-            | SmtName::GroupMin(s)
-            | SmtName::GroupMax(s) => *s,
+            Self::Attribute => write!(f, "attribute value"),
+            Self::Constraint => write!(f, "constraint"),
+            Self::Config => write!(f, "configuration value"),
+            Self::Group => write!(f, "group"),
+            Self::GroupMin => write!(f, "lower bound"),
+            Self::GroupMax => write!(f, "upper bound"),
+            Self::GroupMember => write!(f, "group member"),
         }
     }
 }
+#[derive(Debug, Clone)]
+pub struct AssertInfo(pub ModuleSymbol, pub AssertName);
 struct SMTModule {
-    asserts: Vec<SmtName>,
-    sym2var: IndexMap<RootSymbol, usize>,
+    asserts: Vec<AssertInfo>,
+    sym2var: IndexSet<ModuleSymbol>,
 }
+impl SMTModule {
+    fn var(&self, ms: ModuleSymbol) -> usize {
+        self.sym2var.get_index_of(&ms).unwrap()
+    }
+    fn pseudo_bool(&self, ms: ModuleSymbol, module: &Module) -> String {
+        let ms = module.resolve_value(ms);
+        match module.type_of(ms) {
+            Type::Bool => format!("v{}", self.var(ms)),
+            Type::Real => format!("(not(= v{} 0.0))", self.var(ms)),
+            Type::String => format!(r#"(not(= v{} ""))"#, self.var(ms)),
+            _ => unimplemented!(),
+        }
+    }
+}
+
 impl SMTModule {
     pub fn parse_model<'a>(
         &'a self,
         model: &'a str,
-    ) -> impl Iterator<Item = (RootSymbol, ConfigValue)> + 'a {
+    ) -> impl Iterator<Item = (ModuleSymbol, ConfigValue)> + 'a {
         lazy_static! {
             static ref RE: Regex =
                 Regex::new(r#"\(\s*define-fun\s+v(\d+)\s+\(\)\s+(Bool|String|Real)\s+(true|false|"[^"]*"|-?[0-9]*\.[0-9]*)\s*\)"#)
@@ -173,7 +193,7 @@ impl SMTModule {
 
         RE.captures_iter(model).map(|i| {
             let idx: usize = i[1].parse().unwrap();
-            let var = *self.sym2var.get_index(idx).unwrap().0;
+            let var = *self.sym2var.get_index(idx).unwrap();
             (
                 var,
                 match &i[2] {
@@ -193,17 +213,17 @@ impl SMTModule {
     pub fn parse_values<'a>(
         &'a self,
         values: &'a str,
-    ) -> impl Iterator<Item = (RootSymbol, ConfigValue)> + 'a {
+    ) -> impl Iterator<Item = (ModuleSymbol, ConfigValue)> + 'a {
         lazy_static! {
             static ref RE: Regex = Regex::new(
                 r#"\(\s*v(\d+)\s+(?:(true|false)|([+-]?(?:[0-9]*\.)?[0-9]+)|"([^"]*)")\s*\)"#
             )
             .unwrap();
         };
+        //info!("{values}");
         RE.captures_iter(values).map(|i| {
             let idx: usize = i[1].parse().unwrap();
-            let var = *self.sym2var.get_index(idx).unwrap().0;
-
+            let var = *self.sym2var.get_index(idx).unwrap();
             (
                 var,
                 match (i.get(2), i.get(3), &i.get(4)) {
@@ -218,7 +238,7 @@ impl SMTModule {
             )
         })
     }
-    pub fn parse_unsat_core<'a>(&'a self, core: &'a str) -> impl Iterator<Item = SmtName> + 'a {
+    pub fn parse_unsat_core<'a>(&'a self, core: &'a str) -> impl Iterator<Item = AssertInfo> + 'a {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"a(\d+)").unwrap();
         };
@@ -228,43 +248,53 @@ impl SMTModule {
         })
     }
 }
+struct SMTBuilder<'a> {
+    sym2var: IndexSet<ModuleSymbol>,
+    assert: Vec<AssertInfo>,
+    module: &'a Module,
+}
+impl<'a> SMTBuilder<'a> {
+    fn var(&self, ms: ModuleSymbol) -> usize {
+        self.sym2var
+            .get_index_of(&self.module.resolve_value(ms))
+            .unwrap()
+    }
+    fn pseudo_bool(&self, ms: ModuleSymbol) -> String {
+        let ms = self.module.resolve_value(ms);
+        match self.module.type_of(ms) {
+            Type::Bool => format!("v{}", self.var(ms)),
+            Type::Real => format!("(not(= v{} 0.0))", self.var(ms)),
+            Type::String => format!(r#"(not(= v{} ""))"#, self.var(ms)),
+            _ => unimplemented!(),
+        }
+    }
+    fn clause(&self, g: ModuleSymbol) -> String {
+        self.module
+            .file(g.instance)
+            .direct_children(g.sym)
+            .map(|i| self.pseudo_bool(g.instance.sym(i)))
+            .join(" ")
+    }
+    fn min_assert(&mut self, min: usize, p_bind: &str, g: ModuleSymbol) -> String {
+        let name = self.push_assert(AssertInfo(g, AssertName::GroupMin));
+        let clause = self.clause(g);
+        format!("(assert(!(=> {p_bind} ( (_ at-least {min}) {clause}) ):named a{name}))")
+    }
+    fn max_assert(&mut self, max: usize, p_bind: &str, g: ModuleSymbol) -> String {
+        let name = self.push_assert(AssertInfo(g, AssertName::GroupMax));
+        let clause = self.clause(g);
+        format!("(assert(!(=> {p_bind} ( (_ at-most {max}) {clause}) ):named a{name}))")
+    }
+    fn push_var(&mut self, ms: ModuleSymbol) -> usize {
+        self.sym2var.insert(ms);
+        self.sym2var.len() - 1
+    }
+    fn push_assert(&mut self, name: AssertInfo) -> usize {
+        self.assert.push(name);
+        self.assert.len() - 1
+    }
+}
 
-fn pseudo_bool(
-    root: &RootGraph,
-    rs: RootSymbol,
-    sym2var: &IndexMap<RootSymbol, usize>,
-) -> Option<String> {
-    let rs = root.resolve_sym(rs)?;
-    let file = root.file(rs.file);
-    match file.type_of(rs.sym)? {
-        Type::Bool => Some(format!("v{}", sym2var[&rs])),
-        Type::Real => Some(format!("(not(= v{} 0.0))", sym2var[&rs])),
-        Type::String => Some(format!(r#"(not(= v{} ""))"#, sym2var[&rs])),
-        _ => None,
-    }
-}
-fn clause(
-    root: &RootGraph,
-    g: RootSymbol,
-    sym2var: &IndexMap<RootSymbol, usize>,
-) -> Option<String> {
-    let mut out = String::new();
-    for i in root.file(g.file).direct_children(g.sym) {
-        let _ = write!(
-            out,
-            " {}",
-            pseudo_bool(
-                root,
-                RootSymbol {
-                    file: g.file,
-                    sym: i
-                },
-                sym2var
-            )?
-        );
-    }
-    Some(out)
-}
 //We need special formating for SMT, so we reimplement display
 struct SmtConfigValue<'a>(&'a ConfigValue);
 impl<'a> Display for SmtConfigValue<'a> {
@@ -289,55 +319,53 @@ impl Display for Type {
 }
 
 //Encodes a UVL module into an SMT-LIB module
-fn create_module(
-    root: &RootGraph,
-    members: &[FileID],
-    features: &HashMap<RootSymbol, ConfigValue>,
-    attribs: &HashMap<RootSymbol, ConfigValue>,
-) -> Option<(String, SMTModule)> {
-    let mut asserts = Vec::new();
-    let mut sym2var = IndexMap::new();
-    let mut out = "(set-option :produce-unsat-cores true)(define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))\n".to_string();
+fn create_module<'a>(
+    module: &Module,
+    config: &HashMap<ModuleSymbol, ConfigValue>,
+) -> (String, SMTModule) {
+    let mut out = "(set-option :pp.decimal true)(set-option :produce-unsat-cores true)(define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))\n".to_string();
+    //info!("{module:#?}");
+    let mut builder = SMTBuilder {
+        module,
+        sym2var: IndexSet::new(),
+        assert: Vec::new(),
+    };
     //Encode features
-    for &m in members {
-        let file = root.file(m);
+    for (m, file) in module.instances() {
         for f in file.all_features() {
-            let rs = RootSymbol { sym: f, file: m };
+            let ms = m.sym(f);
             let ty = file.type_of(f).unwrap();
-            let var = sym2var.len();
+            let var = builder.push_var(ms);
             let _ = writeln!(out, "(declare-const v{var} {ty})");
-            sym2var.insert(rs, sym2var.len());
         }
     }
-    for (&rs, val) in features {
+    for (&ms, val) in config
+        .iter()
+        .filter(|i| matches!(i.0.sym, Symbol::Feature(..)))
+    {
         let val = SmtConfigValue(val);
-        let var = sym2var[&rs];
-        let name = asserts.len();
+        let var = builder.var(ms);
+        let name = builder.push_assert(AssertInfo(ms, AssertName::Config));
         let _ = writeln!(out, "(assert(!(= v{var} {val}):named a{name}))");
-        asserts.push(SmtName::Config(rs));
     }
     //Encode attributes
-    for &m in members {
-        let file = root.file(m);
+    for (m, file) in module.instances() {
         for f in file.all_features() {
             file.visit_named_children(f, true, |a, _| {
                 if !matches!(a, Symbol::Attribute(..)) {
                     return true;
                 }
-                let rs = RootSymbol { sym: a, file: m };
-                let (val, n) = if let Some(val) = attribs.get(&rs) {
-                    (val.clone(), SmtName::Config(rs))
-                } else {
-                    (
-                        match file.value(a) {
-                            Some(Value::Bool(x)) => ConfigValue::Bool(*x),
-                            Some(Value::Number(x)) => ConfigValue::Number(*x),
-                            Some(Value::String(x)) => ConfigValue::String(x.clone()),
-                            _ => return true,
-                        },
-                        SmtName::Attribute(rs),
-                    )
-                };
+                let ms = m.sym(a);
+                let Some((val, n)) = config.get(&ms).map(|v|(v.clone(),AssertInfo(ms,AssertName::Config) )).or_else(|| {
+                    file.value(a)
+                        .and_then(|v| match v {
+                            Value::Bool(x) => Some(ConfigValue::Bool(*x)),
+                            Value::Number(x) => Some(ConfigValue::Number(*x)),
+                            Value::String(x) => Some(ConfigValue::String(x.clone())),
+                            _ => None,
+                        })
+                        .map(|v| (v, AssertInfo(ms,AssertName::Attribute)))
+                }) else {return true} ;
                 let zero = match val {
                     ConfigValue::Bool(..) => ConfigValue::Bool(false),
                     ConfigValue::Number(..) => ConfigValue::Number(0.0),
@@ -345,25 +373,21 @@ fn create_module(
                 };
                 let zero = SmtConfigValue(&zero);
                 let val = SmtConfigValue(&val);
-
-                let attrib_var = sym2var.len();
+                let attrib_var = builder.push_var(ms);
                 let ty = file.type_of(a).unwrap();
                 let _ = writeln!(out, "(declare-const v{attrib_var} {ty})");
-                let name = asserts.len();
-                let feat_var = pseudo_bool(root, RootSymbol { sym: f, file: m }, &sym2var).unwrap();
+                let feat_var = builder.pseudo_bool(m.sym(f));
+                let name = builder.push_assert(n);
                 let _ = writeln!(
                     out,
                     "(assert(!(= (ite {feat_var} {val} {zero}) v{attrib_var}):named a{name}))"
                 );
-                asserts.push(n);
-                sym2var.insert(rs, sym2var.len());
                 true
             });
         }
     }
     //Encode groups
-    for &m in members {
-        let file = root.file(m);
+    for (m, file) in module.instances() {
         for p in file.all_features() {
             for g in file
                 .direct_children(p)
@@ -372,98 +396,53 @@ fn create_module(
                 if file.direct_children(g).next().is_none() {
                     continue;
                 }
-                let p_rs = RootSymbol { sym: p, file: m };
-                let g_rs = RootSymbol { sym: g, file: m };
-                let p_bind = pseudo_bool(root, p_rs, &sym2var)?;
+                let p_bind = builder.pseudo_bool(m.sym(p));
                 for c in file.direct_children(g) {
-                    let name = asserts.len();
-                    let c_bind = pseudo_bool(root, RootSymbol { sym: c, file: m }, &sym2var)?;
-                    let _ = writeln!(out, "(assert(!(=> {c_bind} {p_bind}):named a{name} ))");
-                    asserts.push(SmtName::GroupMember(RootSymbol { sym: c, file: m }));
+                    let c_bind = builder.pseudo_bool(m.sym(c));
+                    let _ = writeln!(out, "(assert(=> {c_bind} {p_bind}))");
                 }
-                match file.group_mode(g)? {
+                match file.group_mode(g).unwrap() {
                     GroupMode::Or => {
-                        let clause = clause(root, g_rs, &sym2var)?;
-                        let name = asserts.len();
+                        let clause = builder.clause(m.sym(g));
+                        let name = builder.push_assert(AssertInfo(m.sym(g), AssertName::Group));
                         let _ =
                             writeln!(out, "(assert(!(=> {p_bind} (or {clause}) ):named a{name}))");
-                        asserts.push(SmtName::Group(g_rs));
                     }
                     GroupMode::Alternative => {
-                        let clause = clause(root, g_rs, &sym2var)?;
-                        let name = asserts.len();
-                        let _ = writeln!(
-                            out,
-                            "(assert(!(=> {p_bind} ( (_ at-least 1) {clause}) ):named a{name}))"
-                        );
-                        asserts.push(SmtName::GroupMin(g_rs));
-                        let name = asserts.len();
-                        let _ = writeln!(
-                            out,
-                            "(assert(!(=> {p_bind} ( (_ at-most 1) {clause}) ):named a{name}))"
-                        );
-                        asserts.push(SmtName::GroupMax(g_rs));
+                        let _ = writeln!(out, "{}", builder.min_assert(1, &p_bind, m.sym(g)));
+                        let _ = writeln!(out, "{}", builder.max_assert(1, &p_bind, m.sym(g)));
                     }
                     GroupMode::Mandatory => {
                         for c in file.direct_children(g) {
-                            let c_bind =
-                                pseudo_bool(root, RootSymbol { sym: c, file: m }, &sym2var)?;
-                            let name = asserts.len();
+                            let c_bind = builder.pseudo_bool(m.sym(c));
+                            let name =
+                                builder.push_assert(AssertInfo(m.sym(c), AssertName::GroupMember));
                             let _ = writeln!(out, "(assert(!(= {c_bind} {p_bind}):named a{name}))");
-                            asserts.push(SmtName::GroupMember(RootSymbol { sym: c, file: m }));
                         }
                     }
                     GroupMode::Optional | GroupMode::Cardinality(Cardinality::Any) => {}
                     GroupMode::Cardinality(Cardinality::Max(max)) => {
-                        let clause = clause(root, g_rs, &sym2var)?;
-                        let name = asserts.len();
-                        let _ = writeln!(
-                            out,
-                            "(assert(!(=> {p_bind} ( (_ at-most {max}) {clause}) ):named a{name}))"
-                        );
-                        asserts.push(SmtName::GroupMax(g_rs));
+                        let _ = writeln!(out, "{}", builder.max_assert(max, &p_bind, m.sym(g)));
                     }
 
                     GroupMode::Cardinality(Cardinality::From(min)) => {
-                        let clause = clause(root, g_rs, &sym2var)?;
-                        let name = asserts.len();
-                        let _ = writeln!(
-                            out,
-                            "(assert(!(=> {p_bind} ( (_ at-least {min}) {clause}) ):named a{name}))"
-                        );
-                        asserts.push(SmtName::GroupMin(g_rs));
+                        let _ = writeln!(out, "{}", builder.min_assert(min, &p_bind, m.sym(g)));
                     }
                     GroupMode::Cardinality(Cardinality::Range(min, max)) => {
-                        let clause = clause(root, g_rs, &sym2var)?;
-                        let name = asserts.len();
-                        let _ = writeln!(
-                            out,
-                            "(assert(!(=> {p_bind} ( (_ at-least {min}) {clause}) ):named a{name}))"
-                        );
-                        asserts.push(SmtName::GroupMin(g_rs));
-                        let name = asserts.len();
-                        let _ = writeln!(
-                            out,
-                            "(assert(!(=> {p_bind} ( (_ at-most {max}) {clause}) ):named a{name}))"
-                        );
-                        asserts.push(SmtName::GroupMax(g_rs));
+                        let _ = writeln!(out, "{}", builder.min_assert(min, &p_bind, m.sym(g)));
+                        let _ = writeln!(out, "{}", builder.max_assert(max, &p_bind, m.sym(g)));
                     }
                 }
             }
         }
     }
     //make root features mandatory
-    for &m in members {
-        let file = root.file(m);
+    for (m, file) in module.instances() {
         for f in file
             .direct_children(Symbol::Root)
             .filter(|f| matches!(f, Symbol::Feature(..)))
         {
-            let _ = writeln!(
-                out,
-                "(assert {})",
-                pseudo_bool(root, RootSymbol { file: m, sym: f }, &sym2var)?
-            );
+            let _ = writeln!(out, "(assert {})", builder.pseudo_bool(m.sym(f)));
         }
     }
     //encode constraints
@@ -473,11 +452,9 @@ fn create_module(
         Expr(&'a ExprDecl),
         End,
     }
-    for &m in members {
-        let file = root.file(m);
+    for (m, file) in module.instances() {
         for c in file.all_constraints() {
             let mut stack = vec![CExpr::Constraint(&file.constraint(c).unwrap())];
-
             //info!("{stack:?}");
             let _ = write!(out, "(assert (! ");
             while let Some(expr) = stack.pop() {
@@ -487,8 +464,7 @@ fn create_module(
                             let _ = write!(out, " {val}");
                         }
                         Constraint::Ref(sym) => {
-                            let name = sym2var
-                                .get(&root.resolve_sym(RootSymbol { sym: *sym, file: m })?)?;
+                            let name = builder.var(m.sym(*sym));
                             let _ = write!(out, " v{name}");
                         }
                         Constraint::Not(lhs) => {
@@ -540,8 +516,7 @@ fn create_module(
                             let _ = write!(out, "\"{val}\"");
                         }
                         Expr::Ref(sym) => {
-                            let name = sym2var
-                                .get(&root.resolve_sym(RootSymbol { sym: *sym, file: m })?)?;
+                            let name = builder.var(m.sym(*sym));
                             let _ = write!(out, " v{name}");
                         }
                         Expr::Len(lhs) => {
@@ -571,26 +546,23 @@ fn create_module(
                         Expr::Aggregate { op, context, query } => {
                             let mut all_attributes = String::new();
                             let mut count_features = String::new();
-                            root.resolve_attributes_with_feature(
-                                m,
-                                context
-                                    .map(|context| root.file(m).path(context))
-                                    .unwrap_or(&[]),
-                                |feature, attrib, prefix, tgt_file| {
-                                    if prefix == query.names.as_slice()
-                                        && tgt_file.type_of(attrib.sym).unwrap() == Type::Real
-                                    {
-                                        let _ = write!(
-                                            count_features,
-                                            "(ite {}  1.0 0.0)",
-                                            pseudo_bool(root, feature, &sym2var).unwrap()
-                                        );
-
-                                        let name = sym2var[&root.resolve_sym(attrib).unwrap()];
-                                        let _ = write!(all_attributes, " v{name}");
-                                    }
-                                },
-                            );
+                            let tgt = context
+                                .map(|sym| module.resolve_value(m.sym(sym)))
+                                .unwrap_or(m.sym(Symbol::Root));
+                            let tgt_file = module.file(tgt.instance);
+                            tgt_file.visit_attributes(tgt.sym, |feature, attrib, prefix| {
+                                if prefix == query.names.as_slice()
+                                    && tgt_file.type_of(attrib).unwrap() == Type::Real
+                                {
+                                    let _ = write!(
+                                        count_features,
+                                        "(ite {}  1.0 0.0)",
+                                        builder.pseudo_bool(tgt.instance.sym(feature))
+                                    );
+                                    let name = builder.var(tgt.instance.sym(attrib));
+                                    let _ = write!(all_attributes, " v{name}");
+                                }
+                            });
                             if all_attributes.is_empty() {
                                 let _ = write!(out, " 0.0");
                             }
@@ -612,14 +584,18 @@ fn create_module(
                     }
                 }
             }
-            let name = asserts.len();
+            let name = builder.push_assert(AssertInfo(m.sym(c), AssertName::Constraint));
             let _ = write!(out, " :named a{name}))\n");
-            asserts.push(SmtName::Constraint(RootSymbol { sym: c, file: m }));
         }
     }
-
     //info!("{out}");
-    Some((out, SMTModule { sym2var, asserts }))
+    (
+        out,
+        SMTModule {
+            sym2var: builder.sym2var,
+            asserts: builder.assert,
+        },
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -631,12 +607,16 @@ pub enum SMTValueState {
 #[derive(Debug, Clone)]
 pub enum SMTModel {
     SAT {
-        values: HashMap<RootSymbol, ConfigValue>,
-        fixed: HashMap<RootSymbol, SMTValueState>,
+        values: HashMap<ModuleSymbol, ConfigValue>,
+        fixed: HashMap<ModuleSymbol, SMTValueState>,
     },
     UNSAT {
-        reasons: Vec<SmtName>,
+        reasons: Vec<AssertInfo>,
     },
+}
+pub struct OwnedSMTModel {
+    pub model: SMTModel,
+    pub modul: Arc<Module>,
 }
 impl Default for SMTModel {
     fn default() -> Self {
@@ -649,11 +629,11 @@ impl Default for SMTModel {
 //find constant boolean values for dead features and other cool analysis
 //this is quite naive and should be improved with a better solver
 async fn find_fixed(
-    root: &RootGraph,
     solve: &mut SmtSolver,
+    base_module: &Module,
     module: &SMTModule,
-    initial_model: impl Iterator<Item = (RootSymbol, ConfigValue)>,
-) -> Result<HashMap<RootSymbol, SMTValueState>> {
+    initial_model: impl Iterator<Item = (ModuleSymbol, ConfigValue)>,
+) -> Result<HashMap<ModuleSymbol, SMTValueState>> {
     let mut state = HashMap::new();
     for (s, v) in initial_model {
         match v {
@@ -666,7 +646,7 @@ async fn find_fixed(
             _ => {}
         }
     }
-    let keys: Vec<RootSymbol> = state.keys().cloned().collect();
+    let keys: Vec<ModuleSymbol> = state.keys().cloned().collect();
     for k in keys {
         match &state[&k] {
             SMTValueState::Any => {
@@ -676,7 +656,7 @@ async fn find_fixed(
                 solve
                     .push(format!(
                         "(push 1)(assert (not {}))",
-                        pseudo_bool(root, k, &module.sym2var).unwrap()
+                        module.pseudo_bool(k, base_module)
                     ))
                     .await?;
             }
@@ -684,7 +664,7 @@ async fn find_fixed(
                 solve
                     .push(format!(
                         "(push 1)(assert {})",
-                        pseudo_bool(root, k, &module.sym2var).unwrap()
+                        module.pseudo_bool(k, base_module)
                     ))
                     .await?;
             }
@@ -696,7 +676,7 @@ async fn find_fixed(
                 .iter()
                 .filter(|(_, v)| !matches!(*v, SMTValueState::Any))
                 .fold(String::new(), |acc, (k, _)| {
-                    format!("{acc} v{}", module.sym2var[k])
+                    format!("{acc} v{}", module.var(*k))
                 });
             let values = solve.values(unknown).await?;
             //info!("model {:?}", time.elapsed());
@@ -721,24 +701,30 @@ async fn find_fixed(
     Ok(state)
 }
 async fn create_model(
-    root: &RootGraph,
+    base_module: &Module,
+    cancel: CancellationToken,
     module: SMTModule,
     source: String,
     fixed: bool,
+    value: bool,
 ) -> Result<SMTModel> {
-    let mut solver = SmtSolver::new(source, &root.cancellation_token()).await?;
+    let mut solver = SmtSolver::new(source, &cancel).await?;
     if solver.check_sat().await? {
-        let query = module
-            .sym2var
-            .iter()
-            .fold(String::new(), |acc, (_, i)| format!("{acc} v{i}"));
-        let values: HashMap<RootSymbol, ConfigValue> =
-            module.parse_values(&solver.values(query).await?).collect();
+        let values = if value | fixed {
+            let query = module
+                .sym2var
+                .iter()
+                .enumerate()
+                .fold(String::new(), |acc, (i, _)| format!("{acc} v{i}"));
+            module.parse_values(&solver.values(query).await?).collect()
+        } else {
+            HashMap::new()
+        };
         Ok(SMTModel::SAT {
             fixed: if fixed {
                 find_fixed(
-                    root,
                     &mut solver,
+                    base_module,
                     &module,
                     values.iter().map(|(k, v)| (*k, v.clone())),
                 )
@@ -756,100 +742,80 @@ async fn create_model(
     }
 }
 
-async fn check_modules(
-    root: Arc<RootGraph>,
-    tx_err: mpsc::Sender<DiagnosticUpdate>,
-    latest_revisions: HashMap<Vec<FileID>, u64>,
-) -> HashMap<Vec<FileID>, u64> {
-    let models = join_all(
-        root.cache()
-            .modules
-            .iter()
-            .filter(|(k, v)| {
-                latest_revisions
-                    .get(*k)
-                    .map(|&r| r != v.revision)
-                    .unwrap_or(true)
-                    && v.ok
-            })
-            .map(|(members, _)| {
-                let root = root.clone();
-                let members = members.clone();
-                async move {
-                    let (source, module) =
-                        create_module(&root, &members, &HashMap::new(), &HashMap::new())
-                            .ok_or("model generation failed")?;
-                    //info!("HIR: {:#?}", hir);
-                    let model = create_model(&root, module, source, true).await;
-                    model.map(|i| (i, members))
-                }
-            }),
-    )
+async fn check_base_sat(
+    root: &RootGraph,
+    tx_err: &mpsc::Sender<DiagnosticUpdate>,
+    latest_revisions: HashMap<FileID, Instant>,
+) -> HashMap<FileID, Instant> {
+    let active = root.cache().modules.iter().filter(|(k, v)| {
+        latest_revisions
+            .get(*k)
+            .map(|old| old != &v.timestamp)
+            .unwrap_or(true)
+            && v.ok
+    });
+    let models = join_all(active.map(|(k, v)| {
+        let k = k.clone();
+        let module = v.clone();
+        async move {
+            let (smt_module, source) = create_module(&module, &HashMap::new());
+            let model = create_model(
+                &module,
+                root.cancellation_token(),
+                source,
+                smt_module,
+                true,
+                false,
+            )
+            .await;
+            model.map(|m| (m, k, module))
+        }
+    }))
     .await;
-    let mut e = ErrorsAcc::new(&root);
-    //info!("{:#?}", models);
-    for i in models.into_iter() {
-        match i {
-            Ok(model) => match model {
-                (SMTModel::SAT { fixed, .. }, members) => {
-                    for m in members {
-                        root.file(m)
-                            .visit_children(Symbol::Root, true, |sym| match sym {
-                                Symbol::Feature(..) => {
-                                    if let Some(val) = fixed.get(&RootSymbol { sym, file: m }) {
-                                        match val {
-                                            SMTValueState::Off => {
-                                                e.sym_info(sym, m, 10, "dead feature");
-                                                false
-                                            }
 
-                                            SMTValueState::On => {
-                                                //Is this even a good idea?
-                                                true
-                                            }
-                                            _ => true,
+    let mut e = ErrorsAcc::new(root);
+    for k in models.into_iter() {
+        match k {
+            Ok((SMTModel::SAT { fixed, .. }, root_file, module)) => {
+                let mut visited = HashSet::new();
+                for (m, file) in module.instances() {
+                    file.visit_children(Symbol::Root, true, |sym| match sym {
+                        Symbol::Feature(..) => {
+                            if let Some(val) = fixed.get(&m.sym(sym)) {
+                                match val {
+                                    SMTValueState::Off => {
+                                        if visited.insert((sym, file.id)) {
+                                            e.sym_info(sym, file.id, 10, "dead feature");
                                         }
-                                    } else {
+                                        false
+                                    }
+                                    SMTValueState::On => {
+                                        //Is this even a good idea?
                                         true
                                     }
+                                    _ => true,
                                 }
-                                Symbol::Group(..) => true,
-                                _ => false,
-                            })
-                    }
-                }
-                (SMTModel::UNSAT { reasons }, ..) => {
-                    for i in reasons {
-                        match i {
-                            SmtName::Attribute(sym) => {
-                                e.sym_info(sym.sym, sym.file, 12, "UNSAT attribute value");
+                            } else {
+                                true
                             }
-                            SmtName::Constraint(sym) => {
-                                e.sym_info(sym.sym, sym.file, 12, "UNSAT constraint");
-                            }
-
-                            SmtName::Group(sym) => {
-                                e.sym_info(sym.sym, sym.file, 12, "UNSAT group");
-                            }
-
-                            SmtName::GroupMin(sym) => {
-                                e.sym_info(sym.sym, sym.file, 12, "UNSAT group minimum");
-                            }
-
-                            SmtName::GroupMax(sym) => {
-                                e.sym_info(sym.sym, sym.file, 12, "UNSAT group maximum");
-                            }
-
-                            SmtName::GroupMember(sym) => {
-                                e.sym_info(sym.sym, sym.file, 12, "UNSAT group member");
-                            }
-                            _ => {}
                         }
+                        Symbol::Group(..) => true,
+                        _ => false,
+                    })
+                }
+            }
+            Ok((SMTModel::UNSAT { reasons }, _, module)) => {
+                let mut visited = HashSet::new();
+                for r in reasons {
+                    let file = module.file(r.0.instance).id;
+
+                    if visited.insert((r.0.sym, file)) {
+                        e.sym(r.0.sym, file, 12, format!("UNSAT: {}", r.1))
                     }
                 }
-            },
+            }
             Err(e) => {
-                info!("SMT check failed {e}")
+                info!("SMT check failed: {e}");
             }
         }
     }
@@ -859,127 +825,84 @@ async fn check_modules(
             error_state: e.errors,
         })
         .await;
-
     root.cache()
         .modules
         .iter()
-        .map(|(k, v)| (k.clone(), v.revision))
+        .map(|(k, v)| (*k, v.timestamp))
         .collect()
 }
+
 async fn check_config(
-    root: Arc<RootGraph>,
-    tx_err: mpsc::Sender<DiagnosticUpdate>,
-    latest_revisions: HashMap<FileID, u64>,
-    inlay_handler: &InlayHandler,
-) -> HashMap<FileID, u64> {
-    let timestamp = Instant::now();
-    for (k, v) in root.cache().config_modules.iter() {
-        if inlay_handler.is_active(InlaySource::File(*k))
-            && !v.ok
-            && latest_revisions
-                .get(k)
-                .map(|l| l != &v.revision)
-                .unwrap_or(true)
-        {
-            inlay_handler
-                .maybe_publish(
-                    InlaySource::File(*k),
-                    &root,
-                    &SMTModel::default(),
-                    timestamp,
-                )
-                .await; //Reset inlay
-        }
-    }
-    let models = join_all(
-        root.cache()
-            .config_modules
-            .iter()
-            .filter(|(k, v)| {
-                !k.is_virtual()
-                    && v.ok
-                    && latest_revisions
-                        .get(*k)
-                        .map(|&l| l != v.revision)
-                        .unwrap_or(true)
-            })
-            .map(|(&k, v)| {
-                let root = root.clone();
-                let config = v.clone();
-                async move {
-                    let (source, module) = create_module(
-                        &root,
-                        v.members.iter().cloned().collect::<Vec<_>>().as_slice(),
-                        &config.features,
-                        &config.attributes,
-                    )
-                    .ok_or("model generation failed")?;
-                    let model = create_model(&root, module, source, false).await;
-                    if let Ok(model) = model.as_ref() {
-                        inlay_handler
-                            .maybe_publish(
-                                InlaySource::File(config.doc.id),
-                                &root,
-                                &model,
-                                timestamp,
-                            )
-                            .await;
-                    } else {
-                        inlay_handler
-                            .maybe_publish(
-                                InlaySource::File(config.doc.id),
-                                &root,
-                                &SMTModel::default(),
-                                timestamp,
-                            )
-                            .await;
-                    }
-                    model.map(|m| (k, m))
+    root: &RootGraph,
+    tx_err: &mpsc::Sender<DiagnosticUpdate>,
+    inlay_state: &InlayHandler,
+    latest_revisions: HashMap<FileID, Instant>,
+) -> HashMap<FileID, Instant> {
+    let active = root.cache().config_modules.iter().filter(|(k, v)| {
+        latest_revisions
+            .get(*k)
+            .map(|old| old != &v.module.timestamp)
+            .unwrap_or(true)
+            && v.module.ok
+    });
+    let models = join_all(active.map(|(k, v)| {
+        let k = k.clone();
+        let module = v.clone();
+        async move {
+            let (source, smt_module) = create_module(&module.module, &module.values);
+            let is_active = inlay_state.is_active(InlaySource::File(k));
+            let model = create_model(
+                &module.module,
+                root.cancellation_token(),
+                smt_module,
+                source,
+                !k.is_config(),
+                is_active,
+            )
+            .await;
+
+            if k.is_config() {
+                if let Ok(model) = model.as_ref() {
+                    inlay_state
+                        .maybe_publish(InlaySource::File(k), Instant::now(), || {
+                            Arc::new(OwnedSMTModel {
+                                model: model.clone(),
+                                modul: module.module.clone(),
+                            })
+                        })
+                        .await;
+                } else {
+                    inlay_state.maybe_reset(InlaySource::File(k)).await;
                 }
-            }),
-    )
+            }
+            model.map(|m| (m, k, module))
+        }
+    }))
     .await;
 
-    let mut e = ErrorsAcc::new(&root);
-    for i in models.into_iter() {
-        match i {
-            Ok((config, model)) => match model {
-                SMTModel::SAT { fixed, .. } => {
-                    for (sym, v) in fixed {
-                        match v {
-                            SMTValueState::On | SMTValueState::Off => {
-                                if let Some(tgt) =
-                                    root.cache().config_modules[&config].source_map.get(&sym)
-                                {
-                                    e.span_info(tgt.clone(), config, 12, "Required!");
-                                }
-                            }
-                            _ => {}
-                        }
+    let mut e = ErrorsAcc::new(root);
+    for k in models.into_iter() {
+        match k {
+            Ok((SMTModel::SAT { .. }, ..)) => {
+                //Do something?
+            }
+            Ok((SMTModel::UNSAT { reasons }, root_file, module)) => {
+                for r in reasons {
+                    if matches!(r.1, AssertName::Config) {
+                        e.span(
+                            module.source_map[&r.0].clone(),
+                            module.module.file(r.0.instance).id,
+                            12,
+                            format!("UNSAT!"),
+                        );
                     }
                 }
-                SMTModel::UNSAT { reasons } => {
-                    for r in reasons {
-                        match r {
-                            SmtName::Config(sym) => {
-                                e.span(
-                                    root.cache().config_modules[&config].source_map[&sym].clone(),
-                                    config,
-                                    12,
-                                    "UNSAT",
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            },
+            }
             Err(e) => {
-                info!("SMT check failed {e}")
+                info!("SMT check failed: {e}");
             }
         }
     }
-
     let _ = tx_err
         .send(DiagnosticUpdate {
             timestamp: root.revision(),
@@ -987,11 +910,12 @@ async fn check_config(
         })
         .await;
     root.cache()
-        .config_modules
+        .modules
         .iter()
-        .map(|(k, v)| (*k, v.revision))
+        .map(|(k, v)| (*k, v.timestamp))
         .collect()
 }
+
 //SMT-checks modules when the RootGraph changed
 pub async fn check_handler(
     mut rx_root: watch::Receiver<Arc<RootGraph>>,
@@ -1009,121 +933,68 @@ pub async fn check_handler(
             )
             .await;
     }
-    let mut latest_versions: HashMap<Vec<FileID>, u64> = HashMap::new();
-    let mut latest_versions_config: HashMap<FileID, u64> = HashMap::new();
+    let mut latest_versions: HashMap<FileID, Instant> = HashMap::new();
+    let mut latest_versions_config: HashMap<FileID, Instant> = HashMap::new();
     loop {
         info!("Check SMT");
         let root = rx_root.borrow_and_update().clone();
-        let (a, b) = join!(
-            check_modules(root.clone(), tx_err.clone(), latest_versions.clone(),),
-            check_config(
-                root.clone(),
-                tx_err.clone(),
-                latest_versions_config.clone(),
-                &inlay_state
-            )
-        );
-
-        latest_versions = a;
-        latest_versions_config = b;
+        latest_versions = check_base_sat(&root, &tx_err, latest_versions).await;
+        latest_versions_config =
+            check_config(&root, &tx_err, &inlay_state, latest_versions_config).await;
         if rx_root.changed().await.is_err() {
             break;
         }
     }
 }
+pub async fn web_view_handler(
+    mut state: watch::Receiver<webview::ConfigSource>,
+    tx_ui: mpsc::Sender<webview::UIAction>,
+    inlay_state: InlayHandler,
+    inlay_source: InlaySource,
+) -> Result<()> {
+    loop {
+        let (module, cancel, tag) = {
+            let lock = state.borrow_and_update();
+            (lock.module.clone(), lock.cancel.clone(), lock.tag)
+        };
+        info!("cancled {}", cancel.is_cancelled());
 
-//Turn paths into features and attributes
-fn create_config(
-    root: &RootGraph,
-    files: &DirectConfig,
-) -> (
-    HashMap<RootSymbol, ConfigValue>,
-    HashMap<RootSymbol, ConfigValue>,
-    Vec<FileID>,
-) {
-    let mut features = HashMap::new();
-    let mut attributes = HashMap::new();
-    let mut members = Vec::new();
-    for (fi, f) in files.iter() {
-        if !root.containes_id(*fi) {
-            continue;
-        }
-        members.push(*fi);
-        for (p, v) in f.iter() {
-            if let Some(rs) = root.resolve(*fi, &p).find(|rs| {
-                matches!(
-                    root.type_of(*rs),
-                    Some(Type::String | Type::Bool | Type::Real)
-                )
-            }) {
-                if matches!(rs.sym, Symbol::Feature(..)) {
-                    features.insert(rs, v.clone());
-                } else {
-                    attributes.insert(rs, v.clone());
+        if module.ok {
+            let (source, smt_module) = create_module(&module, &module.values);
+            let res = create_model(&module, cancel, smt_module, source, false, true).await;
+            match res {
+                Ok(model) => {
+                    inlay_state
+                        .maybe_publish(inlay_source, Instant::now(), || {
+                            Arc::new(OwnedSMTModel {
+                                model: model.clone(),
+                                modul: module.module.clone(),
+                            })
+                        })
+                        .await;
+                    //info!("model: {model:?}");
+                    tx_ui
+                        .send(webview::UIAction::UpdateSMTModel(model, tag))
+                        .await?;
+                }
+                Err(e) => {
+                    //info!("err {e}");
+                    inlay_state.maybe_reset(inlay_source).await;
+                    tx_ui
+                        .send(webview::UIAction::UpdateSMTInvalid(format!("{e}"), tag))
+                        .await?;
                 }
             }
+        } else {
+            inlay_state.maybe_reset(inlay_source).await;
+            tx_ui
+                .send(webview::UIAction::UpdateSMTInvalid(
+                    format!("sources invalid"),
+                    tag,
+                ))
+                .await?;
         }
+
+        state.changed().await?;
     }
-    (features, attributes, members)
-}
-async fn config_create_model2(
-    root: &RootGraph,
-    members: &[FileID],
-    features: &HashMap<RootSymbol, ConfigValue>,
-    attribs: &HashMap<RootSymbol, ConfigValue>,
-) -> Result<SMTModel> {
-    let (source, modul) =
-        create_module(root, members, &features, &attribs).ok_or("Model Generation Failure")?;
-    create_model(root, modul, source, false).await
-}
-use crate::webview::UIAction;
-//Check a single config, used in the config editor
-pub async fn create_config_model(
-    timestamp: Instant,
-    root: Arc<RootGraph>,
-    cancel: CancellationToken,
-    config: DirectConfig,
-    tx: mpsc::Sender<UIAction>,
-    inlay_state: InlayHandler,
-    id: u64,
-) -> Result<()> {
-    let (features, attributes, mut members) = create_config(&root, &config);
-    members.retain(|f| root.containes_id(*f));
-    let mut ok = true;
-    for &m in members.iter() {
-        ok &= root.cache().modules[root.cache().file2module[&m]].ok;
-    }
-    info!("Update SMT in handler");
-    if ok {
-        match maybe_cancel(
-            &cancel,
-            config_create_model2(&root, &members, &features, &attributes),
-        )
-        .await
-        {
-            Ok(Ok(m)) => {
-                inlay_state
-                    .maybe_publish(InlaySource::Web(id), &root, &m, timestamp)
-                    .await;
-                tx.send(UIAction::UpdateSMTModel(m, timestamp)).await?;
-            }
-            Err(e) | Ok(Err(e)) => {
-                inlay_state
-                    .maybe_publish(InlaySource::Web(id), &root, &SMTModel::default(), timestamp)
-                    .await;
-                tx.send(UIAction::UpdateSMTInvalid(format!("{e}"), timestamp))
-                    .await?;
-            }
-        }
-    } else {
-        inlay_state
-            .maybe_publish(InlaySource::Web(id), &root, &SMTModel::default(), timestamp)
-            .await;
-        tx.send(UIAction::UpdateSMTInvalid(
-            "source files contain errors".into(),
-            timestamp,
-        ))
-        .await?;
-    }
-    Ok(())
 }

@@ -17,10 +17,18 @@ use tree_sitter::Node;
 pub fn common_prefix(a: &[Ustr], b: &[Ustr]) -> usize {
     a.iter().zip(b.iter()).take_while(|(i, k)| i == k).count()
 }
+pub trait AstContainer {
+    fn get(&self, file: FileID) -> &AstDocument;
+}
+impl AstContainer for AstFiles {
+    fn get(&self, file: FileID) -> &AstDocument {
+        &*self[&file]
+    }
+}
 
 //Find all symboles from origin under path
 pub fn resolve<'a>(
-    files: &'a AstFiles,
+    files: &'a impl AstContainer,
     fs: &'a FileSystem,
     origin: FileID,
     path: &'a [Ustr],
@@ -28,15 +36,15 @@ pub fn resolve<'a>(
     let mut stack = vec![(origin, path)];
     std::iter::from_fn(move || {
         stack.pop().map(|(file, tail)| {
+            let f = files.get(file);
             for (sym, tgt) in fs.imports(file) {
-                let common_prefix = common_prefix(files[&file].import_prefix(sym), tail);
-                if common_prefix == files[&file].import_prefix(sym).len() {
+                let common_prefix = common_prefix(f.import_prefix(sym), tail);
+                if common_prefix == f.import_prefix(sym).len() {
                     stack.push((tgt, &tail[common_prefix..]));
                 }
             }
 
-            files[&file]
-                .lookup(Symbol::Root, tail, |_| true)
+            f.lookup(Symbol::Root, tail, |_| true)
                 .map(move |sym| RootSymbol { file, sym })
         })
     })
@@ -45,7 +53,7 @@ pub fn resolve<'a>(
 
 //Find all symboles from origin under path while keeping track of what sections path are bound to what symbol
 pub fn resolve_with_bind<'a>(
-    files: &'a AstFiles,
+    files: &'a impl AstContainer,
     fs: &'a FileSystem,
     origin: FileID,
     path: &'a [Ustr],
@@ -53,7 +61,7 @@ pub fn resolve_with_bind<'a>(
     let mut stack = vec![(origin, path, vec![])];
     std::iter::from_fn(move || {
         stack.pop().map(|(file, tail, binding)| {
-            let src_file = &files[&file];
+            let src_file = files.get(file);
             for (sym, tgt) in fs.imports(file) {
                 let common_prefix = common_prefix(src_file.import_prefix(sym), tail);
                 if common_prefix == src_file.import_prefix(sym).len() {
@@ -92,7 +100,7 @@ pub fn resolve_with_bind<'a>(
 }
 
 pub fn resolve_attributes<'a, F: FnMut(RootSymbol, &[Ustr])>(
-    files: &'a AstFiles,
+    files: &'a impl AstContainer,
     fs: &'a FileSystem,
     origin: FileID,
     context: &'a [Ustr],
@@ -107,14 +115,14 @@ pub fn resolve_attributes_with_feature<
     'a,
     F: FnMut(RootSymbol, RootSymbol, &[Ustr], &AstDocument),
 >(
-    files: &'a AstFiles,
+    files: &'a impl AstContainer,
     fs: &'a FileSystem,
     origin: FileID,
     context: &'a [Ustr],
     mut f: F,
 ) {
     for root in resolve(files, fs, origin, context) {
-        let file = &files[&root.file];
+        let file = files.get(root.file);
         let mut owner = Some(root);
         let mut under_feature = 0;
         file.visit_named_children(root.sym, false, |i, prefix| match i {
@@ -156,7 +164,7 @@ impl<'a> TypeResolveContext<'a> {
         origin: FileID,
         path: &'d [Ustr],
     ) -> impl Iterator<Item = RootSymbol> + 'd {
-        resolve(&self.files, &self.fs, origin, path)
+        resolve(self.files, &self.fs, origin, path)
     }
     pub fn resolve_sym<'d>(&'d self, sym: RootSymbol) -> impl Iterator<Item = RootSymbol> + 'd {
         self.resolve(sym.file, self.file(sym.file).path(sym.sym))
@@ -171,32 +179,25 @@ pub enum ResolveState {
     WrongType { expected: Type, found: Type },
     Resolved(RootSymbol),
 }
-//Best effort tupe resolving
-pub fn resolve_files(
-    files: &[FileID],
-    fs: &FileSystem,
-    err: &mut ErrorsAcc,
-) -> HashMap<RootSymbol, RootSymbol> {
-    let mut ref_map = HashMap::new();
-    {
-        let ctx = TypeResolveContext {
-            files: err.files,
-            fs,
-        };
-        for f in files {
-            resolve_file(&ctx, *f, err, &mut ref_map);
-            if !err.has_error(*f) {
-                err.errors.insert(*f, Vec::new());
-            }
-        }
-    }
-    ref_map
-}
 
-fn resolve_file(ctx: &TypeResolveContext, file: FileID, err: &mut ErrorsAcc, ref_map: &mut RefMap) {
+//Best effort tupe resolving
+pub fn resolve_file(file: FileID, fs: &FileSystem, err: &mut ErrorsAcc) -> RefMap {
+    let mut ref_map = HashMap::new();
+    let ctx = TypeResolveContext {
+        files: err.files,
+        fs,
+    };
     let file_data = ctx.file(file);
     for i in file_data.constraints() {
-        resolve_constraint(ctx, file, i, err, ref_map);
+        resolve_constraint(&ctx, file, i, err, &mut ref_map);
+    }
+    for i in file_data.all_imports() {
+        if let Some(rs) = ctx
+            .resolve(file, file_data.import_prefix(i))
+            .find(|i| matches!(i.sym, Symbol::Root))
+        {
+            ref_map.insert(i, rs);
+        }
     }
     for r in file_data.all_references() {
         if file_data.parent(r, false).is_some() {
@@ -206,7 +207,7 @@ fn resolve_file(ctx: &TypeResolveContext, file: FileID, err: &mut ErrorsAcc, ref
             for i in ctx.resolve(file, file_data.path(r)) {
                 info!("found {i}");
                 if matches!(i.sym, Symbol::Feature(..)) {
-                    ref_map.insert(RootSymbol { sym: r, file }, i);
+                    ref_map.insert(r, i);
                     ok = true;
                     break;
                 } else {
@@ -222,8 +223,9 @@ fn resolve_file(ctx: &TypeResolveContext, file: FileID, err: &mut ErrorsAcc, ref
             }
         }
     }
+    ref_map
 }
-type RefMap = HashMap<RootSymbol, RootSymbol>;
+type RefMap = HashMap<Symbol, RootSymbol>;
 fn select_type(flags: BitFlags<Type>) -> Type {
     flags.iter().next().unwrap()
 }
@@ -270,7 +272,7 @@ fn resolve_constraint(
                     );
                 }
                 ResolveState::Resolved(tgt) => {
-                    ref_map.insert(rs, tgt);
+                    ref_map.insert(*sym, tgt);
                 }
             }
         }
@@ -347,8 +349,18 @@ fn gather_expr_options(
         Expr::Aggregate { context, .. } => {
             if let Some(context) = context.clone() {
                 let rs = RootSymbol { sym: context, file };
-                if let Some(tgt) = ctx.resolve_sym(rs).next() {
-                    ref_map.insert(rs, tgt);
+                if let Some(tgt) = ctx
+                    .resolve_sym(rs)
+                    .find(|i| matches!(i.sym, Symbol::Feature(_) | Symbol::Root))
+                {
+                    ref_map.insert(context, tgt);
+                } else {
+                    err.sym(
+                        context,
+                        file,
+                        10,
+                        "unresolved context expected file root or feature",
+                    );
                 }
             }
             Type::Real.into()
@@ -434,7 +446,7 @@ fn commit_expr(
                 .resolve_sym(rs)
                 .find(|i| ctx.type_of(*i).unwrap() == ty)
                 .unwrap();
-            ref_map.insert(rs, tgt);
+            ref_map.insert(*sym, tgt);
         }
         _ => {}
     }

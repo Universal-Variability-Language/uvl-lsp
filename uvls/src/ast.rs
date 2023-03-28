@@ -4,6 +4,7 @@ use crate::semantic::FileID;
 use crate::util::{lsp_range, node_range};
 use enumflags2::bitflags;
 use hashbrown::HashMap;
+use itertools::Itertools;
 use log::info;
 use ropey::Rope;
 use std::borrow::{Borrow, Cow};
@@ -81,6 +82,9 @@ impl Path {
             .take_while(|i| i.start < offset)
             .count()
             .saturating_sub(1)
+    }
+    pub fn to_string(&self) -> String {
+        self.names.iter().map(|i| i.as_str()).join(".")
     }
 }
 
@@ -475,7 +479,7 @@ impl Ast {
             .into_iter()
             .flat_map(|v| v.iter().cloned())
     }
-    fn all_imports(&self) -> impl Iterator<Item = Symbol> {
+    fn all_imports(&self) -> impl Iterator<Item = Symbol> + DoubleEndedIterator {
         (0..self.import.len()).map(Symbol::Import)
     }
     fn all_features(&self) -> impl Iterator<Item = Symbol> {
@@ -1723,7 +1727,7 @@ impl AstDocument {
     pub fn all_lang_lvls(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_lang_lvls()
     }
-    pub fn all_imports(&self) -> impl Iterator<Item = Symbol> {
+    pub fn all_imports(&self) -> impl Iterator<Item = Symbol> + DoubleEndedIterator {
         self.ast.all_imports()
     }
     pub fn all_features(&self) -> impl Iterator<Item = Symbol> {
@@ -1759,6 +1763,10 @@ impl AstDocument {
     }
     pub fn constraints(&self) -> &[ConstraintDecl] {
         &self.ast.constraints
+    }
+
+    pub fn imports(&self) -> &[Import] {
+        &self.ast.import
     }
 
     pub fn value(&self, sym: Symbol) -> Option<&Value> {
@@ -1827,6 +1835,29 @@ impl AstDocument {
                     stack.push((dst, &base[1..]));
                 }
             })
+        })
+    }
+    pub fn lookup_import<'a>(
+        &'a self,
+        path: &'a [Ustr],
+    ) -> impl Iterator<Item = (Symbol, &'a [Ustr])> {
+        let mut stack = vec![(Symbol::Root, path)];
+        std::iter::from_fn(move || loop {
+            let (cur, base) = stack.pop()?;
+
+            if base.is_empty() {
+                if matches!(cur, Symbol::Import(..)) {
+                    return Some((cur, base));
+                }
+            }
+            self.ast.lookup(cur, base[0], |dst| {
+                if matches!(dst, Symbol::Dir(..) | Symbol::Import(..)) {
+                    stack.push((dst, &base[1..]));
+                }
+            });
+            if matches!(cur, Symbol::Import(..)) {
+                return Some((cur, base));
+            }
         })
     }
     //Also track the binding for path
@@ -1920,7 +1951,7 @@ impl AstDocument {
                         Symbol::Feature(..) => {
                             stack.push((i, 1));
                         }
-                        Symbol::Attribute(..) | Symbol::Dir(0) => {
+                        Symbol::Attribute(..) | Symbol::Dir(..) | Symbol::Import(..) => {
                             stack.push((i, depth + 1));
                         }
                         _ => {
@@ -1996,5 +2027,22 @@ impl AstDocument {
                 }
             }
         }
+    }
+    pub fn visit_attributes<'a, F: FnMut(Symbol, Symbol, &[Ustr])>(&self, root: Symbol, mut f: F) {
+        assert!(matches!(root, Symbol::Feature(..) | Symbol::Root));
+        let mut owner = root;
+        let mut under_feature = 0;
+        self.visit_named_children(root, false, |i, prefix| match i {
+            Symbol::Feature(..) => {
+                owner = i;
+                under_feature = 1;
+                true
+            }
+            Symbol::Attribute(..) => {
+                f(owner, i, &prefix[under_feature..]);
+                true
+            }
+            _ => false,
+        });
     }
 }
