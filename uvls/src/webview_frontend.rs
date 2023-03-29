@@ -1,8 +1,7 @@
 #![allow(non_snake_case)]
-use crate::ast::{Symbol, Type};
+use crate::ast::Type;
 use crate::config::*;
 use crate::module::ModuleSymbol;
-use crate::semantic::*;
 use crate::webview::*;
 use dioxus::prelude::*;
 
@@ -408,7 +407,6 @@ pub fn App(cx: Scope<AppProps>) -> Element {
             }
         }),
         UISyncState::Valid => {
-            let tag = lock.tag;
             let values = file_values_iter(&lock);
             cx.render(rsx! {
                 div {

@@ -4,6 +4,7 @@ use crate::semantic::FileID;
 
 use crate::smt::AssertInfo;
 use crate::smt::{OwnedSMTModel, SMTModel};
+use crate::util::Result;
 use log::info;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -18,6 +19,8 @@ pub enum InlaySource {
     File(FileID),
     Web(u64),
 }
+//Inlays are managed as a global token state, there can only be 1 inlay source to keep things simple,
+//inalays are computed asynchronously. Both configurations and webview can provide them as a SMT-Model
 #[derive(Clone)]
 pub struct InlayHandler {
     source: Arc<Mutex<InlaySource>>,
@@ -36,10 +39,10 @@ impl InlayHandler {
         *self.source.lock() == source
     }
     pub async fn set_source(&self, source: InlaySource) {
-        info!("set {source:?}");
         *self.source.lock() = source;
         let _ = self.tx.send(InlayEvent::SetSource).await;
     }
+    //publsich if source is active
     pub async fn maybe_publish<F: FnOnce() -> Arc<OwnedSMTModel>>(
         &self,
         source: InlaySource,
@@ -47,13 +50,11 @@ impl InlayHandler {
         f: F,
     ) {
         if *self.source.lock() == source {
-            info!("publish");
             let _ = self.tx.send(InlayEvent::Publish(f(), timestamp)).await;
         }
     }
     pub async fn maybe_reset(&self, source: InlaySource) {
         if *self.source.lock() == source {
-            info!("reset");
             let _ = self.tx.send(InlayEvent::Reset(Instant::now())).await;
         }
     }
@@ -91,7 +92,7 @@ fn generate(model: &OwnedSMTModel, id: FileID, range: Span) -> Option<Vec<InlayH
             .modul
             .instances()
             .filter(|(_, i)| doc.id == i.id)
-            .flat_map(|(m, i)| match &model.model {
+            .flat_map(|(m, _)| match &model.model {
                 SMTModel::SAT { values, .. } => doc
                     .all_features()
                     .chain(doc.all_attributes())
@@ -116,15 +117,14 @@ fn generate(model: &OwnedSMTModel, id: FileID, range: Span) -> Option<Vec<InlayH
                     .into_iter(),
                 SMTModel::UNSAT { reasons } => reasons
                     .iter()
-                    .filter_map(|AssertInfo(sym, name)| {
+                    .filter_map(|AssertInfo(sym, _)| {
                         if id == model.modul.file(sym.instance).id
                             && range.contains(&doc.span(sym.sym).unwrap().start)
                             && m == sym.instance
                         {
-                            info!("{reasons:?}");
                             let range = doc.lsp_range(sym.sym).unwrap();
                             Some(InlayHint {
-                                label: InlayHintLabel::String(format!("UNSAT {}!", name)),
+                                label: InlayHintLabel::String(format!("UNSAT!")),
                                 position: range.end,
                                 kind: Some(InlayHintKind::PARAMETER),
                                 data: None,
@@ -143,7 +143,7 @@ fn generate(model: &OwnedSMTModel, id: FileID, range: Span) -> Option<Vec<InlayH
             .collect()
     })
 }
-async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
+async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) -> Result<()> {
     let mut map: Option<Arc<OwnedSMTModel>> = None;
     let mut latest = Instant::now();
     let mut initial = false;
@@ -168,8 +168,7 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
                 map = None;
                 client
                     .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
-                    .await
-                    .unwrap();
+                    .await?;
             }
             InlayEvent::Publish(model, timestamp) => {
                 if timestamp <= latest {
@@ -206,9 +205,8 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
 
                     client
                         .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
-                        .await
-                        .unwrap();
-                    let _ = client
+                        .await?;
+                    client
                         .send_request::<tower_lsp::lsp_types::request::ApplyWorkspaceEdit>(
                             ApplyWorkspaceEditParams {
                                 label: None,
@@ -219,7 +217,7 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
                                 },
                             },
                         )
-                        .await;
+                        .await?;
 
                     //Remove it
                     let changes = [(
@@ -235,7 +233,7 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
                             "".into(),
                         )],
                     )];
-                    let _ = client
+                    client
                         .send_request::<tower_lsp::lsp_types::request::ApplyWorkspaceEdit>(
                             ApplyWorkspaceEditParams {
                                 label: None,
@@ -246,7 +244,7 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
                                 },
                             },
                         )
-                        .await;
+                        .await?;
 
                     info!("focus");
                     initial = false;
@@ -255,8 +253,7 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
 
                 client
                     .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
-                    .await
-                    .unwrap();
+                    .await?;
             }
 
             InlayEvent::SetSource => {
@@ -265,9 +262,9 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) {
                 map = None;
                 client
                     .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
-                    .await
-                    .unwrap();
+                    .await?;
             }
         }
     }
+    Ok(())
 }

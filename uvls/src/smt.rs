@@ -10,7 +10,7 @@ use crate::{
 };
 use futures::future::join_all;
 use hashbrown::{HashMap, HashSet};
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexSet;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::info;
@@ -19,7 +19,6 @@ use std::fmt::{Display, Write};
 use std::sync::Arc;
 use tokio::{
     io::Lines,
-    join,
     process::{ChildStdin, ChildStdout, Command},
     sync::{mpsc, watch},
     time::Instant,
@@ -31,6 +30,17 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::*;
+//SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
+//While the performance is worse than linking with Z3 we are solver independet and dont have to interact
+//with any C-Bindings. UVL is translated directly into SMT-LIB, both attributes and features are treated as
+//free variables. The rest is mostly encoded in named asserts, this allows to get a accurat unsat core.
+//Eg. each attribute is ristrcited with an assert that allows it to either be its defined value or 0 depending
+//on if the parent feature is true or not.
+//Using functions for this might be more efficient but this way we can reconfigure and detect if
+//an attributes value contributes to the unsat core.
+//Variables are named as v{n} where n is an index into a lookup table of UVL ModuleSymbols
+//Asserts are encoded similarly as a{n} where n is and index into a list of nameing information
+//that links uvl expression to asserts.
 pub struct SmtSolver {
     proc: Child,
     stdin: BufWriter<ChildStdin>,
@@ -162,7 +172,9 @@ impl Display for AssertName {
 #[derive(Debug, Clone)]
 pub struct AssertInfo(pub ModuleSymbol, pub AssertName);
 struct SMTModule {
+    //maped to each named assert
     asserts: Vec<AssertInfo>,
+    //a map form a ModuleSymbol to a variable index inside SMT-LIB
     sym2var: IndexSet<ModuleSymbol>,
 }
 impl SMTModule {
@@ -754,8 +766,7 @@ async fn check_base_sat(
             .unwrap_or(true)
             && v.ok
     });
-    let models = join_all(active.map(|(k, v)| {
-        let k = k.clone();
+    let models = join_all(active.map(|(_, v)| {
         let module = v.clone();
         async move {
             let (smt_module, source) = create_module(&module, &HashMap::new());
@@ -768,7 +779,7 @@ async fn check_base_sat(
                 false,
             )
             .await;
-            model.map(|m| (m, k, module))
+            model.map(|m| (m, module))
         }
     }))
     .await;
@@ -776,7 +787,7 @@ async fn check_base_sat(
     let mut e = ErrorsAcc::new(root);
     for k in models.into_iter() {
         match k {
-            Ok((SMTModel::SAT { fixed, .. }, root_file, module)) => {
+            Ok((SMTModel::SAT { fixed, .. }, module)) => {
                 let mut visited = HashSet::new();
                 for (m, file) in module.instances() {
                     file.visit_children(Symbol::Root, true, |sym| match sym {
@@ -804,7 +815,7 @@ async fn check_base_sat(
                     })
                 }
             }
-            Ok((SMTModel::UNSAT { reasons }, _, module)) => {
+            Ok((SMTModel::UNSAT { reasons }, module)) => {
                 let mut visited = HashSet::new();
                 for r in reasons {
                     let file = module.file(r.0.instance).id;

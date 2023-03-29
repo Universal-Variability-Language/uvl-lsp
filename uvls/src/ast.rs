@@ -1680,7 +1680,7 @@ pub fn visit_root(source: Rope, tree: Tree, uri: Url, timestamp: Instant) -> Ast
         path.extend_from_slice(&ns.names);
     }
     AstDocument {
-        id: FileID::new(uri.as_str()),
+        id: FileID::from_uri(&uri),
         path,
         uri,
         ast,

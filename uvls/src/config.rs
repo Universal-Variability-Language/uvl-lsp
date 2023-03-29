@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Display};
+use std::fmt::Display;
 
 use crate::{
     ast::*,
@@ -235,13 +235,7 @@ fn visit_file(state: &mut State) -> Option<FileConfig> {
         });
         if let Some((file, span)) = file {
             let config = config.unwrap_or(Vec::new());
-            let mut dir = state
-                .owner
-                .url()?
-                .to_file_path()
-                .ok()?
-                .parent()?
-                .to_path_buf();
+            let mut dir = state.owner.filepath().parent()?.to_path_buf();
             dir.push(file);
             Some(FileConfig {
                 file: FileID::new(&format!("file://{}", dir.to_str()?)),
@@ -264,7 +258,7 @@ fn visit_root(state: &mut State) -> Option<FileConfig> {
     }
 }
 pub fn parse_json(tree: Tree, source: Rope, uri: Url, timestamp: Instant) -> ConfigDocument {
-    let id = FileID::new(uri.as_str());
+    let id = FileID::from_uri(&uri);
     let (file, err) = {
         let mut state = State {
             cursor: tree.walk(),
@@ -502,6 +496,7 @@ fn parse_json_key(text: &Rope, key: Span) -> Path {
     info!("{text_raw}");
     text_raw
         .split('.')
+        .filter(|i| i.len() > 0)
         .map(|i| {
             let rel_offset = i.as_ptr() as usize - text_raw.as_ptr() as usize;
             SymbolSpan {
@@ -531,11 +526,11 @@ pub fn estimate_env_json<'a>(
         None
     }
 }
-pub fn completion_query(source: &Rope, tree: &Tree, pos: &Position) -> Option<CompletionQuery> {
+pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Option<CompletionQuery> {
     use compact_str::CompactString;
     let pos = Position {
-        character: pos.character.saturating_sub(1),
-        line: pos.line,
+        character: src_pos.character.saturating_sub(1),
+        line: src_pos.line,
     };
 
     let char = char_offset(&pos, source);
@@ -545,19 +540,22 @@ pub fn completion_query(source: &Rope, tree: &Tree, pos: &Position) -> Option<Co
         JSONItem::Key { key, .. } => {
             let path = parse_json_key(source, key.clone());
             let (env, outer_path) = estimate_env_json(&path.names, tree, source, &pos)?;
-            let prefix = outer_path
+            let prefix: Vec<Ustr> = outer_path
                 .iter()
                 .skip(1)
-                .map(|i| Ustr::from(&*i))
-                .chain(path.names.iter().cloned())
+                .flat_map(|i| i.split(".").map(|i| i.replace('\\', "").into()))
+                .chain(path.names[0..path.len().saturating_sub(1)].iter().cloned())
+                .filter(|i| !i.is_empty())
                 .collect();
-
             if source.char(char) == '.' {
                 Some(CompletionQuery {
                     offset: CompletionOffset::Dot,
                     env,
                     format: CompletionFormater::JSONKey {
-                        postfix_range: lsp_range(key, source)?,
+                        postfix_range: tower_lsp::lsp_types::Range {
+                            start: src_pos.clone(),
+                            end: src_pos.clone(),
+                        },
                     },
                     prefix,
                     postfix: CompactString::new_inline(""),
@@ -572,7 +570,7 @@ pub fn completion_query(source: &Rope, tree: &Tree, pos: &Position) -> Option<Co
                             source,
                         )?,
                     },
-                    prefix: prefix[..prefix.len().saturating_sub(1)].to_vec(),
+                    prefix,
                     postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
                 })
             }
@@ -586,17 +584,36 @@ pub fn completion_query(source: &Rope, tree: &Tree, pos: &Position) -> Option<Co
                 .iter()
                 .skip(1)
                 .flat_map(|i| i.split(".").map(|i| i.replace('\\', "").into()))
-                .chain(path.names.iter().cloned())
+                .chain(path.names[0..path.len().saturating_sub(1)].iter().cloned())
+                .filter(|i| !i.is_empty())
                 .collect();
-            Some(CompletionQuery {
-                offset: CompletionOffset::Continous,
-                env,
-                format: CompletionFormater::FreeJSONKey {
-                    whole_key: lsp_range(key, source)?,
-                },
-                prefix: prefix[..prefix.len().saturating_sub(1)].to_vec(),
-                postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
-            })
+            if source.char(char) == '.' {
+                Some(CompletionQuery {
+                    offset: CompletionOffset::Dot,
+                    env,
+                    format: CompletionFormater::JSONKey {
+                        postfix_range: tower_lsp::lsp_types::Range {
+                            start: src_pos.clone(),
+                            end: src_pos.clone(),
+                        },
+                    },
+                    prefix,
+                    postfix: CompactString::new_inline(""),
+                })
+            } else {
+                Some(CompletionQuery {
+                    offset: CompletionOffset::Continous,
+                    env,
+                    format: CompletionFormater::JSONKey {
+                        postfix_range: lsp_range(
+                            path.spans.last().cloned().unwrap_or(key),
+                            source,
+                        )?,
+                    },
+                    prefix,
+                    postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
+                })
+            }
         }
         _ => None,
     }

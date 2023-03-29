@@ -1,8 +1,8 @@
 use tokio::time::Instant;
 
-use crate::{ast::*, cache::*, check::ErrorsAcc, config::*, resolve, semantic::*};
+use crate::{ast::*, cache::*, config::*, resolve, semantic::*};
 use hashbrown::HashMap;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexSet;
 use log::info;
 use ustr::Ustr;
 
@@ -153,18 +153,18 @@ impl Module {
     ) -> Module {
         let mut members = fs.recursive_imports(root);
         members.push(root);
-        let mut ok = members.iter().all(|i| files[i].ok);
+        let ok = members.iter().all(|i| files[i].ok);
         if ok {
             let mut instances = IndexSet::new();
             let mut instance_files = Vec::new();
-            for (origin, instance, file, depth) in iterate_instances(root, files) {
+            for (origin, _, file, _) in iterate_instances(root, files) {
                 instances.insert((origin.instance, origin.sym));
                 instance_files.push(file);
             }
             Module {
                 files: files
                     .iter()
-                    .filter(|(k, v)| members.contains(k))
+                    .filter(|(k, _)| members.contains(k))
                     .map(|(k, v)| (*k, v.clone()))
                     .collect(),
                 instance_files,
@@ -176,7 +176,7 @@ impl Module {
             Module {
                 files: files
                     .iter()
-                    .filter(|(k, v)| members.contains(k))
+                    .filter(|(k, _)| members.contains(k))
                     .map(|(k, v)| (*k, v.clone()))
                     .collect(),
                 instance_files: [root].into(),

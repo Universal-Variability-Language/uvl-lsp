@@ -21,14 +21,17 @@ impl FileID {
         assert!(i != "");
         Self(i.into())
     }
+    pub fn from_uri(uri: &Url) -> FileID {
+        Self::new(uri.as_str())
+    }
     pub fn max() -> FileID {
         Self("".into())
     }
     pub fn ptr(&self) -> *const u8 {
         self.0.as_ptr()
     }
-    pub fn url(&self) -> Option<Url> {
-        Url::parse(self.0.as_str()).ok()
+    pub fn url(&self) -> Url {
+        Url::parse(self.0.as_str()).unwrap()
     }
     pub fn is_virtual(&self) -> bool {
         self.0.as_str().ends_with(".VIRTUAL_CONFIG")
@@ -36,6 +39,9 @@ impl FileID {
 
     pub fn is_config(&self) -> bool {
         self.0.as_str().ends_with(".json") | self.is_virtual()
+    }
+    pub fn filepath(&self) -> std::path::PathBuf {
+        self.url().to_file_path().unwrap()
     }
     pub fn as_str(&self) -> &str {
         &self.0

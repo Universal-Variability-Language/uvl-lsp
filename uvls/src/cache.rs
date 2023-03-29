@@ -1,7 +1,5 @@
 use crate::ast::*;
 use crate::check::ErrorsAcc;
-use crate::config::ConfigDocument;
-use crate::config::ConfigValue;
 use crate::module::ConfigModule;
 use crate::module::Module;
 use crate::resolve::*;
@@ -9,7 +7,6 @@ use crate::semantic::*;
 
 use compact_str::CompactStringExt;
 use hashbrown::{HashMap, HashSet};
-use indexmap::IndexSet;
 use log::info;
 use petgraph::prelude::*;
 use std::sync::Arc;

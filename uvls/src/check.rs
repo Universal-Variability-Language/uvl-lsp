@@ -239,16 +239,16 @@ async fn maybe_publish(
 ) {
     if let Some(old) = source_map.get_mut(&uri) {
         if old.timestamp < timestamp {
-            publish(client, &uri.url().unwrap(), &err).await;
+            publish(client, &uri.url(), &err).await;
             old.timestamp = timestamp;
             old.error = err;
         } else if old.timestamp == timestamp {
             old.timestamp = timestamp;
             old.error.append(&mut err);
-            publish(client, &uri.url().unwrap(), &old.error).await;
+            publish(client, &uri.url(), &old.error).await;
         }
     } else {
-        publish(client, &uri.url().unwrap(), &err).await;
+        publish(client, &uri.url(), &err).await;
         source_map.insert(
             uri,
             DiagnosticState {

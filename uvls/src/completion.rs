@@ -374,12 +374,19 @@ fn estimate_env(node: Node, source: &Rope, pos: &Position) -> Option<CompletionE
 
 #[derive(Debug)]
 pub enum CompletionFormater {
-    UVL { postfix_range: Range },
-    JSONKey { postfix_range: Range },
-    FreeJSONKey { whole_key: Range },
+    UVL {
+        postfix_range: Range,
+    },
+    JSONKey {
+        postfix_range: Range,
+    },
+    FreeJSONKey {
+        whole_key: Range,
+        key_prefix: String,
+    },
 }
 impl CompletionFormater {
-    fn text_edit(&self, prefix: &[Ustr], postfix: TextOP) -> TextEdit {
+    fn text_edit(&self, _: &[Ustr], postfix: TextOP) -> TextEdit {
         match (self, postfix) {
             (Self::UVL { postfix_range }, TextOP::Put(text)) => TextEdit {
                 new_text: text.into(),
@@ -392,8 +399,15 @@ impl CompletionFormater {
                     range: postfix_range.clone(),
                 }
             }
-            (Self::FreeJSONKey { whole_key }, TextOP::Put(text)) => {
-                let key = format!(r#""{}""#, text.replace('"', r#"\""#));
+            (
+                Self::FreeJSONKey {
+                    //TODO this only works with multiple text edits sadly
+                    whole_key,
+                    key_prefix,
+                },
+                TextOP::Put(text),
+            ) => {
+                let key = format!(r#""{key_prefix}{}""#, text.replace('"', r#"\""#));
                 TextEdit {
                     new_text: key,
                     range: whole_key.clone(),
@@ -412,6 +426,7 @@ pub struct CompletionQuery {
 }
 impl CompletionQuery {
     fn text_edit(&self, text: TextOP) -> TextEdit {
+        info!("{self:?}");
         self.format.text_edit(&self.prefix, text)
     }
 }
@@ -721,6 +736,7 @@ fn completion_symbol_local(
     info!("Module {:?} under {:?}", root, prefix);
     file.visit_named_children(root.sym, true, |sym, sym_prefix| {
         let ty = file.type_of(sym).unwrap();
+        info!("{sym:?} {sym_prefix:?}");
         if sym_prefix.is_empty() || !query.env.is_relevant(ty.into()) {
             info!("skip {:?}", sym_prefix);
             return true;
@@ -739,7 +755,6 @@ fn completion_symbol_local(
             return true;
         }
         let text = make_path(prefix.iter().chain(sym_prefix.iter()));
-        info!("{text}");
         top.push(CompletionOpt::new(
             ty.into(),
             *sym_prefix.last().unwrap(),
@@ -1022,7 +1037,6 @@ pub fn compute_completions(
     info!("Stat completion: {:#?} in {:?}", ctx, origin);
     if let (Some(ctx), Some(origin)) = (ctx, origin) {
         let (top, is_incomplete) = compute_completions_impl(snapshot, draft, pos, &ctx, origin);
-        //info!("Completions P{:?} in {:?}", &comp, timer.elapsed());
         let items = top
             .into_sorted_vec()
             .into_iter()
@@ -1048,7 +1062,7 @@ pub fn compute_completions(
             })
             .collect();
 
-        info!("Completions: {:?}", timer.elapsed());
+        info!("Completions: {:?} {:#?}", timer.elapsed(), items);
         CompletionList {
             items,
             is_incomplete,

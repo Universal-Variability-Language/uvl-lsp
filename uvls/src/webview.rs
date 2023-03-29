@@ -11,17 +11,15 @@ use dioxus::prelude::*;
 use futures_util::StreamExt;
 use hashbrown::{HashMap, HashSet};
 use indexmap::IndexMap;
-use itertools::Itertools;
 use log::info;
 use serde::Serialize;
-use std::{borrow::Borrow, sync::Arc};
-use std::{collections::BTreeMap, sync::atomic::AtomicU64};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use tokio::{
     select, spawn,
     sync::{mpsc, watch},
-    time::Instant,
 };
 use ustr::Ustr;
 
@@ -326,7 +324,6 @@ fn rebuild_tree(source: &ConfigSource) -> Option<UIConfigState> {
 
 //Keeps the UI in sync with its context
 async fn ui_sync(
-    id: u64,
     pipeline: AsyncPipeline,
     tx_sync: mpsc::Sender<UIAction>,
     target: FileID,
@@ -511,7 +508,7 @@ async fn ui_event_loop(
                         config: ConfigEntry::Import(Default::default(), ser),
                     };
                     let out = serde_json::to_string_pretty(&config).unwrap();
-                    std::fs::write(output_name, out);
+                    let _ = std::fs::write(output_name, out);
                 });
             }
             UIAction::Show => {
@@ -623,7 +620,7 @@ pub async fn ui_main(
                     tag: (root.revision() % 256) as u8,
                     cancel: CancellationToken::new(),
                 };
-                let path = id.url().unwrap().to_file_path().unwrap();
+                let path = id.filepath();
                 let mut dest = path.clone();
                 let tgt_path = path.file_name().unwrap().to_str().unwrap().to_string();
                 dest.set_extension("uvl.json");
@@ -636,7 +633,6 @@ pub async fn ui_main(
             let root = pipeline.sync_root_global().await?;
             let path = FileID::new(format!("file:///{path}").as_str());
             if let Some(src) = root.cache().config_modules.get(&path) {
-                info!("{src:?}");
                 if !src.ok {
                     Err("invalid config")?;
                 }
@@ -649,21 +645,10 @@ pub async fn ui_main(
                     tag: (root.revision() % 256) as u8,
                     cancel: CancellationToken::new(),
                 };
-                let dest = path.url().unwrap().to_file_path().unwrap();
-                let tgt_path = src
-                    .module
-                    .file(InstanceID(0))
-                    .id
-                    .url()
-                    .unwrap()
-                    .to_file_path()
-                    .unwrap();
+                let dest = path.filepath();
+                let tgt_path = src.module.file(InstanceID(0)).id.filepath();
                 let tgt_path = tgt_path.strip_prefix(dest.parent().unwrap()).unwrap();
-                Ok((
-                    c,
-                    path.url().unwrap().to_file_path().unwrap(),
-                    tgt_path.to_str().unwrap().to_string(),
-                ))
+                Ok((c, dest, tgt_path.to_str().unwrap().to_string()))
             } else {
                 Err("configuration not found")
             }
@@ -686,7 +671,7 @@ pub async fn ui_main(
         pipeline.inlay_state().clone(),
         crate::inlays::InlaySource::Web(id),
     ));
-    spawn(ui_sync(id, pipeline.clone(), tx_sync, root));
+    spawn(ui_sync(pipeline.clone(), tx_sync, root));
     ui_event_loop(
         id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline, tgt_path,
     )
