@@ -295,6 +295,7 @@ impl Module {
             .type_of(sym.sym)
             .unwrap()
     }
+    //Visit all instances in the module
     pub fn instances<'a>(&'a self) -> impl Iterator<Item = (InstanceID, &'a AstDocument)> {
         assert!(self.ok);
         self.instance_files

@@ -31,13 +31,13 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::*;
 //SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
-//While the performance is worse than linking with Z3 we are solver independet and dont have to interact
+//While the performance is worse than linking with Z3, we are solver independent and dont have to interact
 //with any C-Bindings. UVL is translated directly into SMT-LIB, both attributes and features are treated as
 //free variables. The rest is mostly encoded in named asserts, this allows to get a accurat unsat core.
 //Eg. each attribute is ristrcited with an assert that allows it to either be its defined value or 0 depending
-//on if the parent feature is true or not.
-//Using functions for this might be more efficient but this way we can reconfigure and detect if
-//an attributes value contributes to the unsat core.
+//on the parent feature value.
+//Using functions might be more efficient, but this way we can reconfigure and detect if
+//an attribute value contributes to the unsat core.
 //Variables are named as v{n} where n is an index into a lookup table of UVL ModuleSymbols
 //Asserts are encoded similarly as a{n} where n is and index into a list of nameing information
 //that links uvl expression to asserts.
@@ -261,16 +261,21 @@ impl SMTModule {
     }
 }
 struct SMTBuilder<'a> {
+    //Eeach variable is encoded as v{n} where n is an index into sym2var using an IndexSet
+    //enables us to lookup a variable both by index and ModuleSymbol
     sym2var: IndexSet<ModuleSymbol>,
     assert: Vec<AssertInfo>,
     module: &'a Module,
 }
 impl<'a> SMTBuilder<'a> {
+    //Variable to index
     fn var(&self, ms: ModuleSymbol) -> usize {
         self.sym2var
             .get_index_of(&self.module.resolve_value(ms))
             .unwrap()
     }
+    //The language allows non boolean variables as attribute and feature parents
+    //So we treat them as boolean expressions in those contexts
     fn pseudo_bool(&self, ms: ModuleSymbol) -> String {
         let ms = self.module.resolve_value(ms);
         match self.module.type_of(ms) {
@@ -449,13 +454,16 @@ fn create_module<'a>(
         }
     }
     //make root features mandatory
-    for (m, file) in module.instances() {
-        for f in file
-            .direct_children(Symbol::Root)
-            .filter(|f| matches!(f, Symbol::Feature(..)))
-        {
-            let _ = writeln!(out, "(assert {})", builder.pseudo_bool(m.sym(f)));
-        }
+    for f in module
+        .file(InstanceID(0))
+        .direct_children(Symbol::Root)
+        .filter(|f| matches!(f, Symbol::Feature(..)))
+    {
+        let _ = writeln!(
+            out,
+            "(assert {})",
+            builder.pseudo_bool(InstanceID(0).sym(f))
+        );
     }
     //encode constraints
     #[derive(Debug)]
@@ -577,18 +585,19 @@ fn create_module<'a>(
                             });
                             if all_attributes.is_empty() {
                                 let _ = write!(out, " 0.0");
+                            } else {
+                                match op {
+                                    AggregateOP::Sum => {
+                                        let _ = write!(out, "(+ {all_attributes})");
+                                    }
+                                    AggregateOP::Avg => {
+                                        let _ = write!(
+                                            out,
+                                            "(smooth_div(+ {all_attributes}) (+ {count_features}))",
+                                        );
+                                    }
+                                };
                             }
-                            match op {
-                                AggregateOP::Sum => {
-                                    let _ = write!(out, "(+ {all_attributes})");
-                                }
-                                AggregateOP::Avg => {
-                                    let _ = write!(
-                                        out,
-                                        "(smooth_div(+ {all_attributes}) (+ {count_features}))",
-                                    );
-                                }
-                            };
                         }
                     },
                     CExpr::End => {
@@ -968,7 +977,6 @@ pub async fn web_view_handler(
             let lock = state.borrow_and_update();
             (lock.module.clone(), lock.cancel.clone(), lock.tag)
         };
-        info!("cancled {}", cancel.is_cancelled());
 
         if module.ok {
             let (source, smt_module) = create_module(&module, &module.values);

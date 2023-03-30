@@ -4,6 +4,7 @@ use crate::config::*;
 use crate::module::ModuleSymbol;
 use crate::webview::*;
 use dioxus::prelude::*;
+use tokio::sync::{watch,mpsc};
 
 fn Spinner(cx: Scope) -> Element {
     cx.render(rsx! {
@@ -26,6 +27,7 @@ fn Spinner(cx: Scope) -> Element {
 
     }})
 }
+//Icons taken from https://heroicons.com/
 #[inline_props]
 fn Icon(cx: Scope, icon: Icon, class: Option<&'static str>) -> Element {
     let paths:&[_] =  match icon {
@@ -53,6 +55,12 @@ fn Icon(cx: Scope, icon: Icon, class: Option<&'static str>) -> Element {
         }
         Icon::CirclePlus=>{
             &["M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"]
+        }
+        Icon::Link=>{
+            &[
+                "M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+            ]
+            
         }
     };
     let paths = paths.iter().map(|p| {
@@ -233,6 +241,24 @@ fn Value(cx: Scope, value: UIEntryValue, sym: ModuleSymbol, tag: u8) -> Element 
                 tag:*tag,
             }
         }),
+
+        UIEntryValue::Link{
+            config,
+            smt_value,
+            ty,
+            unsat,
+            ..
+        } => cx.render(rsx! {
+            ConfigInput{
+                config:config.as_ref(),
+                base:smt_value.as_ref(),
+                unsat:*unsat,
+                sym:*sym,
+                ty:*ty,
+                is_attrib:false,
+                tag:*tag,
+            }
+        }),
         UIEntryValue::Attribute {
             config,
             default,
@@ -257,6 +283,7 @@ fn icon(value: &UIEntryValue) -> Icon {
         UIEntryValue::File { .. } => Icon::File,
         UIEntryValue::Feature { .. } => Icon::Feature,
         UIEntryValue::Attribute { .. } => Icon::Atribute,
+        UIEntryValue::Link { ..}=>Icon::Link,
     }
 }
 fn name(value: &UIEntryValue) -> String {
@@ -267,7 +294,8 @@ fn name(value: &UIEntryValue) -> String {
             } else {
                 format!("{}", name)
             }
-        }
+        },
+        UIEntryValue::Link { name,.. }=>name.clone(),
         UIEntryValue::Attribute { name, .. }
         | UIEntryValue::Feature { name, .. }
         | UIEntryValue::Attributes(name) => format!("{}", name),
@@ -362,8 +390,36 @@ where
                 .get_index(i + 1)
                 .map(|(_, vn)| vn.depth <= v.depth)
                 .unwrap_or(true);
-            rsx! {
-                FileEntry{node:v.clone(),leaf:leaf,sym:*k,key:"{k:?}",tag:tag}
+            //Resolve link
+            if let UIEntryValue::Link{name,tgt,..} = &v.value{
+                let UIEntryValue::Feature {  config, smt_value, ty, unsat,.. }  = &state.entries[tgt].value else{
+                    panic!()
+                };
+
+                rsx! {
+                    FileEntry{node:UIEntry{
+                        open:v.open,
+                        depth:v.depth,
+                        value: UIEntryValue::Link{
+                            tgt:*tgt,
+                            name:name.clone(),
+                            config:config.clone(),
+                            smt_value:smt_value.clone(),
+                            ty:*ty,
+                            unsat:*unsat
+
+                            
+                        }
+                        
+                    },leaf:leaf,sym:*tgt,key:"{k:?}",tag:tag}
+                }
+            } 
+            else{
+
+                rsx! {
+                    FileEntry{node:v.clone(),leaf:leaf,sym:*k,key:"{k:?}",tag:tag}
+                }
+            
             }
         })
 }
@@ -480,3 +536,4 @@ pub fn App(cx: Scope<AppProps>) -> Element {
         }
     }
 }
+

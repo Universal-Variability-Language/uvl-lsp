@@ -11,17 +11,33 @@ use dioxus::prelude::*;
 use futures_util::StreamExt;
 use hashbrown::{HashMap, HashSet};
 use indexmap::IndexMap;
+use itertools::Itertools;
 use log::info;
 use serde::Serialize;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
-
 use tokio::{
     select, spawn,
     sync::{mpsc, watch},
 };
+use tokio_util::sync::CancellationToken;
 use ustr::Ustr;
+/* This web interface allow simple configuration of uvl models within the sever.
+The GUI is written as a html-over-wire liveview, via dioxus. The liveview can then be
+accessed directly in vs-code or the native browser. Each server instance has its own localhost
+TCP port {p}, configuration is possible over two diffrent entries:
+localhost:{p}/create/{uvl_base_file} - Create an empty config from a uvl base file
+localhost:{p}/load/{uvl_config_file} - Load a configuration from a json file
+
+
+The actual GUI is implemented as redux style asynchronous event loop. This is
+mainly due to the fact that its simple and requires minmal state management.
+Currently the whole tree is redarwn when a value changes since there is only one global
+configuration and tree state. This should be separated.
+To synchronise the webview with the rest of the server two handlers are used:
+ui_sync and smt::web_view_handler. The first detects file changes and rebuilds the target modul,
+the second handler calculates new smt values when things change.
+*/
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum Icon {
@@ -35,6 +51,7 @@ pub enum Icon {
     CircleCross,
     CircleCheck,
     CirclePlus,
+    Link,
 }
 #[derive(Clone, Debug)]
 pub enum SatState {
@@ -62,6 +79,14 @@ pub enum UIEntryValue {
         name: Ustr,
         config: Option<ConfigValue>,
         default: ConfigValue,
+        unsat: bool,
+    },
+    Link {
+        tgt: ModuleSymbol,
+        name: String,
+        config: Option<ConfigValue>,
+        smt_value: Option<ConfigValue>,
+        ty: Type,
         unsat: bool,
     },
 }
@@ -178,6 +203,7 @@ impl PartialEq for AppProps {
 
 fn create_file_tree(
     file: &AstDocument,
+    module: &Module,
     base_depth: u32,
     instance: InstanceID,
     config: &HashMap<ModuleSymbol, ConfigValue>,
@@ -185,9 +211,30 @@ fn create_file_tree(
 ) {
     let mut last = Symbol::Root;
     let mut vdir = 0;
-    file.visit_named_children_depth(Symbol::Root, true, |sym, prefix, depth| match sym {
+    file.visit_children_depth(Symbol::Root, true, |sym, depth| match sym {
+        Symbol::Reference(_) => {
+            let depth = depth + base_depth - 1;
+            let name = file.path(sym).iter().join(".");
+            //Values will be resolved in the frontend
+            entries.insert(
+                instance.sym(sym),
+                UIEntry {
+                    depth,
+                    open: false,
+                    value: UIEntryValue::Link {
+                        name,
+                        tgt: module.resolve_value(instance.sym(sym)),
+                        config: None,
+                        ty: Type::Real,
+                        smt_value: None,
+                        unsat: false,
+                    },
+                },
+            );
+            false
+        }
         Symbol::Feature(_) | Symbol::Attribute(_) => {
-            let depth = depth as u32 + base_depth - 1;
+            let depth = depth + base_depth - 1;
             match file.type_of(sym).unwrap() {
                 Type::String | Type::Real | Type::Bool | Type::Attributes => {}
                 _ => {
@@ -210,7 +257,7 @@ fn create_file_tree(
             } else {
                 depth
             };
-            let name = prefix[prefix.len() - 1];
+            let name = file.name(sym).unwrap();
 
             let ms = instance.sym(sym);
             let config = config.get(&ms).cloned();
@@ -257,7 +304,7 @@ fn create_file_tree(
             last = sym;
             true
         }
-        _ => false,
+        _ => true,
     });
 }
 
@@ -277,6 +324,7 @@ fn rebuild_tree(source: &ConfigSource) -> Option<UIConfigState> {
                 let (depth, instance) = content.pop().unwrap();
                 create_file_tree(
                     module.file(instance),
+                    &module,
                     depth,
                     instance,
                     &source.module.values,
@@ -310,6 +358,7 @@ fn rebuild_tree(source: &ConfigSource) -> Option<UIConfigState> {
     for (depth, instance) in content.into_iter().rev() {
         create_file_tree(
             module.file(instance),
+            &module,
             depth,
             instance,
             &source.module.values,
@@ -354,46 +403,6 @@ async fn ui_sync(
     }
     Ok(())
 }
-/*
-fn save_config(config: &DirectConfig, dir: String, file_name: String, root: &RootGraph) {
-    #[derive(Serialize)]
-    struct RawFileConfig {
-        file: String,
-        config: BTreeMap<String, ConfigValue>,
-    }
-    let files: Vec<_> = config
-        .iter()
-        .filter(|(k, _)| root.containes_id(**k))
-        .filter_map(|(id, values)| {
-            let file_path = &root.file(*id).path;
-
-            let dir_path = dir.split("/").skip(1);
-            let common = dir_path
-                .zip(file_path.iter())
-                .take_while(|(i, k)| *i == k.as_str())
-                .count();
-            let path = file_path[common..].iter().map(|i| i.as_str()).join(".");
-            Some(RawFileConfig {
-                file: path,
-                config: values
-                    .iter()
-                    .map(|(k, v)| (k.iter().join("."), v.clone()))
-                    .collect(),
-            })
-        })
-        .collect();
-    let json = serde_json::to_string(&files).unwrap();
-    tokio::task::spawn_blocking(move || {
-        let path = if dir.is_empty() {
-            format!("{dir}/{file_name}")
-        } else {
-            file_name.clone()
-        };
-        let _ = std::fs::write(&path, json);
-    });
-}
-*/
-//redux style state management
 
 fn rebuild_config(
     ui_state: &UseRef<UIState>,
@@ -414,17 +423,19 @@ fn rebuild_config(
         }
     });
 }
+//Transfer state from with a new module
 fn transfer_config(source: &mut ConfigSource, new: Arc<Module>) {
     if !new.ok {
         return;
     }
-    info!("tarns");
+
     let ser = source.module.serialize();
     let (new_values, _) = new.resolve_config(&ser, |_, _| {});
     source.module.module = new;
     source.module.values = new_values;
 }
 
+//redux style state management
 async fn ui_event_loop(
     id: u64,
     tx_config: watch::Sender<ConfigSource>, //The current configuration
@@ -665,13 +676,16 @@ pub async fn ui_main(
     let root = initial_config.root;
     let (tx_sync, rx_sync) = mpsc::channel(32);
     let (tx_config, rx_config) = watch::channel(initial_config);
+    //SMT value handler
     spawn(smt::web_view_handler(
         rx_config,
         tx_sync.clone(),
         pipeline.inlay_state().clone(),
         crate::inlays::InlaySource::Web(id),
     ));
+    //Sync module with the lsp state
     spawn(ui_sync(pipeline.clone(), tx_sync, root));
+    //Run the event loop
     ui_event_loop(
         id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline, tgt_path,
     )

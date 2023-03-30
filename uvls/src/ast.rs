@@ -1928,6 +1928,15 @@ impl AstDocument {
         merge_root_features: bool,
         mut f: F,
     ) {
+        self.visit_named_children_depth(root, merge_root_features, |sym, prefix, _| f(sym, prefix))
+    }
+
+    pub fn visit_named_children_depth<F: FnMut(Symbol, &[Ustr], usize) -> bool>(
+        &self,
+        root: Symbol,
+        merge_root_features: bool,
+        mut f: F,
+    ) {
         let mut stack: Vec<(Symbol, usize)> = vec![(root, 0)];
         let mut prefix = vec![];
         while let Some((cur, depth)) = stack.pop() {
@@ -1936,7 +1945,7 @@ impl AstDocument {
             if let Some(name) = self.name(cur) {
                 if cur != root {
                     prefix.push(name);
-                    explore = f(cur, &prefix);
+                    explore = f(cur, &prefix, depth);
                 }
             }
             if explore {
@@ -1962,48 +1971,15 @@ impl AstDocument {
             }
         }
     }
-
-    pub fn visit_named_children_depth<F: FnMut(Symbol, &[Ustr], usize) -> bool>(
+    pub fn visit_children<F: FnMut(Symbol) -> bool>(
         &self,
         root: Symbol,
         merge_root_features: bool,
         mut f: F,
     ) {
-        let mut stack = vec![(root, 0, 0)];
-        let mut prefix = vec![];
-        while let Some((cur, depth_prefix, depth)) = stack.pop() {
-            prefix.truncate(depth_prefix);
-            let mut explore = true;
-            if let Some(name) = self.name(cur) {
-                prefix.push(name);
-                if cur != root {
-                    explore = f(cur, &prefix, depth);
-                }
-            }
-            if explore {
-                for i in self.ast.children(cur).rev() {
-                    if merge_root_features
-                        && !matches!(i, Symbol::Attribute(0))
-                        && !matches!(root, Symbol::Root)
-                    {
-                        continue;
-                    }
-                    match i {
-                        Symbol::Feature(..) => {
-                            stack.push((i, 0, depth + 1));
-                        }
-                        Symbol::Attribute(..) | Symbol::Dir(0) => {
-                            stack.push((i, depth_prefix + 1, depth + 1));
-                        }
-                        _ => {
-                            stack.push((i, depth_prefix, depth));
-                        }
-                    }
-                }
-            }
-        }
+        self.visit_children_depth(root, merge_root_features, |sym, _| f(sym));
     }
-    pub fn visit_children<F: FnMut(Symbol) -> bool>(
+    pub fn visit_children_depth<F: FnMut(Symbol, u32) -> bool>(
         &self,
         root: Symbol,
         merge_root_features: bool,
@@ -2013,7 +1989,7 @@ impl AstDocument {
         while let Some((cur, depth)) = stack.pop() {
             let mut explore = true;
             if cur != root {
-                explore = f(cur);
+                explore = f(cur, depth);
             }
             if explore {
                 for i in self.ast.children(cur).rev() {
