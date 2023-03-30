@@ -791,6 +791,36 @@ impl<'a> VisitorState<'a> {
                 stack.push((i, new_scope, depth + 1));
             }
         }
+        for i in self.ast.children(Symbol::Root) {
+            if matches!(i, Symbol::Feature(..)) {
+                if self
+                    .ast
+                    .index
+                    .get(&(Symbol::Root, self.ast.name(i).unwrap(), SymbolKind::Dir))
+                    .is_some()
+                {
+                    self.errors.push(ErrorInfo {
+                        location: self.ast.lsp_range(i, self.source).unwrap(),
+                        severity: DiagnosticSeverity::ERROR,
+                        weight: 20,
+                        msg: "name already defined as import directory".to_string(),
+                    });
+                }
+                if self
+                    .ast
+                    .index
+                    .get(&(Symbol::Root, self.ast.name(i).unwrap(), SymbolKind::Import))
+                    .is_some()
+                {
+                    self.errors.push(ErrorInfo {
+                        location: self.ast.lsp_range(i, self.source).unwrap(),
+                        severity: DiagnosticSeverity::ERROR,
+                        weight: 20,
+                        msg: "name already defined as import".to_string(),
+                    });
+                }
+            }
+        }
     }
     fn push_child(&mut self, parent: Symbol, child: Symbol) {
         self.ast.structure.insert(parent, child);

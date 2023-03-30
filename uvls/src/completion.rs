@@ -426,7 +426,6 @@ pub struct CompletionQuery {
 }
 impl CompletionQuery {
     fn text_edit(&self, text: TextOP) -> TextEdit {
-        info!("{self:?}");
         self.format.text_edit(&self.prefix, text)
     }
 }
@@ -447,7 +446,6 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
         Draft::JSON { source, tree, .. } => config::completion_query(source, tree, pos),
         Draft::UVL { source, tree, .. } => {
             let (offset, edit_node) = position_to_node(source, tree, pos);
-            info!("Completion for: {:?}", edit_node);
             if let (Some((path, path_node)), CompletionOffset::Continous) =
                 (longest_path(edit_node, source), offset)
             {
@@ -736,7 +734,6 @@ fn completion_symbol_local(
     info!("Module {:?} under {:?}", root, prefix);
     file.visit_named_children(root.sym, true, |sym, sym_prefix| {
         let ty = file.type_of(sym).unwrap();
-        info!("{sym:?} {sym_prefix:?}");
         if sym_prefix.is_empty() || !query.env.is_relevant(ty.into()) {
             info!("skip {:?}", sym_prefix);
             return true;
@@ -1034,7 +1031,7 @@ pub fn compute_completions(
             &snapshot,
         ),
     };
-    info!("Stat completion: {:#?} in {:?}", ctx, origin);
+    info!("Stat completion in  {:?}", origin);
     if let (Some(ctx), Some(origin)) = (ctx, origin) {
         let (top, is_incomplete) = compute_completions_impl(snapshot, draft, pos, &ctx, origin);
         let items = top
@@ -1062,7 +1059,7 @@ pub fn compute_completions(
             })
             .collect();
 
-        info!("Completions: {:?} {:#?}", timer.elapsed(), items);
+        info!("Completions: {:?}", timer.elapsed());
         CompletionList {
             items,
             is_incomplete,
