@@ -95,7 +95,6 @@ impl ConfigModule {
                 entries.push(entry);
             }
         }
-        info!("{path:?} {i:?}");
         file.visit_named_children(Symbol::Root, false, |sym, prefix| match sym {
             Symbol::Feature(_) | Symbol::Attribute(_) => {
                 if let Some(config) = self.values.get(&i.sym(sym)) {
@@ -120,7 +119,6 @@ impl ConfigModule {
         )
     }
     pub fn serialize(&self) -> Vec<ConfigEntry> {
-        info!("{:?}", self.values);
         let ConfigEntry::Import(_,v) = self.serialize_rec(&[],InstanceID(0)) else {unreachable!()};
         v
     }
@@ -143,7 +141,6 @@ pub struct Module {
 }
 impl Module {
     pub fn get_instance(&self, instance: InstanceID, sym: Symbol) -> InstanceID {
-        info!("{instance:?} {sym:?}");
         InstanceID(self.instances.get_index_of(&(instance, sym)).unwrap())
     }
     pub fn new(
@@ -237,7 +234,6 @@ impl Module {
         let mut out = HashMap::new();
         let mut out_span = HashMap::new();
         let mut stack = vec![(InstanceID(0), doc.as_slice())];
-        info!("resolve {doc:#?}");
         while let Some((instance, config)) = stack.pop() {
             let file = self.file(instance);
             for c in config.iter() {
