@@ -174,6 +174,7 @@ pub enum UIAction {
     UpdateSMTInvalid(String, u8),
     Set(ModuleSymbol, u8, ConfigValue),
     Unset(ModuleSymbol, u8),
+    ShowSym(ModuleSymbol, u8),
     Save,
     Show,
 }
@@ -428,7 +429,6 @@ fn transfer_config(source: &mut ConfigSource, new: Arc<Module>) {
     if !new.ok {
         return;
     }
-
     let ser = source.module.serialize();
     let (new_values, _) = new.resolve_config(&ser, |_, _| {});
     source.module.module = new;
@@ -559,6 +559,25 @@ async fn ui_event_loop(
                     config.cancel.cancel();
                     config.cancel = CancellationToken::new();
                 });
+            }
+            UIAction::ShowSym(sym, tag) => {
+                if tag != ctag {
+                    continue;
+                }
+                let req = {
+                    let state = tx_config.borrow();
+                    let file = state.module.file(sym.instance);
+                    tower_lsp::lsp_types::ShowDocumentParams {
+                        uri: file.uri.clone(),
+                        external: None,
+                        take_focus: Some(true),
+                        selection: file.lsp_range(sym.sym),
+                    }
+                };
+                let _ = pipeline
+                    .client()
+                    .send_request::<tower_lsp::lsp_types::request::ShowDocument>(req)
+                    .await;
             }
             UIAction::UpdateSMTInvalid(msg, tag) => {
                 if tag != ctag {

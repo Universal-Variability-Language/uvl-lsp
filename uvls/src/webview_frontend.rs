@@ -4,7 +4,6 @@ use crate::config::*;
 use crate::module::ModuleSymbol;
 use crate::webview::*;
 use dioxus::prelude::*;
-use tokio::sync::{watch,mpsc};
 
 fn Spinner(cx: Scope) -> Element {
     cx.render(rsx! {
@@ -306,17 +305,60 @@ fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: ModuleSymbol, tag: u8) -
     let pad = node.depth * 30;
     let ui_task = use_coroutine_handle::<UIAction>(cx).unwrap();
     let val = rsx! {Value{value:node.value.clone(),sym:*sym,tag:*tag}};
-    let name = name(&node.value);
+    let name = match &node.value{
+        UIEntryValue::File { alias, name } => {
+            if let Some(alias) = alias {
+                format!("{}", alias)
+            } else {
+                format!("{}", name)
+            }
+        },
+        UIEntryValue::Link { name,.. }=>name.clone(),
+        UIEntryValue::Attribute { name, .. }
+        | UIEntryValue::Feature { name, .. }
+        | UIEntryValue::Attributes(name) => format!("{}", name),
+    };
+
     let icon = icon(&node.value);
+    let name = match &node.value{
+        UIEntryValue::Attribute { ..}|UIEntryValue::Feature { .. }  |UIEntryValue::File { ..}=>rsx!{
+            span{
+                class:"name-sel",
+                onclick: move |_|{
+                    ui_task.send(UIAction::ShowSym(*sym,*tag));
+                },
+                name
+                Icon{icon:icon}
+            }
+        },
+        UIEntryValue::Link { tgt,.. }=>rsx!{
+            span{
+                class:"name-sel",
+                onclick: move |_|{
+                    ui_task.send(UIAction::ShowSym(*tgt,*tag));
+                },
+                name
+                Icon{icon:icon}
+            }
+            
+        },
+        _=>rsx!{
+            span{
+                class:"name",
+                name
+                Icon{icon:icon}
+            }
+        }
+        
+    };
+
     if *leaf {
         cx.render(rsx! {
            tr{
                 td{
                     span{
-                        class:"name",
                         style:"padding-left:{pad}px",
-                        "{name}"
-                        Icon{icon:icon}
+                        name
                     }
                 }
                 td{
@@ -345,13 +387,8 @@ fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: ModuleSymbol, tag: u8) -
                                 rsx!{Icon{icon:Icon::Expand}}
 
                             }
-
                         }
-                        span{
-                            class:"name",
-                            "{name}"
-                        }
-                        Icon{icon:icon}
+                        name
                     }
                 }
                 td{
@@ -401,7 +438,7 @@ where
                         open:v.open,
                         depth:v.depth,
                         value: UIEntryValue::Link{
-                            tgt:*tgt,
+                            tgt:*k,
                             name:name.clone(),
                             config:config.clone(),
                             smt_value:smt_value.clone(),
