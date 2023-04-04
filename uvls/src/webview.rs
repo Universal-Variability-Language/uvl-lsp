@@ -25,17 +25,17 @@ use ustr::Ustr;
 /* This web interface allows simple configuration of uvl models within the sever.
 The GUI is written as a html-over-wire liveview, via dioxus. The liveview can then be
 accessed directly in vs-code or the native browser. Each server instance has its own localhost
-TCP port {p}, configuration is possible over two diffrent entries:
+TCP port {p}, configuration is possible over two different entries:
 localhost:{p}/create/{uvl_base_file} - Create an empty config from a uvl base file
 localhost:{p}/load/{uvl_config_file} - Load a configuration from a json file
 
 
 The actual GUI is implemented as redux style asynchronous event loop. This is
-mainly due to the fact that its simple and requires minmal state management.
-Currently the whole tree is redarwn when a value changes since there is only one global
+mainly due to the fact that its simple and requires minimal state management.
+Currently the whole tree is redrawn when a value changes since there is only one global
 configuration and tree state. This should be separated.
 To synchronise the webview with the rest of the server two handlers are used:
-ui_sync and smt::web_view_handler. The first detects file changes and rebuilds the target modul,
+ui_sync and smt::web_view_handler. The first detects file changes and rebuilds the target module,
 the second handler calculates new smt values when things change.
 */
 

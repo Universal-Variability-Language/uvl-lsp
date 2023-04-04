@@ -4,7 +4,7 @@ use crate::config::*;
 use crate::module::ModuleSymbol;
 use crate::webview::*;
 use dioxus::prelude::*;
-
+//Render UVL content to HTML
 fn Spinner(cx: Scope) -> Element {
     cx.render(rsx! {
     svg{

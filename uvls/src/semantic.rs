@@ -175,7 +175,7 @@ impl RootGraph {
     ) {
         resolve::resolve_attributes(&self.files, &self.cache.fs, origin, context, f)
     }
-    //find all attributes from origin under context, usefull for aggregates, also keep track
+    //find all attributes from origin under context, useful for aggregates, also keep track
     //of the owner feature and file
     pub fn resolve_attributes_with_feature<
         'a,

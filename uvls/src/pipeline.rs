@@ -28,8 +28,8 @@ use tower_lsp::lsp_types::*;
 use util::Result;
 //The parsing frontend
 //To allow for more nimble and robust parsing, we use 2 stage process to parse 2 different syntax
-//trees with different grammers:
-// - Source code is initally parsed with a very relaxed UVL tree-sitter grammar. This results in a
+//trees with different grammars:
+// - Source code is initially parsed with a very relaxed UVL tree-sitter grammar. This results in a
 //   loose syntax tree of UVL codefragments. We call this tree the 'green tree'
 //   it's used for all syntax analysis. Its also very cheap to parse and incremental so it can be
 //   parsed on every keystroke for syntax highlighting and completion context information.
@@ -40,7 +40,7 @@ use util::Result;
 //   from green to red tree very specific syntax errors are possible and forwarded to the user.
 //   All red trees are lated linked into a single model (the Root Graph) asynchronously.
 //Green Trees are stored as Drafts while red trees are stored as an AST-ECS like structure
-//See https://github.com/rust-lang/rust-analyzer/blob/master/docs/dev/syntax.md for the insperation
+//See https://github.com/rust-lang/rust-analyzer/blob/master/docs/dev/syntax.md for the inspirations
 //of this method.
 enum DraftMsg {
     Delete(Instant),
@@ -254,7 +254,7 @@ async fn link_handler(
             }
             info!("link execute");
             tx_cache.borrow().cancel();
-            let (ast, configs, revison) = (*rx.borrow_and_update()).clone();
+            let (ast, configs, revision) = (*rx.borrow_and_update()).clone();
             let mut err = ErrorsAcc {
                 files: &ast,
                 configs: &configs,
@@ -263,12 +263,12 @@ async fn link_handler(
             let old = tx_cache.borrow().cache().clone();
 
             //link files incrementally
-            let root = RootGraph::new(&ast, &configs, revison, &old, &mut err, &mut timestamps);
+            let root = RootGraph::new(&ast, &configs, revision, &old, &mut err, &mut timestamps);
 
             let _ = tx_cache.send(Arc::new(root));
             let _ = tx_err
                 .send(DiagnosticUpdate {
-                    timestamp: revison,
+                    timestamp: revision,
                     error_state: err.errors,
                 })
                 .await;
@@ -333,9 +333,9 @@ impl AsyncPipeline {
     pub fn client(&self) -> tower_lsp::Client {
         self.client.clone()
     }
-    pub async fn update_config(&self, doc: config::ConfigDocument, intial: bool) {
+    pub async fn update_config(&self, doc: config::ConfigDocument, initial: bool) {
         self.revision_counter.fetch_add(1, Ordering::SeqCst);
-        if intial {
+        if initial {
             let _ = self.tx_dirty_tree.send(());
         }
         let _ = self
