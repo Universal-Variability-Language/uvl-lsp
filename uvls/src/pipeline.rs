@@ -29,7 +29,7 @@ use util::Result;
 //The parsing frontend
 //To allow for more nimble and robust parsing, we use 2 stage process to parse 2 different syntax
 //trees with different grammers:
-// - Source code is initally parsed with a very relaxed UVL tree-sitter grammar. This results in
+// - Source code is initally parsed with a very relaxed UVL tree-sitter grammar. This results in a
 //   loose syntax tree of UVL codefragments. We call this tree the 'green tree'
 //   it's used for all syntax analysis. Its also very cheap to parse and incremental so it can be
 //   parsed on every keystroke for syntax highlighting and completion context information.
@@ -40,13 +40,15 @@ use util::Result;
 //   from green to red tree very specific syntax errors are possible and forwarded to the user.
 //   All red trees are lated linked into a single model (the Root Graph) asynchronously.
 //Green Trees are stored as Drafts while red trees are stored as an AST-ECS like structure
+//See https://github.com/rust-lang/rust-analyzer/blob/master/docs/dev/syntax.md for the insperation
+//of this method.
 enum DraftMsg {
     Delete(Instant),
     Update(DidChangeTextDocumentParams, Instant),
     Snapshot(oneshot::Sender<Draft>),
-    Shutdown,
+    Shutdown,//Not really needed, TODO remove this
 }
-
+//Turn a treesitter-tree into a useabel rust structure and send it to the linker
 async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
     info!("update red tree {uri}");
     match draft {
@@ -167,12 +169,13 @@ async fn link_handler(
     tx_cache: watch::Sender<Arc<RootGraph>>,
     tx_err: mpsc::Sender<DiagnosticUpdate>,
 ) {
+    //First we gather changes toavoid redundant recomputation
     let mut latest_configs: HashMap<FileID, Arc<config::ConfigDocument>> = HashMap::new();
     let mut latest_ast: HashMap<FileID, Arc<ast::AstDocument>> = HashMap::new();
     let mut timestamps: HashMap<Url, Instant> = HashMap::new();
     let (tx_execute, rx_execute) = watch::channel((latest_ast.clone(), latest_configs.clone(), 0));
     let mut dirty = false;
-    let mut revision = 0;
+    let mut revision = 0;//Each change is one revision
     info!("started link handler");
     spawn(link_executor(rx_execute, tx_cache, tx_err));
     let mut timer = tokio::time::interval(tokio::time::Duration::from_millis(100));
@@ -220,7 +223,7 @@ async fn link_handler(
 
                 }
             }
-            _=timer.tick()=>{
+            _=timer.tick()=>{//every 100ms relink if there are changes
                 if dirty{
                     info!("link prepare");
                     dirty=false;
@@ -258,6 +261,8 @@ async fn link_handler(
                 errors: HashMap::new(),
             };
             let old = tx_cache.borrow().cache().clone();
+
+            //link files incrementally
             let root = RootGraph::new(&ast, &configs, revison, &old, &mut err, &mut timestamps);
 
             let _ = tx_cache.send(Arc::new(root));
@@ -431,7 +436,7 @@ impl AsyncPipeline {
         loop {
             {
                 let state = rx.borrow_and_update();
-                if state.containes(uri) {
+                if state.contains(uri) {
                     info!("waited {:?} for root", time.elapsed());
                     return Ok(state.clone());
                 }

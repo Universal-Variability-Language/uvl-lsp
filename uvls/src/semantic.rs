@@ -80,15 +80,15 @@ pub struct RootGraph {
     pub configs: ConfigFiles,
 }
 impl RootGraph {
-    pub fn containes(&self, uri: &Url) -> bool {
-        self.containes_id(FileID::new(uri.as_str()))
+    pub fn contains(&self, uri: &Url) -> bool {
+        self.contains_id(FileID::new(uri.as_str()))
     }
     pub fn timestamp(&self, uri: &Url) -> Option<Instant> {
         self.config_by_uri(uri)
             .map(|i| i.timestamp)
             .or(self.file_by_uri(uri).map(|i| i.timestamp))
     }
-    pub fn containes_id(&self, id: FileID) -> bool {
+    pub fn contains_id(&self, id: FileID) -> bool {
         self.files.contains_key(&id) || self.configs.contains_key(&id)
     }
     pub fn try_file(&self, id: FileID) -> Option<&AstDocument> {

@@ -31,15 +31,15 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::*;
 //SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
-//While the performance is worse than linking with Z3, we are solver independent and dont have to interact
+//While the performance is worse than linking with Z3, we are solver independent and don't have to interact
 //with any C-Bindings. UVL is translated directly into SMT-LIB, both attributes and features are treated as
-//free variables. The rest is mostly encoded in named asserts, this allows to get a accurat unsat core.
-//Eg. each attribute is ristrcited with an assert that allows it to either be its defined value or 0 depending
+//free variables. The rest is mostly encoded in named asserts, this allows to get a accurate unsat core.
+//Eg. each attribute is restricted with an assert that allows it to either be its defined value or 0 depending
 //on the parent feature value.
 //Using functions might be more efficient, but this way we can reconfigure and detect if
 //an attribute value contributes to the unsat core.
 //Variables are named as v{n} where n is an index into a lookup table of UVL ModuleSymbols
-//Asserts are encoded similarly as a{n} where n is and index into a list of nameing information
+//Asserts are encoded similarly as a{n} where n is and index into a list of naming information
 //that links uvl expression to asserts.
 pub struct SmtSolver {
     proc: Child,
@@ -172,7 +172,7 @@ impl Display for AssertName {
 #[derive(Debug, Clone)]
 pub struct AssertInfo(pub ModuleSymbol, pub AssertName);
 struct SMTModule {
-    //maped to each named assert
+    //mapped to each named assert
     asserts: Vec<AssertInfo>,
     //a map form a ModuleSymbol to a variable index inside SMT-LIB
     sym2var: IndexSet<ModuleSymbol>,
@@ -261,7 +261,7 @@ impl SMTModule {
     }
 }
 struct SMTBuilder<'a> {
-    //Eeach variable is encoded as v{n} where n is an index into sym2var using an IndexSet
+    //Each variable is encoded as v{n} where n is an index into sym2var using an IndexSet
     //enables us to lookup a variable both by index and ModuleSymbol
     sym2var: IndexSet<ModuleSymbol>,
     assert: Vec<AssertInfo>,
@@ -312,7 +312,7 @@ impl<'a> SMTBuilder<'a> {
     }
 }
 
-//We need special formating for SMT, so we reimplement display
+//We need special formatting for SMT, so we reimplement display
 struct SmtConfigValue<'a>(&'a ConfigValue);
 impl<'a> Display for SmtConfigValue<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -609,7 +609,7 @@ fn create_module<'a>(
             let _ = write!(out, " :named a{name}))\n");
         }
     }
-    //info!("{out}");
+    info!("{out}");
     (
         out,
         SMTModule {
@@ -637,7 +637,7 @@ pub enum SMTModel {
 }
 pub struct OwnedSMTModel {
     pub model: SMTModel,
-    pub modul: Arc<Module>,
+    pub module: Arc<Module>,
 }
 impl Default for SMTModel {
     fn default() -> Self {
@@ -887,7 +887,7 @@ async fn check_config(
                         .maybe_publish(InlaySource::File(k), Instant::now(), || {
                             Arc::new(OwnedSMTModel {
                                 model: model.clone(),
-                                modul: module.module.clone(),
+                                module: module.module.clone(),
                             })
                         })
                         .await;
@@ -948,7 +948,7 @@ pub async fn check_handler(
             .send_notification::<tower_lsp::lsp_types::notification::ShowMessage>(
                 ShowMessageParams {
                     typ: MessageType::INFO,
-                    message: "UVLS: Z3 was not found on youre system. It is required for semantic analysis".into(),
+                    message: "UVLS: Z3 was not found on you're system. It is required for semantic analysis".into(),
                 },
             )
             .await;
@@ -987,7 +987,7 @@ pub async fn web_view_handler(
                         .maybe_publish(inlay_source, Instant::now(), || {
                             Arc::new(OwnedSMTModel {
                                 model: model.clone(),
-                                modul: module.module.clone(),
+                                module: module.module.clone(),
                             })
                         })
                         .await;

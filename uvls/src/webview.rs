@@ -22,7 +22,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use ustr::Ustr;
-/* This web interface allow simple configuration of uvl models within the sever.
+/* This web interface allows simple configuration of uvl models within the sever.
 The GUI is written as a html-over-wire liveview, via dioxus. The liveview can then be
 accessed directly in vs-code or the native browser. Each server instance has its own localhost
 TCP port {p}, configuration is possible over two diffrent entries:
@@ -385,7 +385,7 @@ async fn ui_sync(
                 info!("dirty");
                 tx_sync.send(UIAction::TreeDirty).await?;
                 let root =pipeline.sync_root_global().await?;
-                if root.containes_id(target){
+                if root.contains_id(target){
 
                 tx_sync
                     .send(UIAction::UpdateRoot(
@@ -639,7 +639,7 @@ pub async fn ui_main(
         AppInitialParams::Create(path) => {
             let root = pipeline.sync_root_global().await?;
             let id = FileID::new(format!("file:///{path}").as_str());
-            if root.containes_id(id) {
+            if root.contains_id(id) {
                 let c = ConfigSource {
                     root: id,
                     module: ConfigModule {

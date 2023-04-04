@@ -276,7 +276,7 @@ pub struct LinkedAstDocument {
     pub revision: u64,
     pub ok: bool,
 }
-
+//A file that is not imported by any other is root file
 fn find_root_files<'a>(fs: &FileSystem, files: &'a AstFiles) -> impl Iterator<Item = FileID> + 'a {
     let mut not_root = HashSet::new();
     for i in files.keys().cloned() {
@@ -317,7 +317,8 @@ impl Cache {
         }
         for i in trans_dirty.iter() {
             if !errors.errors.contains_key(i) {
-                errors.errors.insert(*i, Vec::new());
+                errors.errors.insert(*i, Vec::new());//Remove old errors when dependencies change
+                                                     //but not the file
             }
         }
         let mut linked_ast: HashMap<_, _> = old
@@ -328,6 +329,7 @@ impl Cache {
             .collect();
 
         info!("updating cache dirty {:?}", trans_dirty);
+        //Link ASTs
         for i in trans_dirty.iter() {
             if !i.is_config() {
                 linked_ast.insert(
@@ -341,7 +343,7 @@ impl Cache {
                 );
             }
         }
-
+        //Create linked instances of root files
         let modules: HashMap<_, _> = find_root_files(&fs, files)
             .map(|root| {
                 let imports = fs.recursive_imports(root);
@@ -355,6 +357,7 @@ impl Cache {
             })
             .collect();
         let mut config_modules = HashMap::new();
+        //Create linked configuration for the json files in the project
         for (k, v) in configs.iter() {
             if let Some(content) = v.config.as_ref() {
                 info!("uri {}", content.file.as_str());
@@ -363,6 +366,7 @@ impl Cache {
                         || dirty.contains(k)
                         || !old.config_modules.contains_key(k);
                     if dirty {
+                        //recreate
                         let mut module = Module::new(content.file, &fs, &linked_ast);
                         if !module.ok {
                             continue;
@@ -381,6 +385,7 @@ impl Cache {
                             }),
                         );
                     } else {
+                        //reuse
                         config_modules.insert(*k, old.config_modules[k].clone());
                     }
                 } else {

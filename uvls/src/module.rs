@@ -17,7 +17,7 @@ impl InstanceID {
         }
     }
 }
-
+//A ast symbole within a module context
 #[derive(Hash, PartialEq, Eq, Debug, Clone, Copy)]
 pub struct ModuleSymbol {
     pub instance: InstanceID,
@@ -79,58 +79,15 @@ fn iterate_instances<'a>(
         None
     })
 }
-#[derive(Debug, Clone)]
-pub struct ConfigModule {
-    pub module: Arc<Module>,
-    pub values: HashMap<ModuleSymbol, ConfigValue>,
-    pub source_map: HashMap<ModuleSymbol, Span>,
-}
-impl ConfigModule {
-    fn serialize_rec(&self, path: &[Ustr], i: InstanceID) -> ConfigEntry {
-        let file = self.file(i);
-        let mut entries = Vec::new();
-        for im in file.all_imports() {
-            let entry = self.serialize_rec(file.import_prefix(im), self.get_instance(i, im));
-            if !entry.is_empty() {
-                entries.push(entry);
-            }
-        }
-        file.visit_named_children(Symbol::Root, false, |sym, prefix| match sym {
-            Symbol::Feature(_) | Symbol::Attribute(_) => {
-                if let Some(config) = self.values.get(&i.sym(sym)) {
-                    entries.push(ConfigEntry::Value(
-                        Path {
-                            names: prefix.to_vec(),
-                            spans: Vec::new(),
-                        },
-                        config.clone(),
-                    ))
-                }
-                true
-            }
-            _ => false,
-        });
-        ConfigEntry::Import(
-            Path {
-                names: path.to_vec(),
-                spans: Vec::new(),
-            },
-            entries,
-        )
-    }
-    pub fn serialize(&self) -> Vec<ConfigEntry> {
-        let ConfigEntry::Import(_,v) = self.serialize_rec(&[],InstanceID(0)) else {unreachable!()};
-        v
-    }
-}
-impl std::ops::Deref for ConfigModule {
-    type Target = Module;
-    fn deref(&self) -> &Self::Target {
-        &self.module
-    }
-}
+
 
 //An actual instance of a root file with all subfiles
+//A module is basically a depth first iteration of all features and recusive sub file contents
+//Each import statement creates a new instance of some ast file. So features and attributes can
+//exist multiple times in diffrent instances. This struct allows for easy instance iteration and
+//resolution. Since references in diffrent instances have diffrent resolutions, we currently
+//reresolve references to non local symbols, TODO this can be avoided using a static instance
+//encoding scheme?.
 #[derive(Debug)]
 pub struct Module {
     instance_files: Vec<FileID>,
@@ -305,5 +262,56 @@ impl Module {
         assert!(self.ok);
         iterate_instances(self.instance_files[0], &self.files)
             .map(|(origin, i, file, depth)| (origin, i, &*self.files[&file].content, depth))
+    }
+}
+//Configuration with a module and resolved configuration symboles
+#[derive(Debug, Clone)]
+pub struct ConfigModule {
+    pub module: Arc<Module>,
+    pub values: HashMap<ModuleSymbol, ConfigValue>,
+    pub source_map: HashMap<ModuleSymbol, Span>,
+}
+impl ConfigModule {
+    fn serialize_rec(&self, path: &[Ustr], i: InstanceID) -> ConfigEntry {
+        let file = self.file(i);
+        let mut entries = Vec::new();
+        for im in file.all_imports() {
+            let entry = self.serialize_rec(file.import_prefix(im), self.get_instance(i, im));
+            if !entry.is_empty() {
+                entries.push(entry);
+            }
+        }
+        file.visit_named_children(Symbol::Root, false, |sym, prefix| match sym {
+            Symbol::Feature(_) | Symbol::Attribute(_) => {
+                if let Some(config) = self.values.get(&i.sym(sym)) {
+                    entries.push(ConfigEntry::Value(
+                        Path {
+                            names: prefix.to_vec(),
+                            spans: Vec::new(),
+                        },
+                        config.clone(),
+                    ))
+                }
+                true
+            }
+            _ => false,
+        });
+        ConfigEntry::Import(
+            Path {
+                names: path.to_vec(),
+                spans: Vec::new(),
+            },
+            entries,
+        )
+    }
+    pub fn serialize(&self) -> Vec<ConfigEntry> {
+        let ConfigEntry::Import(_,v) = self.serialize_rec(&[],InstanceID(0)) else {unreachable!()};
+        v
+    }
+}
+impl std::ops::Deref for ConfigModule {
+    type Target = Module;
+    fn deref(&self) -> &Self::Target {
+        &self.module
     }
 }

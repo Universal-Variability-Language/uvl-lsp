@@ -18,7 +18,7 @@ use ustr::Ustr;
 //The AST is stored as an ECS like structure
 //This allows fast queries over all features groups etc.
 //Features, Attributes, Imports and Directories are stored in a typed radix tree.
-//The radix tree is represented via a maps (sym0,name,ty) -> sym1
+//The radix tree is represented via a map (sym0,name,ty) -> sym1
 //where ty is the type of sym1. Using this representation lowers total
 //memory consumption by a nice 20%
 //TODO recheck if the radix tree is still required
@@ -340,7 +340,6 @@ pub enum Symbol {
     Import(usize),
     LangLvl(usize),
     Dir(usize),
-
     Root,
 }
 impl Symbol {
@@ -1405,7 +1404,6 @@ fn visit_attribute_value(state: &mut VisitorState, parent: Symbol) {
     }
 }
 fn visit_constraint_list(state: &mut VisitorState, parent: Symbol) {
-    debug_assert!(state.node().parent().unwrap().kind() == "attribute_constraints");
     loop {
         if state.kind() == "constraint" {
             visit_children_arg(state, parent, visit_constraint);
@@ -1416,7 +1414,6 @@ fn visit_constraint_list(state: &mut VisitorState, parent: Symbol) {
     }
 }
 fn visit_attributes(state: &mut VisitorState, parent: Symbol) {
-    debug_assert!(state.node().parent().unwrap().kind() == "attributes");
     loop {
         match state.kind() {
             "attribute_constraints" => {
@@ -1443,7 +1440,6 @@ fn visit_attributes(state: &mut VisitorState, parent: Symbol) {
 }
 
 fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty: Type) {
-    debug_assert!(state.node().parent().unwrap().kind() == "blk");
     match parent {
         Symbol::Feature(..) => {
             state.push_error(40, "features have to be separated by groups");
@@ -1480,7 +1476,6 @@ fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty:
 }
 
 fn visit_ref(state: &mut VisitorState, parent: Symbol, path: Path) {
-    debug_assert!(state.node().parent().unwrap().kind() == "blk");
     match parent {
         Symbol::Feature(..) => {
             state.push_error(40, "features have to be separated by groups");
@@ -1496,7 +1491,6 @@ fn visit_ref(state: &mut VisitorState, parent: Symbol, path: Path) {
     }
 }
 fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode) {
-    debug_assert!(state.node().parent().unwrap().kind() == "blk");
     match parent {
         Symbol::Group(..) => {
             state.push_error(40, "groups have to be separated by features");
@@ -1523,7 +1517,6 @@ fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode) {
     }
 }
 fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
-    debug_assert!(state.node().parent().unwrap().kind() == "blk");
     state.goto_field("header");
     match state.kind() {
         "name" => {
@@ -1580,7 +1573,6 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
     }
 }
 fn visit_features(state: &mut VisitorState) {
-    debug_assert!(state.node().parent().unwrap().kind() == "blk");
     loop {
         check_no_extra_blk(state, "features");
         if state.kind() == "blk" {

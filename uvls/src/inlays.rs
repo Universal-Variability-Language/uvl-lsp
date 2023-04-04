@@ -16,11 +16,13 @@ use tower_lsp::Client;
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum InlaySource {
     None,
-    File(FileID),
-    Web(u64),
+    File(FileID),//Inlays come from a config file
+    Web(u64),//Inlays come from some web instance
 }
-//Inlays are managed as a global token state, there can only be 1 inlay source to keep things simple,
-//inalays are computed asynchronously. Both configurations and webview can provide them as a SMT-Model
+//Inlays are managed as a global token state, 
+//there can only be 1 inlay source to keep things simple,
+//inlays are computed asynchronously. Both configurations 
+//and webview can provide them as a SMT-Model
 #[derive(Clone)]
 pub struct InlayHandler {
     source: Arc<Mutex<InlaySource>>,
@@ -42,7 +44,7 @@ impl InlayHandler {
         *self.source.lock() = source;
         let _ = self.tx.send(InlayEvent::SetSource).await;
     }
-    //publsich if source is active
+    //publish if source is active
     pub async fn maybe_publish<F: FnOnce() -> Arc<OwnedSMTModel>>(
         &self,
         source: InlaySource,
@@ -83,13 +85,13 @@ enum InlayEvent {
     SetSource,
 }
 fn generate(model: &OwnedSMTModel, id: FileID, range: Span) -> Option<Vec<InlayHint>> {
-    if !model.modul.ok {
+    if !model.module.ok {
         return None;
     }
-    model.modul.files.get(&id).map(|doc| {
+    model.module.files.get(&id).map(|doc| {
         let doc = &doc.content;
         model
-            .modul
+            .module
             .instances()
             .filter(|(_, i)| doc.id == i.id)
             .flat_map(|(m, _)| match &model.model {
@@ -99,7 +101,7 @@ fn generate(model: &OwnedSMTModel, id: FileID, range: Span) -> Option<Vec<InlayH
                     .chain(doc.all_references())
                     .filter(|f| range.contains(&doc.span(*f).unwrap().start))
                     .filter_map(|sym| {
-                        let tgt = model.modul.resolve_value(m.sym(sym));
+                        let tgt = model.module.resolve_value(m.sym(sym));
                         let val = values.get(&tgt)?;
                         let range = doc.lsp_range(sym).unwrap();
                         Some(InlayHint {
@@ -118,7 +120,7 @@ fn generate(model: &OwnedSMTModel, id: FileID, range: Span) -> Option<Vec<InlayH
                 SMTModel::UNSAT { reasons } => reasons
                     .iter()
                     .filter_map(|AssertInfo(sym, _)| {
-                        if id == model.modul.file(sym.instance).id
+                        if id == model.module.file(sym.instance).id
                             && range.contains(&doc.span(sym.sym).unwrap().start)
                             && m == sym.instance
                         {
@@ -176,7 +178,7 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) -> Re
                 }
                 latest = timestamp;
                 if initial {
-                    let file = model.modul.file(InstanceID(0));
+                    let file = model.module.file(InstanceID(0));
                     let _ = client
                         .show_document(ShowDocumentParams {
                             uri: file.uri.clone(),
