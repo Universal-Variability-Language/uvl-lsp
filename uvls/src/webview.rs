@@ -44,7 +44,7 @@ pub enum Icon {
     File,
     Feature,
     Attributes,
-    Atribute,
+    Attribute,
     Expand,
     Collapse,
     Circle,

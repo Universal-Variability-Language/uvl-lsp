@@ -161,7 +161,6 @@ enum LinkMsg {
     Delete(Url, Instant),
     UpdateAst(Arc<ast::AstDocument>),
     UpdateConfig(Arc<config::ConfigDocument>),
-    Shutdown,
 }
 //This handler links documents together, it also does type checking
 async fn link_handler(
@@ -183,9 +182,6 @@ async fn link_handler(
         select! {
             Some(msg)=rx.recv()=>{
                 match msg{
-                    LinkMsg::Shutdown=>{
-                        break;
-                    }
                     LinkMsg::Delete(uri,timestamp)=>{
                         if timestamps.get(&uri).map(|old|old < &timestamp).unwrap_or(true){
                             let id = FileID::new(uri.as_str());

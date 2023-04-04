@@ -230,39 +230,10 @@ pub enum LogicOP {
     Equiv,
 }
 
-impl LogicOP {
-    pub fn parse(op: &str) -> Option<Self> {
-        match op {
-            "&" => Some(LogicOP::And),
-            "|" => Some(LogicOP::Or),
-            "=>" => Some(LogicOP::Implies),
-            "<=>" => Some(LogicOP::Equiv),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum AggregateOP {
     Avg,
     Sum,
-}
-
-impl AggregateOP {
-    pub fn parse(source: &str, op: Node) -> Option<Self> {
-        match &source[op.byte_range()] {
-            "avg" => Some(AggregateOP::Avg),
-            "sum" => Some(AggregateOP::Sum),
-            _ => None,
-        }
-    }
-    pub fn from_str(v: &str) -> Option<Self> {
-        match v {
-            "avg" => Some(AggregateOP::Avg),
-            "sum" => Some(AggregateOP::Sum),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -272,16 +243,6 @@ pub enum EquationOP {
     Equal,
 }
 
-impl EquationOP {
-    pub fn parse(op: &str) -> Option<Self> {
-        match op {
-            ">" => Some(Self::Greater),
-            "<" => Some(Self::Smaller),
-            "==" => Some(Self::Equal),
-            _ => None,
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub enum Constraint {

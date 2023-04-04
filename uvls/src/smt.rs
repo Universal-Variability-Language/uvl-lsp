@@ -42,13 +42,14 @@ use tower_lsp::lsp_types::*;
 //Asserts are encoded similarly as a{n} where n is and index into a list of naming information
 //that links uvl expression to asserts.
 pub struct SmtSolver {
-    proc: Child,
+    _proc: Child,
     stdin: BufWriter<ChildStdin>,
     stdout: Lines<BufReader<ChildStdout>>,
     cancel: CancellationToken,
 }
 impl SmtSolver {
     pub async fn new(model: String, cancel: &CancellationToken) -> Result<Self> {
+    
         let mut proc = Command::new("z3")
             .arg("-in")
             .arg("-smt2")
@@ -71,13 +72,16 @@ impl SmtSolver {
         stdin.flush().await?;
         Ok(SmtSolver {
             cancel: cancel.clone(),
-            proc,
+            _proc:proc,
             stdin,
             stdout,
         })
     }
 
     pub async fn read_block(&mut self) -> Result<String> {
+    
+
+    
         let mut out = String::new();
         let mut nesting = 0;
         while let Some(line) = maybe_cancel(&self.cancel, self.stdout.next_line()).await?? {
@@ -119,6 +123,8 @@ impl SmtSolver {
         self.stdin.flush().await?;
         Ok(())
     }
+
+    #[allow(dead_code)]
     pub async fn model(&mut self) -> Result<String> {
         self.stdin.write_all(b"(get-model)\n").await?;
         self.stdin.flush().await?;
@@ -193,6 +199,7 @@ impl SMTModule {
 }
 
 impl SMTModule {
+    #[allow(dead_code)]
     pub fn parse_model<'a>(
         &'a self,
         model: &'a str,

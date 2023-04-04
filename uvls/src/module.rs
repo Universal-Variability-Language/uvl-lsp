@@ -29,19 +29,6 @@ impl resolve::AstContainer for HashMap<FileID, Arc<LinkedAstDocument>> {
         &*self[&file].content
     }
 }
-pub enum InstanceInfo<'a> {
-    Import {
-        depth: u32,
-        origin: RootSymbol,
-        id: InstanceID,
-    },
-    Content {
-        depth: u32,
-        prefix: &'a [Ustr],
-        id: InstanceID,
-    },
-}
-
 fn iterate_instances<'a>(
     root: FileID,
     files: &'a HashMap<FileID, Arc<LinkedAstDocument>>,
@@ -56,7 +43,7 @@ fn iterate_instances<'a>(
         0,
     )];
     std::iter::from_fn(move || {
-        while let Some((origin, file, depth)) = stack.pop() {
+        stack.pop().map(|(origin, file, depth)| {
             let file = &files[&file];
             for (im, tgt) in file
                 .content
@@ -74,12 +61,10 @@ fn iterate_instances<'a>(
                 ));
             }
             counter += 1;
-            return Some((origin, InstanceID(counter - 1), file.content.id, depth));
-        }
-        None
+            return (origin, InstanceID(counter - 1), file.content.id, depth);
+        })
     })
 }
-
 
 //An actual instance of a root file with all subfiles
 //A module is basically a depth first iteration of all features and recusive sub file contents

@@ -2,7 +2,6 @@ use crate::ast::*;
 use crate::cache::*;
 use crate::check::ErrorsAcc;
 use crate::config::ConfigDocument;
-use crate::config::ConfigValue;
 use crate::resolve;
 use hashbrown::{HashMap, HashSet};
 use log::info;
@@ -26,9 +25,6 @@ impl FileID {
     }
     pub fn max() -> FileID {
         Self("".into())
-    }
-    pub fn ptr(&self) -> *const u8 {
-        self.0.as_ptr()
     }
     pub fn url(&self) -> Url {
         Url::parse(self.0.as_str()).unwrap()
@@ -54,7 +50,6 @@ impl Debug for FileID {
 }
 pub type AstFiles = HashMap<FileID, Arc<AstDocument>>;
 pub type ConfigFiles = HashMap<FileID, Arc<ConfigDocument>>;
-pub type DirectConfig = HashMap<FileID, HashMap<Vec<Ustr>, ConfigValue>>;
 #[derive(Hash, PartialEq, Eq, Debug, Clone, Copy)]
 pub struct RootSymbol {
     pub file: FileID,
@@ -91,9 +86,6 @@ impl RootGraph {
     pub fn contains_id(&self, id: FileID) -> bool {
         self.files.contains_key(&id) || self.configs.contains_key(&id)
     }
-    pub fn try_file(&self, id: FileID) -> Option<&AstDocument> {
-        self.cache.ast.get(&id).map(|f| &*f.content)
-    }
     pub fn type_of(&self, sym: RootSymbol) -> Option<Type> {
         if matches!(sym.sym, Symbol::Reference(..)) {
             let file = &self.cache.ast[&sym.file];
@@ -103,13 +95,6 @@ impl RootGraph {
         } else {
             self.file(sym.file).type_of(sym.sym)
         }
-    }
-    pub fn span(&self, sym: RootSymbol) -> Option<Span> {
-        self.file(sym.file).span(sym.sym)
-    }
-
-    pub fn lsp_range(&self, sym: RootSymbol) -> Option<Range> {
-        self.file(sym.file).lsp_range(sym.sym)
     }
     pub fn config_by_uri(&self, name: &Url) -> Option<&ConfigDocument> {
         self.configs.get(&FileID::new(name.as_str())).map(|i| &**i)
@@ -146,19 +131,11 @@ impl RootGraph {
     ) -> impl Iterator<Item = RootSymbol> + 'a {
         resolve::resolve(&self.files, &self.cache.fs, origin, path)
     }
-    pub fn resolve_sym<'a>(&'a self, sym: RootSymbol) -> Option<RootSymbol> {
-        if matches!(sym.sym, Symbol::Reference(..)) {
-            let module = &self.cache.ast[&sym.file];
-            module.resolved.get(&sym.sym).cloned()
-        } else {
-            Some(sym)
-        }
-    }
     pub fn revision(&self) -> u64 {
         self.revision
     }
     //find all symbols from origin under path, also keep track
-    //of which sections of the search path are bound to which symboles
+    //of which sections of the search path are bound to which symbols
     pub fn resolve_with_binding<'a>(
         &'a self,
         origin: FileID,
@@ -166,7 +143,7 @@ impl RootGraph {
     ) -> impl Iterator<Item = Vec<(RootSymbol, usize)>> + 'a {
         resolve::resolve_with_bind(&self.files, &self.cache.fs, origin, path)
     }
-    //find all attributes from origin under context, usefull for aggregates
+    //find all attributes from origin under context, useful for aggregates
     pub fn resolve_attributes<'a, F: FnMut(RootSymbol, &[Ustr])>(
         &'a self,
         origin: FileID,
@@ -174,19 +151,6 @@ impl RootGraph {
         f: F,
     ) {
         resolve::resolve_attributes(&self.files, &self.cache.fs, origin, context, f)
-    }
-    //find all attributes from origin under context, useful for aggregates, also keep track
-    //of the owner feature and file
-    pub fn resolve_attributes_with_feature<
-        'a,
-        F: FnMut(RootSymbol, RootSymbol, &[Ustr], &AstDocument),
-    >(
-        &'a self,
-        origin: FileID,
-        context: &'a [Ustr],
-        f: F,
-    ) {
-        resolve::resolve_attributes_with_feature(&self.files, &self.cache.fs, origin, context, f)
     }
     pub fn fs(&self) -> &FileSystem {
         &self.cache.fs
