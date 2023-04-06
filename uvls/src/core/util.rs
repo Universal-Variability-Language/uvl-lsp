@@ -1,6 +1,5 @@
 use std::fmt::Display;
-
-use crate::query::Queries;
+use crate::core::query::Queries;
 use futures::Future;
 use lazy_static::lazy_static;
 use ropey::Rope;

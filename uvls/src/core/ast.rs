@@ -1,7 +1,9 @@
-use crate::check::ErrorInfo;
-use crate::parse::*;
-use crate::semantic::FileID;
-use crate::util::{lsp_range, node_range};
+
+use crate::core::*;
+use check::ErrorInfo;
+use parse::*;
+use semantic::FileID;
+use util::{lsp_range, node_range};
 use enumflags2::bitflags;
 use hashbrown::HashMap;
 use itertools::Itertools;
@@ -465,7 +467,7 @@ impl Ast {
             .find(|s| self.span(*s).unwrap().contains(&offset))
     }
 }
-
+//This trait makes using the cursor api a littel less painful
 pub trait Visitor<'a> {
     fn cursor(&self) -> &TreeCursor<'a>;
     fn cursor_mut(&mut self) -> &mut TreeCursor<'a>;
@@ -570,8 +572,8 @@ pub trait Visitor<'a> {
         });
     }
 }
-//Utilitu function, tree-sitter uses cursor to traverse trees, this function is a scope that
-//gurantees to "go down" call f and later "go up" one level. It also protects against stack
+//Utilitu function, tree-sitter uses cursor to traverse trees, this creates a scope that
+//gurantees to "go down", call f and later "go up" one level. It also protects against stack
 //overflow
 pub fn visit_children<'a, F, T, V>(state: &mut V, mut f: F) -> T
 where
@@ -657,6 +659,7 @@ impl<'a> VisitorState<'a> {
     }
     //create the import tree map and the general search index for name resolution
     fn connect(&mut self) {
+        //create the import index inside the radix tree
         for i in self.ast.all_imports() {
             let path = self.ast.import_prefix(i).to_vec();
             let mut node = Symbol::Root;
@@ -694,7 +697,7 @@ impl<'a> VisitorState<'a> {
                 });
             }
         }
-        //Create name index for features and attributes
+        //Create name index for features and attributes inside the radix tree
         let mut stack = vec![(Symbol::Root, Symbol::Root, 0)];
         while let Some((node, scope, depth)) = stack.pop() {
             let new_scope = if let Some(name) = self.ast.name(node) {
@@ -751,6 +754,7 @@ impl<'a> VisitorState<'a> {
                 stack.push((i, new_scope, depth + 1));
             }
         }
+        //find alias for diffrent symboles and report them
         for i in self.ast.children(Symbol::Root) {
             if matches!(i, Symbol::Feature(..)) {
                 if self
@@ -847,6 +851,7 @@ fn opt_path(state: &mut VisitorState) -> Option<Path> {
         None
     }
 }
+//Report error if a node has children,cardinality or attributes
 fn check_simple_blk(state: &mut VisitorState, kind: &str) {
     match state.cursor.field_name() {
         Some("cardinality") => state.push_error(30, format!("{} may not have a cardinality", kind)),
@@ -856,6 +861,8 @@ fn check_simple_blk(state: &mut VisitorState, kind: &str) {
     }
 }
 
+
+//report error if a node has cardinality or attributes
 fn check_no_extra_blk(state: &mut VisitorState, kind: &str) {
     match state.cursor.field_name() {
         Some("cardinality") => state.push_error(30, format!("{} may not have a cardinality", kind)),
@@ -863,7 +870,7 @@ fn check_no_extra_blk(state: &mut VisitorState, kind: &str) {
         _ => {}
     }
 }
-
+//parse a namespace
 fn visit_namespace(state: &mut VisitorState) {
     loop {
         check_simple_blk(state, "namespace");
@@ -880,6 +887,7 @@ fn visit_namespace(state: &mut VisitorState) {
         }
     }
 }
+
 fn opt_smt_minor(state: &mut VisitorState) -> Option<LanguageLevelSMT> {
     match state.kind() {
         "*" => Some(LanguageLevelSMT::Any),
@@ -1693,6 +1701,7 @@ impl AstDocument {
             self.ast.structure.parent.get(&sym).cloned()
         }
     }
+    //parent feature of an attribute
     pub fn scope(&self, mut sym: Symbol) -> Symbol {
         while let Some(p) = self.parent(sym, true) {
             match sym {
@@ -1707,6 +1716,7 @@ impl AstDocument {
     pub fn name(&self, sym: Symbol) -> Option<Ustr> {
         self.ast.name(sym)
     }
+    //iterators over diffrent symbole types in the tree
     pub fn all_lang_lvls(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_lang_lvls()
     }
@@ -1820,6 +1830,7 @@ impl AstDocument {
             })
         })
     }
+    //Find imports for any prefix of path
     pub fn lookup_import<'a>(
         &'a self,
         path: &'a [Ustr],
@@ -1843,7 +1854,7 @@ impl AstDocument {
             }
         })
     }
-    //Also track the binding for path
+    //Also track the binding for path, each segment of path has some symbole bound to it
     pub fn lookup_with_binding<'a, F: Fn(Symbol) -> bool + 'a>(
         &'a self,
         root: Symbol,
@@ -1913,7 +1924,7 @@ impl AstDocument {
     ) {
         self.visit_named_children_depth(root, merge_root_features, |sym, prefix, _| f(sym, prefix))
     }
-
+    //Iterate all named symbole under root and track their prefix from root
     pub fn visit_named_children_depth<F: FnMut(Symbol, &[Ustr], usize) -> bool>(
         &self,
         root: Symbol,
@@ -1962,6 +1973,8 @@ impl AstDocument {
     ) {
         self.visit_children_depth(root, merge_root_features, |sym, _| f(sym));
     }
+
+    //Iterate all named symbole under root
     pub fn visit_children_depth<F: FnMut(Symbol, u32) -> bool>(
         &self,
         root: Symbol,
@@ -1987,6 +2000,7 @@ impl AstDocument {
             }
         }
     }
+    //Iterate all attributes under root, and track theire associated feature
     pub fn visit_attributes<'a, F: FnMut(Symbol, Symbol, &[Ustr])>(&self, root: Symbol, mut f: F) {
         assert!(matches!(root, Symbol::Feature(..) | Symbol::Root));
         let mut owner = root;

@@ -2,12 +2,9 @@
 
 use flexi_logger::FileSpec;
 use get_port::Ops;
-use pipeline::AsyncPipeline;
-use semantic::RootGraph;
+
 use serde::Serialize;
 use tokio::{join, spawn};
-
-use document::*;
 use log::info;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -16,26 +13,11 @@ use std::time::SystemTime;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
-mod ast;
-mod cache;
-mod check;
-mod color;
-mod completion;
-mod config;
-mod document;
-mod inlays;
-mod location;
-mod module;
-mod parse;
-mod pipeline;
-mod query;
-mod resolve;
-mod semantic;
+mod core;
+mod ide;
 mod smt;
-mod util;
 mod webview;
-mod webview_frontend;
-
+use crate::core::*;
 struct Settings {
     //can the client show websites on its own
     //ie client==vscode
@@ -46,10 +28,10 @@ impl Default for Settings {
         Settings { has_webview: false }
     }
 }
-
+//The LSP
 struct Backend {
     client: Client,
-    coloring: Arc<color::State>,
+    coloring: Arc<ide::color::State>,
     pipeline: AsyncPipeline,
     web_handler_uri: String,
     settings: parking_lot::Mutex<Settings>,
@@ -128,7 +110,7 @@ fn shutdown_error() -> tower_lsp::jsonrpc::Error {
         data: None,
     }
 }
-
+//Handler for different LSP requests
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
@@ -180,8 +162,8 @@ impl LanguageServer for Backend {
                                 work_done_progress: None,
                             },
                             legend: SemanticTokensLegend {
-                                token_types: color::token_types(),
-                                token_modifiers: color::modifiers(),
+                                token_types: ide::color::token_types(),
+                                token_modifiers: ide::color::modifiers(),
                             },
                             range: None,
                             full: Some(SemanticTokensFullOptions::Delta { delta: Some(true) }),
@@ -256,7 +238,7 @@ impl LanguageServer for Backend {
             .await?
         {
             return Ok(Some(CompletionResponse::List(
-                completion::compute_completions(root, &draft, params.text_document_position),
+                ide::completion::compute_completions(root, &draft, params.text_document_position),
             )));
         }
         Ok(None)
@@ -267,7 +249,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = &params.text_document_position_params.text_document.uri;
         if let Some((draft, root)) = self.snapshot(uri, true).await? {
-            Ok(location::goto_definition(
+            Ok(ide::location::goto_definition(
                 &root,
                 &draft,
                 &params.text_document_position_params.position,
@@ -280,7 +262,7 @@ impl LanguageServer for Backend {
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = &params.text_document_position.text_document.uri;
         if let Some((draft, root)) = self.snapshot(uri, true).await? {
-            Ok(location::find_references(
+            Ok(ide::location::find_references(
                 &root,
                 &draft,
                 &params.text_document_position.position,
@@ -374,7 +356,7 @@ impl LanguageServer for Backend {
             "uvls/show_config" => {
                 self.pipeline
                     .inlay_state()
-                    .set_source(inlays::InlaySource::File(semantic::FileID::new(
+                    .set_source(ide::inlays::InlaySource::File(semantic::FileID::new(
                         uri.as_str(),
                     )))
                     .await;
@@ -384,7 +366,7 @@ impl LanguageServer for Backend {
             "uvls/hide_config" => {
                 self.pipeline
                     .inlay_state()
-                    .set_source(inlays::InlaySource::None)
+                    .set_source(ide::inlays::InlaySource::None)
                     .await;
                 self.pipeline.touch(&uri);
                 self.client.code_lens_refresh().await?;
@@ -430,7 +412,7 @@ impl LanguageServer for Backend {
                     command: if self
                         .pipeline
                         .inlay_state()
-                        .is_active(inlays::InlaySource::File(semantic::FileID::new(
+                        .is_active(ide::inlays::InlaySource::File(semantic::FileID::new(
                             uri.as_str(),
                         ))) {
                         Some(Command {
@@ -547,10 +529,9 @@ async fn server_main() {
             settings: parking_lot::Mutex::new(Settings::default()),
             web_handler_uri: format!("http://localhost:{port}"),
             pipeline,
-            coloring: Arc::new(color::State::new()),
+            coloring: Arc::new(ide::color::State::new()),
             client,
         }
     });
-
     join!(Server::new(stdin, stdout, socket).serve(service));
 }

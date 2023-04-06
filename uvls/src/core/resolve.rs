@@ -2,11 +2,9 @@ use ropey::Rope;
 use ustr::Ustr;
 
 use enumflags2::{make_bitflags, BitFlags};
+use crate::core::*;
+use parse::parse_path;
 
-use crate::cache::FileSystem;
-use crate::check::ErrorsAcc;
-use crate::semantic::*;
-use crate::{ast::*, parse::parse_path};
 use hashbrown::HashMap;
 use log::info;
 use tree_sitter::Node;

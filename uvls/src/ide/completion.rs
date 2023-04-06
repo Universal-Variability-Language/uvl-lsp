@@ -1,17 +1,10 @@
-use crate::ast::*;
-use crate::cache::*;
-use crate::document::Draft;
-use crate::util::*;
-use crate::{config, parse, semantic::*};
+use crate::core::*;
 use compact_str::CompactString;
+use hashbrown::HashMap;
 use itertools::{Either, Itertools};
 use log::info;
-use parse::SymbolSlice;
 use ropey::Rope;
 use std::cmp::Ordering;
-
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::ops::Add;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
@@ -189,6 +182,7 @@ fn node_at<'a>(node: Node<'a>, line: usize, char: usize, source: &Rope) -> Node<
 pub fn contains(range: Range, pos: &Position) -> bool {
     range.start.character <= pos.character && range.end.character > pos.character
 }
+//Finde the context inside a constraint
 pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv {
     if node.is_error() && node.start_position().row == node.end_position().row {
         let err_raw: String = source.byte_slice(node.byte_range()).into();
@@ -324,6 +318,7 @@ fn position_to_node<'a>(
         }
     }
 }
+//guess what the user wants to write
 fn estimate_env(node: Node, source: &Rope, pos: &Position) -> Option<CompletionEnv> {
     if node.is_extra() && !node.is_error() {
         //Comment?
@@ -793,12 +788,10 @@ fn completion_symbol(
 ) {
     let mut modules: HashMap<_, Vec<Ustr>> = HashMap::new(); //Store reachable documents under the
                                                              //search perfix under a secondary prefix
-    let mut visited = HashSet::new(); //Needed for circular references?
 
     for i in snapshot.resolve(origin, &query.prefix) {
         //Find all possible continuations for the
         //search prefix
-        visited.insert(i.file);
         match &i.sym {
             Symbol::Root => {
                 let _ = modules.insert(i.file, vec![]);
@@ -834,12 +827,14 @@ fn completion_symbol(
     let root = FileID::max(); //Perform nn from all reachable documents to all other
     let pred = pathfinding::directed::dijkstra::dijkstra_all(&root, |node| {
         if node == &root {
+            //reachable under the secondary prefix
             Either::Left(
                 modules
                     .iter()
                     .map(|(k, v)| (*k, ModulePath::from(v.as_slice()))),
             )
         } else {
+            //reachable under a primary import prefix
             let node = *node;
             Either::Right(
                 snapshot
@@ -856,6 +851,7 @@ fn completion_symbol(
         while let Some((parent, _)) = pred.get(&next) {
             if *parent == root {
                 for i in modules[&next].iter().rev() {
+                    //Add the secondary prefix
                     path.push(*i);
                 }
 

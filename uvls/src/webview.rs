@@ -1,5 +1,7 @@
 use crate::{
-    ast::*, config::*, module::*, pipeline::AsyncPipeline, semantic::*, smt, util::Result,
+    core::*,
+    smt,
+    ide
 };
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
@@ -22,6 +24,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use ustr::Ustr;
+mod frontend;
 /* This web interface allows simple configuration of uvl models within the sever.
 The GUI is written as a html-over-wire liveview, via dioxus. The liveview can then be
 accessed directly in vs-code or the native browser. Each server instance has its own localhost
@@ -34,7 +37,7 @@ The actual GUI is implemented as redux style asynchronous event loop. This is
 mainly due to the fact that its simple and requires minimal state management.
 Currently the whole tree is redrawn when a value changes since there is only one global
 configuration and tree state. This should be separated.
-To synchronise the webview with the rest of the server two handlers are used:
+To synchronize the webview with the rest of the server two handlers are used:
 ui_sync and smt::web_view_handler. The first detects file changes and rebuilds the target module,
 the second handler calculates new smt values when things change.
 */
@@ -531,12 +534,12 @@ async fn ui_event_loop(
                 if !show {
                     pipeline
                         .inlay_state()
-                        .set_source(crate::inlays::InlaySource::None)
+                        .set_source(ide::inlays::InlaySource::None)
                         .await;
                 } else {
                     pipeline
                         .inlay_state()
-                        .set_source(crate::inlays::InlaySource::Web(id))
+                        .set_source(ide::inlays::InlaySource::Web(id))
                         .await;
                     tx_config.send_modify(|config| {
                         config.cancel.cancel();
@@ -700,7 +703,7 @@ pub async fn ui_main(
         rx_config,
         tx_sync.clone(),
         pipeline.inlay_state().clone(),
-        crate::inlays::InlaySource::Web(id),
+        ide::inlays::InlaySource::Web(id),
     ));
     //Sync module with the lsp state
     spawn(ui_sync(pipeline.clone(), tx_sync, root));
@@ -718,7 +721,7 @@ pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
     info!("Starting web handler");
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
     let view = dioxus_liveview::LiveViewPool::new();
-    let style = include_str!("style.css");
+    let style = include_str!("webview/style.css");
 
     let app = Router::new()
         // The root route contains the glue code to connect to the WebSocket
@@ -780,7 +783,7 @@ pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
                         _ = view
                             .launch_with_props(
                                 dioxus_liveview::axum_socket(socket),
-                                crate::webview_frontend::App,
+                                frontend::App,
                                 AppProps {
                                     initial: match op.as_str() {
                                         "create" => AppInitialParams::Create(path),
@@ -795,11 +798,11 @@ pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
 
                         if pipeline
                             .inlay_state()
-                            .is_active(crate::inlays::InlaySource::Web(id))
+                            .is_active(ide::inlays::InlaySource::Web(id))
                         {
                             pipeline
                                 .inlay_state()
-                                .set_source(crate::inlays::InlaySource::None)
+                                .set_source(ide::inlays::InlaySource::None)
                                 .await;
                         }
                         info!("Exit www");

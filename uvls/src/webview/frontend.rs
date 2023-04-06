@@ -1,9 +1,7 @@
 #![allow(non_snake_case)]
 use crate::ast::Type;
-use crate::config::*;
 use crate::module::ModuleSymbol;
 use crate::webview::*;
-use dioxus::prelude::*;
 //Render UVL content to HTML
 fn Spinner(cx: Scope) -> Element {
     cx.render(rsx! {
@@ -26,7 +24,7 @@ fn Spinner(cx: Scope) -> Element {
 
     }})
 }
-//Icons taken from https://heroicons.com/
+//Icons taken from https://heroicons.com/ as SVG
 #[inline_props]
 fn Icon(cx: Scope, icon: Icon, class: Option<&'static str>) -> Element {
     let paths:&[_] =  match icon {

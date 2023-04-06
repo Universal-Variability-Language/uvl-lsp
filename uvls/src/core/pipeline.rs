@@ -1,13 +1,6 @@
-use crate::{
-    ast,
-    check::{self, DiagnosticUpdate, ErrorsAcc},
-    config,
-    document::*,
-    inlays::InlayHandler,
-    parse,
-    semantic::*,
-    smt, util,
-};
+use crate::{core::*,smt,ide::inlays::InlayHandler};
+use document::*;
+use check::*;
 use dashmap::DashMap;
 use hashbrown::HashMap;
 use log::info;

@@ -1,6 +1,7 @@
 use tokio::time::Instant;
-
-use crate::{ast::*, cache::*, config::*, resolve, semantic::*};
+use crate::core::*;
+use resolve;
+use config::*;
 use hashbrown::HashMap;
 use indexmap::IndexSet;
 use log::info;
@@ -29,6 +30,7 @@ impl resolve::AstContainer for HashMap<FileID, Arc<LinkedAstDocument>> {
         &*self[&file].content
     }
 }
+//Depth first iteration
 fn iterate_instances<'a>(
     root: FileID,
     files: &'a HashMap<FileID, Arc<LinkedAstDocument>>,
@@ -125,6 +127,7 @@ impl Module {
             }
         }
     }
+    //Resolves references inside this module
     pub fn resolve_value(&self, src_sym: ModuleSymbol) -> ModuleSymbol {
         assert!(self.ok);
         match src_sym.sym {
@@ -164,6 +167,7 @@ impl Module {
             _ => panic!("{src_sym:?} not a value"),
         }
     }
+    //Bind a recursive configuration doc to a linear set of symbols
     pub fn resolve_config<E: FnMut(Span, String)>(
         &self,
         doc: &Vec<ConfigEntry>,
@@ -289,6 +293,8 @@ impl ConfigModule {
             entries,
         )
     }
+    //Turns a the set of linear configuration values of this module into theire recusive from
+    //used in json
     pub fn serialize(&self) -> Vec<ConfigEntry> {
         let ConfigEntry::Import(_,v) = self.serialize_rec(&[],InstanceID(0)) else {unreachable!()};
         v

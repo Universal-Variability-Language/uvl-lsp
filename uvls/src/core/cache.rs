@@ -1,10 +1,7 @@
-use crate::ast::*;
-use crate::check::ErrorsAcc;
-use crate::module::ConfigModule;
-use crate::module::Module;
-use crate::resolve::*;
-use crate::semantic::*;
-
+use crate::core::*;
+use check::ErrorsAcc;
+use module::{ConfigModule,Module};
+use resolve::*;
 use compact_str::CompactStringExt;
 use hashbrown::{HashMap, HashSet};
 use log::info;

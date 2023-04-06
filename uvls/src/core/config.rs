@@ -1,13 +1,13 @@
 use std::fmt::Display;
+use crate::core::*;
 
-use crate::{
-    ast::*,
-    check::ErrorInfo,
-    completion::*,
-    parse::SymbolSlice,
-    semantic::{FileID, RootGraph},
-    util::*,
-};
+use ast::*;
+use check::ErrorInfo;
+use crate::ide::completion::*;
+use parse::SymbolSlice;
+use semantic::{FileID, RootGraph};
+use util::*;
+
 use itertools::Itertools;
 use log::info;
 use ropey::Rope;

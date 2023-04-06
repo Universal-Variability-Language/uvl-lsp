@@ -1,8 +1,5 @@
-use crate::ast::*;
-use crate::cache::*;
-use crate::check::ErrorsAcc;
-use crate::config::ConfigDocument;
-use crate::resolve;
+use crate::core::*;
+
 use hashbrown::{HashMap, HashSet};
 use log::info;
 use std::fmt::Debug;
