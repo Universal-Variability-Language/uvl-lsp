@@ -30,18 +30,17 @@ use util::Result;
 //   good error corrections in many cases so parsing almost never fails.
 // - The green tree is translated into the red tree asynchronously. This second tree follows the UVL
 //   grammar spec and is used for all semantic analysis. During the translation
-//   from green to red tree very specific syntax errors are possible and forwarded to the user.
-//   All red trees are lated linked into a single model (the Root Graph) asynchronously.
+//   from green to red tree very specific syntax errors can be detected and forwarded to the user.
+//   All red trees are later linked into a single model (the Root Graph).
 //Green Trees are stored as Drafts while red trees are stored as an AST-ECS like structure
-//See https://github.com/rust-lang/rust-analyzer/blob/master/docs/dev/syntax.md for the inspirations
-//of this method.
+//See https://github.com/rust-lang/rust-analyzer/blob/master/docs/dev/syntax.md for inspiration
 enum DraftMsg {
     Delete(Instant),
     Update(DidChangeTextDocumentParams, Instant),
     Snapshot(oneshot::Sender<Draft>),
     Shutdown,//Not really needed, TODO remove this
 }
-//Turn a treesitter-tree into a useabel rust structure and send it to the linker
+//Turn a tree-sitter trees into a usable rust structure and send it to the linker
 async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
     info!("update red tree {uri}");
     match draft {
@@ -50,7 +49,7 @@ async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
             source,
             tree,
         } => {
-            let mut ast = ast::visit_root(source.clone(), tree.clone(), uri.clone(), timestamp);
+            let mut ast = ast::AstDocument::new(source.clone(), tree.clone(), uri.clone(), timestamp);
             ast.errors.append(&mut check::check_sanity(&tree, &source));
             ast.errors.append(&mut check::check_errors(&tree, &source));
             let _ = tx_link.send(LinkMsg::UpdateAst(Arc::new(ast))).await;

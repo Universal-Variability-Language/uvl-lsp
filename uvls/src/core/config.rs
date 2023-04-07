@@ -32,8 +32,8 @@ use ustr::Ustr;
 //}
 //This representation is very compact since it avoids rewriting long import prefixes but slightly
 //more complex than just using the direct raw path to external symbols. 
-//JSON parsing is done with tree-sitter and not serde because there currently is no serde json
-//crate for span information so error reporting becomes impossible.
+//JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
+//crate for span information and partial parsing so error reporting becomes impossible.
 
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

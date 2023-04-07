@@ -6,7 +6,7 @@ use ropey::Rope;
 
 //update the document text using text deltas form the editor
 //for some insane reason lsp uses utf16 code points as offsets 
-//so we have to transform utf16->bytes for tree-sitter
+//so we have to transform utf16->bytes for tree-sitter
 pub fn update_text(
     source: &mut Rope,
     tree: Option<&mut Tree>,
