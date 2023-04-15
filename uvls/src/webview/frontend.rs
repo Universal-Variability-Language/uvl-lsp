@@ -442,6 +442,7 @@ where
 pub fn App(cx: Scope<AppProps>) -> Element {
     let config = use_ref(cx, UIConfigState::default);
     let state = use_ref(cx, || UIState {
+        solver_active:false,
         sat: SatState::UNKNOWN,
         sync: UISyncState::Dirty,
         dir: "".into(),
@@ -479,6 +480,11 @@ pub fn App(cx: Scope<AppProps>) -> Element {
         }),
         UISyncState::Valid => {
             let values = file_values_iter(&lock);
+            let solver_state = if state_lock.solver_active{
+                "active"
+            }else{
+                "idle"
+            };
             cx.render(rsx! {
                 div {
                     ul{
@@ -503,6 +509,12 @@ pub fn App(cx: Scope<AppProps>) -> Element {
                                     "unsat"
                                 },
                                 "{state_lock.sat:?}"
+                            }
+                        }
+                        li{
+                            "Solver State: "
+                            a{
+                                "{solver_state}"
                             }
                         }
                         li{

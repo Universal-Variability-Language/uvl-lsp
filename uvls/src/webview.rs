@@ -1,8 +1,4 @@
-use crate::{
-    core::*,
-    smt,
-    ide
-};
+use crate::{core::*, ide, smt};
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
     response::Html,
@@ -157,6 +153,7 @@ pub struct UIConfigState {
 pub struct UIState {
     pub sat: SatState,
     pub sync: UISyncState,
+    pub solver_active: bool,
     pub dir: String,
     pub file_name: String,
     pub show: bool,
@@ -178,6 +175,7 @@ pub enum UIAction {
     Set(ModuleSymbol, u8, ConfigValue),
     Unset(ModuleSymbol, u8),
     ShowSym(ModuleSymbol, u8),
+    SolverActive,
     Save,
     Show,
 }
@@ -454,6 +452,18 @@ async fn ui_event_loop(
     loop {
         let e = select! {Some(e)=rx_ui.next()=>e,Some(e)=rx_sync.recv()=>e, else=>{break;}};
         match e {
+            UIAction::SolverActive => {
+
+                ui_state.with_mut(|state| {
+                    state.solver_active = true;
+                    state.sat = SatState::UNKNOWN;
+                });
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    for e in entries.values_mut() {
+                        e.unsat(false);
+                    }
+                });
+            }
             UIAction::TreeDirty => {
                 ui_state.with_mut(|state| {
                     state.sync = UISyncState::Dirty;
@@ -586,7 +596,10 @@ async fn ui_event_loop(
                 if tag != ctag {
                     continue;
                 }
-                ui_state.with_mut(|state| state.sat = SatState::ERR(msg))
+                ui_state.with_mut(|state| {
+                    state.sat = SatState::ERR(msg);
+                    state.solver_active = false;
+                })
             }
             UIAction::UpdateSMTModel(model, tag) => {
                 if tag != ctag {
@@ -594,7 +607,10 @@ async fn ui_event_loop(
                 }
                 ui_config.with_mut(|UIConfigState { entries, .. }| match model {
                     smt::SMTModel::SAT { values, .. } => {
-                        ui_state.with_mut(|state| state.sat = SatState::SAT);
+                        ui_state.with_mut(|state| {
+                            state.sat = SatState::SAT;
+                            state.solver_active = false
+                        });
                         for (k, v) in values {
                             let entry = &mut entries[&k];
 
@@ -605,6 +621,7 @@ async fn ui_event_loop(
                     smt::SMTModel::UNSAT { reasons } => {
                         ui_state.with_mut(|state| {
                             state.sat = SatState::UNSAT;
+                            state.solver_active = false;
                         });
                         for i in entries.values_mut() {
                             i.update_smt(None);

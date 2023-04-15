@@ -506,6 +506,7 @@ pub async fn web_view_handler(
             let lock = state.borrow_and_update();
             (lock.module.clone(), lock.cancel.clone(), lock.tag)
         };
+        tx_ui.send(webview::UIAction::SolverActive).await?;
 
         if module.ok {
             let smt_module = uvl2smt(&module, &module.values);

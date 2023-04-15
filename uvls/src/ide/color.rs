@@ -317,6 +317,9 @@ impl State {
             files: Default::default(),
         }
     }
+    pub fn remove(&self,uri: &Url){
+        self.files.remove(uri);
+    }
     pub fn get(
         &self,
         root: Snapshot,

@@ -285,7 +285,7 @@ fn resolve_constraint(
                 resolve_constraint(ctx, file, lhs, err, ref_map)
             });
         }
-        Constraint::Equation { op, lhs, rhs } => {
+        Constraint::Equation { op:_, lhs, rhs } => {
             let lhs_ty = gather_expr_options(ctx, file, lhs, err, ref_map);
             if lhs_ty.is_empty() {
                 return;
@@ -309,10 +309,7 @@ fn resolve_constraint(
                 );
                 return;
             }
-            let req = match op {
-                EquationOP::Greater | EquationOP::Smaller => make_bitflags!(Type::{Real}),
-                EquationOP::Equal => Type::String | Type::Real | Type::String,
-            };
+            let req =  Type::String | Type::Real;
             let ty = req & lhs_ty & rhs_ty;
             if ty.is_empty() {
                 err.span(
@@ -363,7 +360,7 @@ fn gather_expr_options(
             }
             Type::Real.into()
         }
-        Expr::Binary { rhs, lhs, .. } => {
+        Expr::Binary { rhs, lhs, op } => {
             let lhs_ty = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
                 gather_expr_options(ctx, file, lhs, err, ref_map)
             });
@@ -385,8 +382,27 @@ fn gather_expr_options(
                         select_type(rhs_ty)
                     ),
                 );
+                rhs_ty & lhs_ty
             }
-            rhs_ty & lhs_ty
+            else{
+                let req = match op{
+                    NumericOP::Add=>Type::String|Type::Real,
+                    _=>Type::Real.into(),
+                };
+                if (rhs_ty & lhs_ty & req).is_empty(){
+                    err.span(
+                        expr.span.clone(),
+                        file,
+                        30,
+                        format!(
+                            "unsupported operator type {}",
+                            select_type(rhs_ty&lhs_ty),
+                        ),
+                    );
+                }
+                rhs_ty & lhs_ty & req
+
+            }
         }
         Expr::Len(lhs) => {
             let lhs_ty = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {

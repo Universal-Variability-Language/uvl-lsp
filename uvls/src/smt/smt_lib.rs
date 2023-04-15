@@ -4,8 +4,8 @@ use indexmap::IndexSet;
 use lazy_static::lazy_static;
 use log::info;
 use regex::Regex;
-use std::fmt::Write;
 use std::fmt::Display;
+use std::fmt::Write;
 #[derive(Clone, Debug)]
 pub enum AssertName {
     Config,
@@ -38,7 +38,7 @@ impl Display for AssertName {
 }
 #[derive(Clone, Debug)]
 pub struct AssertInfo(pub ModuleSymbol, pub AssertName);
-#[derive(Clone,  Debug)]
+#[derive(Clone, Debug)]
 pub struct Assert(pub Option<AssertInfo>, pub Expr);
 #[derive(Clone, Debug)]
 pub enum Expr {
@@ -58,6 +58,10 @@ pub enum Expr {
     Greater(Vec<Expr>),
     Less(Vec<Expr>),
     Equal(Vec<Expr>),
+    StrLess(Vec<Expr>),
+    StrLessEq(Vec<Expr>),
+    StrConcat(Box<Expr>, Box<Expr>),
+
     AtLeast(usize, Vec<Expr>),
     AtMost(usize, Vec<Expr>),
     //IfThenElse
@@ -104,23 +108,27 @@ impl SMTModule {
     ) -> impl Iterator<Item = (ModuleSymbol, ConfigValue)> + 'a {
         lazy_static! {
             static ref RE: Regex = Regex::new(
-                r#"\(\s*v(\d+)\s+(?:(true|false)|([+-]?(?:[0-9]*\.)?[0-9]+)|"([^"]*)")\s*\)"#
+                r#"\(\s*v(\d+)\s+(?:(true|false)|\(- ((?:[0-9]*\.)?[0-9]+)|((?:[0-9]*\.)?[0-9]+)|"([^"]*)")\s*\)"#
             )
             .unwrap();
         };
-        //info!("{values}");
+
+        info!("{values}");
         RE.captures_iter(values).map(|i| {
             let idx: usize = i[1].parse().unwrap();
             let var = *self.variables.get_index(idx).unwrap();
             (
                 var,
-                match (i.get(2), i.get(3), &i.get(4)) {
-                    (Some(b), _, _) => ConfigValue::Bool(match b.as_str() {
+                match (i.get(2), i.get(3), i.get(4), i.get(5)) {
+                    (Some(b), _, _, _) => ConfigValue::Bool(match b.as_str() {
                         "true" => true,
                         _ => false,
                     }),
-                    (_, Some(num), _) => ConfigValue::Number(num.as_str().parse().unwrap()),
-                    (_, _, Some(s)) => ConfigValue::String(s.as_str().into()),
+                    (_, Some(num), _, _) => {
+                        ConfigValue::Number(-(num.as_str().parse::<f64>().unwrap()))
+                    }
+                    (_, _, Some(num), _) => ConfigValue::Number(num.as_str().parse().unwrap()),
+                    (_, _, _, Some(s)) => ConfigValue::String(s.as_str().into()),
                     _ => unreachable!(),
                 },
             )
@@ -216,6 +224,15 @@ impl SMTModule {
                             Expr::AtMost(max, ..) => {
                                 let _ = write!(out, "((_ at-most {max})");
                             }
+                            Expr::StrConcat(..) => {
+                                let _ = write!(out, "(str.++");
+                            }
+                            Expr::StrLess(..) => {
+                                let _ = write!(out, "(str.<");
+                            }
+                            Expr::StrLessEq(..) => {
+                                let _ = write!(out, "(str.<=");
+                            }
                         }
                         match e {
                             Expr::Add(v)
@@ -229,6 +246,8 @@ impl SMTModule {
                             | Expr::AtMost(_, v)
                             | Expr::Greater(v)
                             | Expr::Less(v)
+                            | Expr::StrLess(v)
+                            | Expr::StrLessEq(v)
                             | Expr::Equal(v) => {
                                 stack.push(CExpr::End);
                                 for i in v.iter().rev() {
@@ -238,7 +257,11 @@ impl SMTModule {
                             Expr::Strlen(e) | Expr::Not(e) => {
                                 stack.push(CExpr::End);
                                 stack.push(CExpr::Expr(e));
-                            
+                            }
+                            Expr::StrConcat(rhs, lhs) => {
+                                stack.push(CExpr::End);
+                                stack.push(CExpr::Expr(rhs));
+                                stack.push(CExpr::Expr(lhs));
                             }
                             Expr::Ite(cond, lhs, rhs) => {
                                 stack.push(CExpr::End);
@@ -256,7 +279,7 @@ impl SMTModule {
             }
             let _ = write!(out, ")\n");
         }
-        info!("{out}");
+        //info!("{out}");
         out
     }
     pub fn var(&self, ms: ModuleSymbol) -> usize {
@@ -344,11 +367,13 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
         sym2var: IndexSet::new(),
         assert: Vec::new(),
     };
+    //encode features
     for (m, file) in module.instances() {
         for f in file.all_features() {
             builder.push_var(m.sym(f));
         }
     }
+    //set config features
     for (&ms, val) in config
         .iter()
         .filter(|i| matches!(i.0.sym, Symbol::Feature(..)))
@@ -359,6 +384,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
             Expr::Equal(vec![var, val.clone().into()]),
         ));
     }
+    //encode attributes
     for (m, file) in module.instances() {
         for f in file.all_features() {
             file.visit_named_children(f, true, |a, _| {
@@ -389,6 +415,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
             });
         }
     }
+    //encode groups
     for (m, file) in module.instances() {
         for p in file.all_features() {
             for g in file
@@ -443,7 +470,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
             }
         }
     }
-
+    //assert root features are always on
     for f in module
         .file(InstanceID(0))
         .direct_children(Symbol::Root)
@@ -454,6 +481,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
             builder.pseudo_bool(InstanceID(0).sym(f)),
         ));
     }
+    //encode constraints
     for (m, file) in module.instances() {
         for c in file.all_constraints() {
             let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder);
@@ -493,33 +521,55 @@ fn translate_constraint(
             }
         }
         ast::Constraint::Equation { op, lhs, rhs } => {
-            let lhs =
+            let (lhs, lty) =
                 stacker::maybe_grow(32 * 1024, 1024 * 1024, || translate_expr(lhs, m, builder));
-            let rhs = translate_expr(rhs, m, builder);
-            match op {
-                ast::EquationOP::Equal => Expr::Equal(vec![lhs, rhs]),
-                ast::EquationOP::Greater => Expr::Greater(vec![lhs, rhs]),
-                ast::EquationOP::Smaller => Expr::Less(vec![lhs, rhs]),
+            let (rhs, rty) = translate_expr(rhs, m, builder);
+            debug_assert!(rty == lty);
+            if lty == Type::String {
+                match op {
+                    ast::EquationOP::Equal => Expr::Equal(vec![lhs, rhs]),
+                    ast::EquationOP::Greater => Expr::StrLess(vec![lhs, rhs]),
+                    ast::EquationOP::Smaller => Expr::Not(Expr::StrLessEq(vec![lhs, rhs]).into()),
+                }
+            } else {
+                match op {
+                    ast::EquationOP::Equal => Expr::Equal(vec![lhs, rhs]),
+                    ast::EquationOP::Greater => Expr::Greater(vec![lhs, rhs]),
+                    ast::EquationOP::Smaller => Expr::Less(vec![lhs, rhs]),
+                }
             }
         }
     }
 }
 
-fn translate_expr(decl: &ast::ExprDecl, m: InstanceID, builder: &mut SMTBuilder) -> Expr {
+fn translate_expr(decl: &ast::ExprDecl, m: InstanceID, builder: &mut SMTBuilder) -> (Expr, Type) {
     match &decl.content {
-        ast::Expr::Number(n) => Expr::Real(*n),
-        ast::Expr::String(s) => Expr::String(s.clone()),
-        ast::Expr::Ref(sym) => builder.var(m.sym(*sym)),
-        ast::Expr::Len(lhs) => Expr::Strlen(translate_expr(lhs, m, builder).into()),
+        ast::Expr::Number(n) => (Expr::Real(*n), Type::Real),
+        ast::Expr::String(s) => (Expr::String(s.clone()), Type::String),
+        ast::Expr::Ref(sym) => (
+            builder.var(m.sym(*sym)),
+            builder.module.type_of(m.sym(*sym)),
+        ),
+        ast::Expr::Len(lhs) => (
+            Expr::Strlen(translate_expr(lhs, m, builder).0.into()),
+            Type::Real,
+        ),
         ast::Expr::Binary { lhs, rhs, op } => {
-            let lhs =
+            let (lhs, lty) =
                 stacker::maybe_grow(32 * 1024, 1024 * 1024, || translate_expr(lhs, m, builder));
-            let rhs = translate_expr(rhs, m, builder);
-            match op {
-                ast::NumericOP::Add => Expr::Add(vec![lhs, rhs]),
-                ast::NumericOP::Sub => Expr::Sub(vec![lhs, rhs]),
-                ast::NumericOP::Mul => Expr::Mul(vec![lhs, rhs]),
-                ast::NumericOP::Div => Expr::Div(vec![lhs, rhs]),
+            let (rhs, rty) = translate_expr(rhs, m, builder);
+            debug_assert!(rty == lty);
+            if rty == Type::String {
+                debug_assert!(*op == NumericOP::Add);
+                (Expr::StrConcat(rhs.into(), lhs.into()), Type::String)
+            } else {
+                let expr = match op {
+                    ast::NumericOP::Add => Expr::Add(vec![lhs, rhs]),
+                    ast::NumericOP::Sub => Expr::Sub(vec![lhs, rhs]),
+                    ast::NumericOP::Mul => Expr::Mul(vec![lhs, rhs]),
+                    ast::NumericOP::Div => Expr::Div(vec![lhs, rhs]),
+                };
+                (expr, Type::Real)
             }
         }
         ast::Expr::Aggregate { op, context, query } => {
@@ -542,14 +592,17 @@ fn translate_expr(decl: &ast::ExprDecl, m: InstanceID, builder: &mut SMTBuilder)
                 }
             });
             if all_attributes.is_empty() {
-                Expr::Real(0.0)
+                (Expr::Real(0.0), Type::Real)
             } else {
-                match op {
-                    ast::AggregateOP::Sum => Expr::Add(all_attributes),
-                    ast::AggregateOP::Avg => {
-                        Expr::Div(vec![Expr::Add(all_attributes), Expr::Add(count_features)])
-                    }
-                }
+                (
+                    match op {
+                        ast::AggregateOP::Sum => Expr::Add(all_attributes),
+                        ast::AggregateOP::Avg => {
+                            Expr::Div(vec![Expr::Add(all_attributes), Expr::Add(count_features)])
+                        }
+                    },
+                    Type::Real,
+                )
             }
         }
     }

@@ -157,7 +157,7 @@ impl Default for Value {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug,PartialEq,Eq)]
 pub enum NumericOP {
     Add,
     Sub,
