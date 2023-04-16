@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![forbid(unsafe_code)]
 
 use flexi_logger::FileSpec;
 use get_port::Ops;

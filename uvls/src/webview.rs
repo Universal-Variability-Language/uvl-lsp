@@ -163,6 +163,7 @@ pub struct ConfigSource {
     pub module: ConfigModule,
     pub tag: u8,
     pub cancel: CancellationToken,
+    pub ok: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -367,6 +368,7 @@ fn rebuild_tree(source: &ConfigSource) -> Option<UIConfigState> {
             &mut entries,
         );
     }
+
     Some(UIConfigState {
         entries,
         tag: source.tag,
@@ -428,12 +430,14 @@ fn rebuild_config(
 //Transfer state from with a new module
 fn transfer_config(source: &mut ConfigSource, new: Arc<Module>) {
     if !new.ok {
+        source.ok = false;
         return;
     }
     let ser = source.module.serialize();
     let (new_values, _) = new.resolve_config(&ser, |_, _| {});
     source.module.module = new;
     source.module.values = new_values;
+    source.ok = true;
 }
 
 //redux style state management
@@ -453,7 +457,6 @@ async fn ui_event_loop(
         let e = select! {Some(e)=rx_ui.next()=>e,Some(e)=rx_sync.recv()=>e, else=>{break;}};
         match e {
             UIAction::SolverActive => {
-
                 ui_state.with_mut(|state| {
                     state.solver_active = true;
                     state.sat = SatState::UNKNOWN;
@@ -484,7 +487,7 @@ async fn ui_event_loop(
                 } else {
                     ui_state.with_mut(|x| {
                         x.sync = UISyncState::InternalError("invalid sources".into());
-                    })
+                    });
                 }
             }
             UIAction::ToggleEntry(sym, tag) => {
@@ -669,6 +672,7 @@ pub async fn ui_main(
                     },
                     tag: (root.revision() % 256) as u8,
                     cancel: CancellationToken::new(),
+                    ok: true,
                 };
                 let path = id.filepath();
                 let mut dest = path.clone();
@@ -694,6 +698,7 @@ pub async fn ui_main(
                     module: src.clone(),
                     tag: (root.revision() % 256) as u8,
                     cancel: CancellationToken::new(),
+                    ok: src.ok,
                 };
                 let dest = path.filepath();
                 let tgt_path = src.module.file(InstanceID(0)).id.filepath();
@@ -726,7 +731,7 @@ pub async fn ui_main(
     spawn(ui_sync(pipeline.clone(), tx_sync, root));
     //Run the event loop
     ui_event_loop(
-        id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline, tgt_path,
+        id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline, tgt_path
     )
     .await?;
 

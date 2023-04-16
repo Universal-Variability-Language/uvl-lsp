@@ -1,15 +1,15 @@
 use crate::core::*;
 use check::ErrorInfo;
-use semantic::FileID;
-use util::lsp_range;
 use hashbrown::HashMap;
 use ropey::Rope;
+use semantic::FileID;
 use std::hash::Hash;
 use std::path::Component;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::Url;
 use tree_sitter::Tree;
 use ustr::Ustr;
+use util::lsp_range;
 mod def;
 mod transform;
 mod visitor;
@@ -508,7 +508,14 @@ impl AstDocument {
                     {
                         continue;
                     }
-                    stack.push((i, depth + 1));
+                    if matches!(
+                        i,
+                        Symbol::Feature(..) | Symbol::Dir(..) | Symbol::Attribute(..)
+                    ) {
+                        stack.push((i, depth + 1));
+                    } else {
+                        stack.push((i, depth));
+                    }
                 }
             }
         }

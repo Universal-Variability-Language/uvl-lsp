@@ -386,17 +386,32 @@ async fn check_config(
     inlay_state: &InlayHandler,
     latest_revisions: HashMap<FileID, Instant>,
 ) -> HashMap<FileID, Instant> {
+    //Reset inlays
+    for (k, v) in latest_revisions.iter() {
+        if root
+            .cache()
+            .config_modules
+            .get(k)
+            .map(|old| old.module.timestamp != *v)
+            .unwrap_or(true)
+        {
+            info!("Reset {k:?}");
+            inlay_state.maybe_reset(InlaySource::File(*k)).await;
+        }
+    }
     let active = root.cache().config_modules.iter().filter(|(k, v)| {
         latest_revisions
             .get(*k)
             .map(|old| old != &v.module.timestamp)
             .unwrap_or(true)
             && v.module.ok
+            && k.is_config()
     });
     let models = join_all(active.map(|(k, v)| {
         let k = k.clone();
         let module = v.clone();
         async move {
+            info!("checking {k:?}");
             let smt_module = uvl2smt(&module, &module.values);
             let source = smt_module.to_source(&module);
             let is_active = inlay_state.is_active(InlaySource::File(k));
@@ -409,21 +424,19 @@ async fn check_config(
                 is_active,
             )
             .await;
-
-            if k.is_config() {
-                if let Ok(model) = model.as_ref() {
-                    inlay_state
-                        .maybe_publish(InlaySource::File(k), Instant::now(), || {
-                            Arc::new(OwnedSMTModel {
-                                model: model.clone(),
-                                module: module.module.clone(),
-                            })
+            if let Ok(model) = model.as_ref() {
+                inlay_state
+                    .maybe_publish(InlaySource::File(k), Instant::now(), || {
+                        Arc::new(OwnedSMTModel {
+                            model: model.clone(),
+                            module: module.module.clone(),
                         })
-                        .await;
-                } else {
-                    inlay_state.maybe_reset(InlaySource::File(k)).await;
-                }
+                    })
+                    .await;
+            } else {
+                inlay_state.maybe_reset(InlaySource::File(k)).await;
             }
+
             model.map(|m| (m, k, module))
         }
     }))
@@ -459,7 +472,7 @@ async fn check_config(
         })
         .await;
     root.cache()
-        .modules
+        .config_modules
         .iter()
         .map(|(k, v)| (*k, v.timestamp))
         .collect()
@@ -502,13 +515,13 @@ pub async fn web_view_handler(
     inlay_source: InlaySource,
 ) -> Result<()> {
     loop {
-        let (module, cancel, tag) = {
+        let (module, cancel, tag, config_ok) = {
             let lock = state.borrow_and_update();
-            (lock.module.clone(), lock.cancel.clone(), lock.tag)
+            (lock.module.clone(), lock.cancel.clone(), lock.tag, lock.ok)
         };
         tx_ui.send(webview::UIAction::SolverActive).await?;
 
-        if module.ok {
+        if module.ok && config_ok {
             let smt_module = uvl2smt(&module, &module.values);
             let source = smt_module.to_source(&module);
             let res = create_model(&module, cancel, smt_module, source, false, true).await;

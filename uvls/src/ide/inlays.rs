@@ -1,5 +1,5 @@
 use crate::core::*;
-use crate::smt::{OwnedSMTModel, SMTModel,AssertInfo};
+use crate::smt::{AssertInfo, OwnedSMTModel, SMTModel};
 
 use log::info;
 use parking_lot::Mutex;
@@ -12,12 +12,12 @@ use tower_lsp::Client;
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum InlaySource {
     None,
-    File(FileID),//Inlays come from a config file
-    Web(u64),//Inlays come from some web instance
+    File(FileID), //Inlays come from a config file
+    Web(u64),     //Inlays come from some web instance
 }
-//Inlays are managed as a global token state, 
+//Inlays are managed as a global token state,
 //there can only be 1 inlay source to keep things simple,
-//inlays are computed asynchronously. Both configurations 
+//inlays are computed asynchronously. Both configurations
 //and webview can provide them as a SMT-Model
 #[derive(Clone)]
 pub struct InlayHandler {
@@ -53,6 +53,7 @@ impl InlayHandler {
     }
     pub async fn maybe_reset(&self, source: InlaySource) {
         if *self.source.lock() == source {
+            info!("reset");
             let _ = self.tx.send(InlayEvent::Reset(Instant::now())).await;
         }
     }
@@ -82,7 +83,7 @@ enum InlayEvent {
 }
 fn generate(model: &OwnedSMTModel, id: FileID, range: Span) -> Option<Vec<InlayHint>> {
     if !model.module.ok {
-        return None;
+        return Some(Vec::new());
     }
     model.module.files.get(&id).map(|doc| {
         let doc = &doc.content;
@@ -148,27 +149,33 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) -> Re
     while let Some(e) = rx.recv().await {
         match e {
             InlayEvent::Get(request) => {
-                info!("get");
+                info!("inlays get");
                 if let Some(model) = map.as_ref() {
+                    info!("inlays get");
+
                     let _ = request
                         .out
                         .send(generate(model, request.target, request.span));
                 } else {
-                    let _ = request.out.send(None);
+                    let _ = request.out.send(Some(Vec::new()));
                 }
-                info!("done");
+                info!("inlays done");
             }
             InlayEvent::Reset(timestamp) => {
                 if timestamp <= latest {
                     continue;
                 }
+                info!("Reset!");
                 latest = timestamp;
                 map = None;
                 client
                     .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
                     .await?;
+
+                info!("{}",map.is_some());
             }
             InlayEvent::Publish(model, timestamp) => {
+                info!("publish");
                 if timestamp <= latest {
                     continue;
                 }

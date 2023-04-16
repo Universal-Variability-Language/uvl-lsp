@@ -1,11 +1,11 @@
 use crate::core::*;
 use check::ErrorsAcc;
-use module::{ConfigModule,Module};
-use resolve::*;
 use compact_str::CompactStringExt;
 use hashbrown::{HashMap, HashSet};
 use log::info;
+use module::{ConfigModule, Module};
 use petgraph::prelude::*;
+use resolve::*;
 use std::sync::Arc;
 use ustr::Ustr;
 #[derive(Debug, Clone, PartialEq)]
@@ -314,8 +314,8 @@ impl Cache {
         }
         for i in trans_dirty.iter() {
             if !errors.errors.contains_key(i) {
-                errors.errors.insert(*i, Vec::new());//Remove old errors when dependencies change
-                                                     //but not the file
+                errors.errors.insert(*i, Vec::new()); //Remove old errors when dependencies change
+                                                      //but not the file
             }
         }
         let mut linked_ast: HashMap<_, _> = old
@@ -366,21 +366,29 @@ impl Cache {
                         //recreate
                         let mut module = Module::new(content.file, &fs, &linked_ast);
                         if !module.ok {
-                            continue;
+                            config_modules.insert(
+                                *k,
+                                Arc::new(ConfigModule {
+                                    module: Arc::new(module),
+                                    values:Default::default(),
+                                    source_map:Default::default(),
+                                }),
+                            );
+                        } else {
+                            let (values, source_map) = module
+                                .resolve_config(&content.config, |span, err| {
+                                    errors.span(span, *k, 20, err)
+                                });
+                            module.ok &= !errors.has_error(*k);
+                            config_modules.insert(
+                                *k,
+                                Arc::new(ConfigModule {
+                                    module: Arc::new(module),
+                                    values,
+                                    source_map,
+                                }),
+                            );
                         }
-                        let (values, source_map) = module
-                            .resolve_config(&content.config, |span, err| {
-                                errors.span(span, *k, 20, err)
-                            });
-                        module.ok &= !errors.has_error(*k);
-                        config_modules.insert(
-                            *k,
-                            Arc::new(ConfigModule {
-                                module: Arc::new(module),
-                                values,
-                                source_map,
-                            }),
-                        );
                     } else {
                         //reuse
                         config_modules.insert(*k, old.config_modules[k].clone());

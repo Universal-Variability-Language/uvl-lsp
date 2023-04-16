@@ -2,7 +2,7 @@ use crate::core::*;
 use hashbrown::HashMap;
 use indexmap::IndexSet;
 use lazy_static::lazy_static;
-use log::info;
+//use log::info;
 use regex::Regex;
 use std::fmt::Display;
 use std::fmt::Write;
@@ -113,7 +113,7 @@ impl SMTModule {
             .unwrap();
         };
 
-        info!("{values}");
+        //info!("{values}");
         RE.captures_iter(values).map(|i| {
             let idx: usize = i[1].parse().unwrap();
             let var = *self.variables.get_index(idx).unwrap();
@@ -144,7 +144,10 @@ impl SMTModule {
         })
     }
     pub fn to_source(&self, module: &Module) -> String {
-        let mut out = "(set-option :pp.decimal true)(set-option :produce-unsat-cores true)(define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))\n".to_string();
+        let mut out = "(set-option :pp.decimal true)
+            (set-option :produce-unsat-cores true)
+            (define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))
+            (set-option :smt.core.minimize true)\n".to_string();
         for (i, v) in self.variables.iter().enumerate() {
             let ty = module.type_of(*v);
             let _ = writeln!(out, "(declare-const v{i} {ty})");

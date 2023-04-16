@@ -1,8 +1,8 @@
 use ropey::Rope;
 use ustr::Ustr;
 
-use enumflags2::{make_bitflags, BitFlags};
 use crate::core::*;
+use enumflags2::BitFlags;
 use parse::parse_path;
 
 use hashbrown::HashMap;
@@ -285,7 +285,7 @@ fn resolve_constraint(
                 resolve_constraint(ctx, file, lhs, err, ref_map)
             });
         }
-        Constraint::Equation { op:_, lhs, rhs } => {
+        Constraint::Equation { op: _, lhs, rhs } => {
             let lhs_ty = gather_expr_options(ctx, file, lhs, err, ref_map);
             if lhs_ty.is_empty() {
                 return;
@@ -309,7 +309,7 @@ fn resolve_constraint(
                 );
                 return;
             }
-            let req =  Type::String | Type::Real;
+            let req = Type::String | Type::Real;
             let ty = req & lhs_ty & rhs_ty;
             if ty.is_empty() {
                 err.span(
@@ -383,25 +383,20 @@ fn gather_expr_options(
                     ),
                 );
                 rhs_ty & lhs_ty
-            }
-            else{
-                let req = match op{
-                    NumericOP::Add=>Type::String|Type::Real,
-                    _=>Type::Real.into(),
+            } else {
+                let req = match op {
+                    NumericOP::Add => Type::String | Type::Real,
+                    _ => Type::Real.into(),
                 };
-                if (rhs_ty & lhs_ty & req).is_empty(){
+                if (rhs_ty & lhs_ty & req).is_empty() {
                     err.span(
                         expr.span.clone(),
                         file,
                         30,
-                        format!(
-                            "unsupported operator type {}",
-                            select_type(rhs_ty&lhs_ty),
-                        ),
+                        format!("unsupported operator type {}", select_type(rhs_ty & lhs_ty),),
                     );
                 }
                 rhs_ty & lhs_ty & req
-
             }
         }
         Expr::Len(lhs) => {
