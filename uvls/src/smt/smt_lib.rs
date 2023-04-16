@@ -61,7 +61,6 @@ pub enum Expr {
     StrLess(Vec<Expr>),
     StrLessEq(Vec<Expr>),
     StrConcat(Box<Expr>, Box<Expr>),
-
     AtLeast(usize, Vec<Expr>),
     AtMost(usize, Vec<Expr>),
     //IfThenElse
@@ -102,17 +101,21 @@ impl SMTModule {
             )
         })
     }
+    //extract values from a response string
     pub fn parse_values<'a>(
         &'a self,
         values: &'a str,
     ) -> impl Iterator<Item = (ModuleSymbol, ConfigValue)> + 'a {
+        //This abomination parses a identifier with a bool, negative number, positive number or a string
+        //The problem is that z3 encodes numbers using nested expressions instead of simple floating point
+        //values. Hopefull all cases are covered here...
+        //TODO replace this with a true eval parser(best use NOM)
         lazy_static! {
             static ref RE: Regex = Regex::new(
-                r#"\(\s*v(\d+)\s+(?:(true|false)|\(- ((?:[0-9]*\.)?[0-9]+)|((?:[0-9]*\.)?[0-9]+)|"([^"]*)")\s*\)"#
+                r#"\(\s*v(\d+)\s+(?:(true|false)|\(- ((?:[0-9]*\.)?[0-9]+)\??|((?:[0-9]*\.)?[0-9]+)\??|"([^"]*)")\s*\)"#
             )
             .unwrap();
         };
-
         //info!("{values}");
         RE.captures_iter(values).map(|i| {
             let idx: usize = i[1].parse().unwrap();
@@ -143,11 +146,13 @@ impl SMTModule {
             self.asserts[idx].0.clone()
         })
     }
+    //tree to source
     pub fn to_source(&self, module: &Module) -> String {
         let mut out = "(set-option :pp.decimal true)
             (set-option :produce-unsat-cores true)
             (define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))
-            (set-option :smt.core.minimize true)\n".to_string();
+            (set-option :smt.core.minimize true)\n"
+            .to_string();
         for (i, v) in self.variables.iter().enumerate() {
             let ty = module.type_of(*v);
             let _ = writeln!(out, "(declare-const v{i} {ty})");
@@ -168,6 +173,7 @@ impl SMTModule {
                     CExpr::End => {
                         let _ = write!(out, ")");
                     }
+                    //Head
                     CExpr::Expr(e) => {
                         match e {
                             Expr::Bool(b) => {
@@ -237,6 +243,7 @@ impl SMTModule {
                                 let _ = write!(out, "(str.<=");
                             }
                         }
+                        //Args
                         match e {
                             Expr::Add(v)
                             | Expr::Sub(v)
@@ -277,6 +284,7 @@ impl SMTModule {
                     }
                 }
             }
+            //name tag
             if info.is_some() {
                 let _ = write!(out, " :named a{i})");
             }
@@ -413,7 +421,11 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
                 };
                 let attrib_var = builder.push_var(ms);
                 let feat_var = builder.pseudo_bool(m.sym(f));
-                builder.assert.push(Assert(Some(AssertInfo(ms, n)),Expr::Equal(vec![Expr::Ite(feat_var.into(),val.into(),zero.into()),attrib_var] ) ));
+                builder.assert.push(Assert(Some(AssertInfo(ms, n)),Expr::Equal(vec![
+                                                                               Expr::Ite(feat_var.into(),
+                                                                               val.into(),
+                                                                               zero.into()),
+                                                                               attrib_var] ) ));
                 true
             });
         }
