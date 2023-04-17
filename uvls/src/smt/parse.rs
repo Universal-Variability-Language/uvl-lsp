@@ -11,30 +11,30 @@ use nom::{
 };
 
 use super::SMTModule;
-fn parse_bool(input: &str) -> IResult<&str, bool> {
+fn boolean(input: &str) -> IResult<&str, bool> {
     alt((map(tag("true"), |_| true), map(tag("false"), |_| false)))(input)
 }
 fn decimal(input: &str) -> IResult<&str, usize> {
     map_res(digit1, |r: &str| r.parse())(input)
 }
-fn parse_float(input: &str) -> IResult<&str, f64> {
+fn float(input: &str) -> IResult<&str, f64> {
     terminated(double, opt(tag("?")))(input)
 }
-fn num_op(input: &str) -> IResult<&str, f64> {
+fn real_op(input: &str) -> IResult<&str, f64> {
     let mut count = 0;
     alt((
         preceded(
             terminated(char('*'), multispace1),
-            fold_many1(num_val, || 1.0, |acc, i| i * acc),
+            fold_many1(real_val, || 1.0, |acc, i| i * acc),
         ),
         preceded(
             terminated(char('+'), multispace1),
-            fold_many1(num_val, || 0.0, |acc, i| i + acc),
+            fold_many1(real_val, || 0.0, |acc, i| i + acc),
         ),
         preceded(
             terminated(char('/'), multispace1),
             fold_many1(
-                num_val,
+                real_val,
                 || f64::NAN,
                 |acc, i| {
                     if acc.is_nan() {
@@ -48,7 +48,7 @@ fn num_op(input: &str) -> IResult<&str, f64> {
         preceded(
             terminated(char('-'), multispace1),
             fold_many1(
-                num_val,
+                real_val,
                 || 0.0,
                 move |acc, i| {
                     count += 1;
@@ -59,15 +59,15 @@ fn num_op(input: &str) -> IResult<&str, f64> {
         ),
     ))(input)
 }
-fn num_val(input: &str) -> IResult<&str, f64> {
-    preceded(multispace0, num_expr)(input)
+fn real_val(input: &str) -> IResult<&str, f64> {
+    preceded(multispace0, real_expr)(input)
 }
-fn num_expr(input: &str) -> IResult<&str, f64> {
+fn real_expr(input: &str) -> IResult<&str, f64> {
     alt((
-        parse_float,
+        float,
         delimited(
             char('('),
-            preceded(multispace0, num_op),
+            preceded(multispace0, real_op),
             cut(preceded(multispace0, char(')'))),
         ),
     ))(input)
@@ -75,7 +75,7 @@ fn num_expr(input: &str) -> IResult<&str, f64> {
 fn string(input: &str) -> IResult<&str, &str> {
     delimited(char('"'), is_not("\""), char('"'))(input)
 }
-fn parse_variable(input: &str) -> IResult<&str, usize> {
+fn variable(input: &str) -> IResult<&str, usize> {
     map(preceded(char('v'), decimal), |r| r)(input)
 }
 struct ValueParser<F> {
@@ -86,10 +86,10 @@ where
     F: Fn(usize) -> Type,
 {
     fn inner<'a>(&self, i: &'a str) -> IResult<&'a str, (usize, ConfigValue)> {
-        let (i, var) = preceded(multispace0, parse_variable)(i)?;
+        let (i, var) = preceded(multispace0, variable)(i)?;
         match (self.var_ty)(var) {
-            Type::Bool => map(preceded(multispace1, parse_bool), |b| ConfigValue::Bool(b))(i),
-            Type::Real => map(preceded(multispace1, num_expr), |b| ConfigValue::Number(b))(i),
+            Type::Bool => map(preceded(multispace1, boolean), |b| ConfigValue::Bool(b))(i),
+            Type::Real => map(preceded(multispace1, real_expr), |b| ConfigValue::Number(b))(i),
             Type::String => map(preceded(multispace1, string), |b| {
                 ConfigValue::String(b.to_string())
             })(i),

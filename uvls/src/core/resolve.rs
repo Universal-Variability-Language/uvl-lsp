@@ -410,7 +410,7 @@ fn gather_expr_options(
                     30,
                     format!("type missmatch expected String",),
                 );
-                lhs_ty
+                Default::default()
             } else {
                 Type::Real.into()
             }
