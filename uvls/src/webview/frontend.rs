@@ -118,6 +118,25 @@ fn to_number(input: &str) -> String {
         first
     }
 }
+#[inline_props]
+fn RealInput(cx: Scope,init_val:f64,sym: ModuleSymbol,tag: u8)->Element{
+    let tx = use_coroutine_handle::<UIAction>(cx).unwrap();
+    let val = use_state(cx,||init_val.to_string());
+    cx.render(rsx! {
+        input{
+            class:"input-value",
+            r#type:"number",
+            required:true,
+            value:"{val}",
+            oninput:move |e|{
+                val.set(to_number(&e.value));
+                tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(val.parse().unwrap_or(0.0))));
+
+            }
+        }
+    })
+
+}
 
 fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
     let ConfigInputProps {
@@ -129,6 +148,7 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
         tag,
     } = &cx.props;
     let tx = use_coroutine_handle::<UIAction>(cx).unwrap();
+    
     if let Some(config) = config {
         let rest = rsx! {
             rsx!{button{
@@ -151,21 +171,15 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
                     class:"value-btn",
                     onclick:move |_|{
                         tx.send(UIAction::Set(*sym,*tag,ConfigValue::Bool(!b)));
-
                     },
                     "{b}"
                 }
             },
             ConfigValue::Number(num) => rsx! {
-                input{
-                    class:"input-value",
-                    r#type:"number",
-                    required:true,
-                    value:"{num}",
-                    oninput:move |e|{
-                        tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(to_number(&e.value).parse().unwrap_or(0.0))));
-                        cx.needs_update();
-                    }
+                RealInput{
+                    sym:*sym,
+                    init_val:*num,
+                    tag:*tag,
                 }
             },
             ConfigValue::String(x) => rsx! {

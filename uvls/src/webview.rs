@@ -490,32 +490,6 @@ async fn ui_event_loop(
                     });
                 }
             }
-            UIAction::ToggleEntry(sym, tag) => {
-                if tag != ctag {
-                    continue;
-                }
-                ui_config.with_mut(|UIConfigState { entries, .. }| {
-                    if let Some(v) = entries.get_mut(&sym) {
-                        v.open = !v.open;
-                    }
-                });
-            }
-            UIAction::Set(sym, tag, val) => {
-                if tag != ctag {
-                    continue;
-                }
-                ui_config.with_mut(|UIConfigState { entries, .. }| {
-                    if let Some(node) = entries.get_mut(&sym) {
-                        node.update_config(Some(val.clone()));
-                    }
-                });
-                tx_config.borrow().cancel.cancel();
-                tx_config.send_modify(|config| {
-                    config.module.values.insert(sym, val);
-                    config.cancel.cancel();
-                    config.cancel = CancellationToken::new();
-                });
-            }
             UIAction::Save => {
                 let module = tx_config.borrow().module.clone();
                 let output_name = ui_state.read().file_name.clone();
@@ -560,6 +534,32 @@ async fn ui_event_loop(
                     });
                 }
             }
+            UIAction::ToggleEntry(sym, tag) => {
+                if tag != ctag {
+                    continue;
+                }
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    if let Some(v) = entries.get_mut(&sym) {
+                        v.open = !v.open;
+                    }
+                });
+            }
+            UIAction::Set(sym, tag, val) => {
+                if tag != ctag {
+                    continue;
+                }
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    if let Some(node) = entries.get_mut(&sym) {
+                        node.update_config(Some(val.clone()));
+                    }
+                });
+                tx_config.borrow().cancel.cancel();
+                tx_config.send_modify(|config| {
+                    config.module.values.insert(sym, val);
+                    config.cancel.cancel();
+                    config.cancel = CancellationToken::new();
+                });
+            }
             UIAction::Unset(sym, tag) => {
                 if tag != ctag {
                     continue;
@@ -576,6 +576,7 @@ async fn ui_event_loop(
                     config.cancel = CancellationToken::new();
                 });
             }
+
             UIAction::ShowSym(sym, tag) => {
                 if tag != ctag {
                     continue;

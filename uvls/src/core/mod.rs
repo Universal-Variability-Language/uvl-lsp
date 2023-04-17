@@ -11,6 +11,7 @@ pub mod resolve;
 pub mod semantic;
 
 pub mod util;
+pub use log::info;
 pub use ast::*;
 pub use semantic::*;
 pub use util::*;

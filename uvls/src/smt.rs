@@ -26,7 +26,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::*;
 pub mod smt_lib;
+mod parse;
 pub use smt_lib::*;
+
 //SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
 //While the performance is worse than linking with Z3, we are solver independent and don't have to interact
 //with any C-Bindings. UVL is translated directly into SMT-LIB, both attributes and features are treated as
@@ -228,7 +230,7 @@ async fn find_fixed(
                 });
             let values = solve.values(unknown).await?;
             //info!("model {:?}", time.elapsed());
-            for (s, v) in module.parse_values(&values) {
+            for (s, v) in module.parse_values(&values,base_module) {
                 if let Some(old) = state.get(&s) {
                     match (v, old) {
                         (ConfigValue::Bool(true), SMTValueState::Off) => {
@@ -256,15 +258,28 @@ async fn create_model(
     fixed: bool,
     value: bool,
 ) -> Result<SMTModel> {
+    let time = Instant::now();
     let mut solver = SmtSolver::new(source, &cancel).await?;
+    info!("create model: {:?}",time.elapsed());
     if solver.check_sat().await? {
+
         let values = if value | fixed {
+
             let query = module
                 .variables
                 .iter()
                 .enumerate()
                 .fold(String::new(), |acc, (i, _)| format!("{acc} v{i}"));
-            module.parse_values(&solver.values(query).await?).collect()
+            
+
+            let values = solver.values(query).await?;
+
+
+            let time = Instant::now();
+            let values = module.parse_values(&values,base_module).collect();
+            info!("parse values: {:?}",time.elapsed());
+            values
+
         } else {
             HashMap::new()
         };

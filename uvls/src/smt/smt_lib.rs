@@ -2,8 +2,9 @@ use crate::core::*;
 use hashbrown::HashMap;
 use indexmap::IndexSet;
 use lazy_static::lazy_static;
-//use log::info;
+use log::info;
 use regex::Regex;
+use tokio::time::Instant;
 use std::fmt::Display;
 use std::fmt::Write;
 #[derive(Clone, Debug)]
@@ -46,23 +47,26 @@ pub enum Expr {
     Real(f64),
     String(String),
     Var(usize),
-    Strlen(Box<Expr>),
+    //Logic
     And(Vec<Expr>),
     Or(Vec<Expr>),
     Not(Box<Expr>),
     Implies(Vec<Expr>),
+    Greater(Vec<Expr>),
+    Less(Vec<Expr>),
+    Equal(Vec<Expr>),
+    AtLeast(usize, Vec<Expr>),
+    AtMost(usize, Vec<Expr>),
+    //Arithmetic
     Add(Vec<Expr>),
     Sub(Vec<Expr>),
     Mul(Vec<Expr>),
     Div(Vec<Expr>),
-    Greater(Vec<Expr>),
-    Less(Vec<Expr>),
-    Equal(Vec<Expr>),
+    //String ops
+    Strlen(Box<Expr>),
     StrLess(Vec<Expr>),
     StrLessEq(Vec<Expr>),
     StrConcat(Box<Expr>, Box<Expr>),
-    AtLeast(usize, Vec<Expr>),
-    AtMost(usize, Vec<Expr>),
     //IfThenElse
     Ite(Box<Expr>, Box<Expr>, Box<Expr>),
 }
@@ -105,11 +109,15 @@ impl SMTModule {
     pub fn parse_values<'a>(
         &'a self,
         values: &'a str,
+        module:&'a Module,
     ) -> impl Iterator<Item = (ModuleSymbol, ConfigValue)> + 'a {
+        super::parse::iter_values(self, module, values)
+        /*
         //This abomination parses a identifier with a bool, negative number, positive number or a string
         //The problem is that z3 encodes numbers using nested expressions instead of simple floating point
-        //values. Hopefull all cases are covered here...
+        //values. Hopefully all cases are covered here...
         //TODO replace this with a true eval parser(best use NOM)
+        
         lazy_static! {
             static ref RE: Regex = Regex::new(
                 r#"\(\s*v(\d+)\s+(?:(true|false)|\(- ((?:[0-9]*\.)?[0-9]+)\??|((?:[0-9]*\.)?[0-9]+)\??|"([^"]*)")\s*\)"#
@@ -136,6 +144,7 @@ impl SMTModule {
                 },
             )
         })
+        */
     }
     pub fn parse_unsat_core<'a>(&'a self, core: &'a str) -> impl Iterator<Item = AssertInfo> + 'a {
         lazy_static! {
@@ -148,8 +157,8 @@ impl SMTModule {
     }
     //tree to source
     pub fn to_source(&self, module: &Module) -> String {
-        let mut out = "(set-option :pp.decimal true)
-            (set-option :produce-unsat-cores true)
+        let time = Instant::now();
+        let mut out = "(set-option :produce-unsat-cores true)
             (define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))
             (set-option :smt.core.minimize true)\n"
             .to_string();
@@ -290,6 +299,7 @@ impl SMTModule {
             }
             let _ = write!(out, ")\n");
         }
+        info!("model to string  in {:?}",time.elapsed());
         //info!("{out}");
         out
     }

@@ -321,16 +321,6 @@ impl AsyncPipeline {
     pub fn client(&self) -> tower_lsp::Client {
         self.client.clone()
     }
-    pub async fn update_config(&self, doc: config::ConfigDocument, initial: bool) {
-        self.revision_counter.fetch_add(1, Ordering::SeqCst);
-        if initial {
-            let _ = self.tx_dirty_tree.send(());
-        }
-        let _ = self
-            .tx_link
-            .send(LinkMsg::UpdateConfig(Arc::new(doc)))
-            .await;
-    }
     pub fn subscribe_dirty_tree(&self) -> broadcast::Receiver<()> {
         self.tx_dirty_tree.subscribe()
     }
