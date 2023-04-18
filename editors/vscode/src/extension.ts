@@ -11,10 +11,13 @@ import * as mkdirp from "mkdirp";
 import * as admzip from "adm-zip";
 import * as child_process from "child_process";
 import {
+	
+	DiagnosticSeverity,
 	LanguageClient,
 	LanguageClientOptions,
 	ServerOptions,
 	Trace,
+	
 	TransportKind
 } from 'vscode-languageclient/node';
 import axios from "axios";
@@ -22,12 +25,15 @@ import { manual } from 'mkdirp';
 import { posix } from 'path';
 import AdmZip = require('adm-zip');
 import { start } from 'repl';
+import { ClientRequest } from 'http';
+import { info } from 'console';
 
 let client: LanguageClient | null = null;
 let outputChannel:vscode.OutputChannel|null = null ;
-const SOURCE_URI = "https://api.github.com/repos/Universal-Variability-Language/uvl-lsp/releases/latest"
-
-
+const SOURCE_URI = "https://api.github.com/repos/Universal-Variability-Language/uvl-lsp/releases/latest";
+let rangeOrOptionsDeadFeature: Array<vscode.Range>;
+let rangeOrOptionOptionalFeature: Array<vscode.Range>;
+let rangeOrOptionsRedudantConstraint: Array<vscode.Range>;
 
 function getDefaultInstallationName(): string | null {
 	// NOTE: Not using a JS switch because they're ugly as hell and clunky :(
@@ -110,7 +116,7 @@ async function uvlsPath(context: ExtensionContext) {
 		return null;
 	}
 
-	return uvlsPath
+	return uvlsPath;
 
 }
 async function installExecutable(context: ExtensionContext): Promise<string | null> {
@@ -275,20 +281,77 @@ async function startClient(context: ExtensionContext) {
 		window.showWarningMessage("Couldn't find Zig Language Server (UVLS) executable");
 		return;
 	}
+	console.log(path);
 	outputChannel = vscode.window.createOutputChannel("UVL Language Server");
 	const serverOptions: ServerOptions = {
 		command: path, // Replace with your own command.,
+		// command: "/home/pascalfoerster/Dokumente/Studium/Master/3Semester/UVL/uvl-lsp/target/debug/uvls",
+		 
 	};
+    // Decorator for dead features
+	const deadFeatureDecorator = vscode.window.createTextEditorDecorationType({
+		gutterIconPath: context.asAbsolutePath("assets/red-alert-icon.svg"),
+		gutterIconSize: "90%"
+	});
 
+	// Decorator for false-optional features
+	const optioanlFeatureDecorator = vscode.window.createTextEditorDecorationType({
+		gutterIconPath: context.asAbsolutePath("assets/warning-icon.svg"),
+		gutterIconSize: "90%"
+	});
+	
+	//Decorator for redundant Constraints
+	const redundantConstraintDecorator = vscode.window.createTextEditorDecorationType({
+		gutterIconPath: context.asAbsolutePath("assets/exclamation-round-line-icon.svg"),
+		gutterIconSize: "90%"
+	});
+
+	let documentSelector = [{ scheme: "file", language: "uvl" }, { scheme: "file", pattern: "**/*.uvl.json" }];
 	const clientOptions: LanguageClientOptions = {
-		documentSelector: [{ scheme: "file", language: "uvl" }, { scheme: "file", pattern: "**/*.uvl.json" }],
+		documentSelector,
 		outputChannel,
+		// middleware implements handleDiagnostic
+		middleware: {
+			// method are called if server send a notification "textDocument/diagnostic"
+			handleDiagnostics(uri, diagnostics, next) {
+				// handle anomilies
+				const textEditor = window.activeTextEditor;
+				rangeOrOptionsDeadFeature = [];
+				rangeOrOptionOptionalFeature = [];
+				rangeOrOptionsRedudantConstraint = [];
+				for(const ele of diagnostics){
+					console.log(ele.severity);
+					if(ele.severity === DiagnosticSeverity.Warning){
+						switch(ele.message){
+							case "dead feature":{
+								rangeOrOptionsDeadFeature.push(ele.range);
+								break;
+							}
+							case "false-optional feature":{
+								rangeOrOptionOptionalFeature.push(ele.range);
+								break;
+							}
+							case "redundant constraint":{
+								rangeOrOptionsRedudantConstraint.push(ele.range);
+								break;
+							}
+							 
+						}
+					}
+				}
+				textEditor?.setDecorations(redundantConstraintDecorator,rangeOrOptionsRedudantConstraint);
+				textEditor?.setDecorations(deadFeatureDecorator,rangeOrOptionsDeadFeature);
+				textEditor?.setDecorations(optioanlFeatureDecorator,rangeOrOptionOptionalFeature);
+				next(uri,diagnostics);
+			},
+		}
+		
 	};
 	outputChannel.appendLine("test")
 	client = new LanguageClient('uvls', serverOptions, clientOptions);
 	client.onRequest("workspace/executeCommand",async (args)=>{
 		await vscode.commands.executeCommand(args.command,args.arguments);
-
+		
 	});
 	client.setTrace(Trace.Verbose);
 	client.start();
