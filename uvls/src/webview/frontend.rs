@@ -1,10 +1,8 @@
 #![allow(non_snake_case)]
 use crate::ast::Type;
-use crate::config::*;
 use crate::module::ModuleSymbol;
 use crate::webview::*;
-use dioxus::prelude::*;
-
+//Render UVL content to HTML
 fn Spinner(cx: Scope) -> Element {
     cx.render(rsx! {
     svg{
@@ -26,13 +24,13 @@ fn Spinner(cx: Scope) -> Element {
 
     }})
 }
-//Icons taken from https://heroicons.com/
+//Icons taken from https://heroicons.com/ as SVG
 #[inline_props]
 fn Icon(cx: Scope, icon: Icon, class: Option<&'static str>) -> Element {
     let paths:&[_] =  match icon {
         Icon::File => {&["M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"]}
         Icon::Feature => {&["M4.745 3A23.933 23.933 0 003 12c0 3.183.62 6.22 1.745 9M19.5 3c.967 2.78 1.5 5.817 1.5 9s-.533 6.22-1.5 9M8.25 8.885l1.444-.89a.75.75 0 011.105.402l2.402 7.206a.75.75 0 001.104.401l1.445-.889m-8.25.75l.213.09a1.687 1.687 0 002.062-.617l4.45-6.676a1.688 1.688 0 012.062-.618l.213.09"]}
-        Icon::Atribute => {&[
+        Icon::Attribute => {&[
             "M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z",
             "M15 12a3 3 0 11-6 0 3 3 0 016 0z"                    
             ]}
@@ -91,7 +89,6 @@ struct ConfigInputProps<'a> {
     config: Option<&'a ConfigValue>,
     #[props(!optional)]
     base: Option<&'a ConfigValue>,
-    is_attrib: bool,
     ty: Type,
     unsat: bool,
     sym: ModuleSymbol,
@@ -121,6 +118,25 @@ fn to_number(input: &str) -> String {
         first
     }
 }
+#[inline_props]
+fn RealInput(cx: Scope,init_val:f64,sym: ModuleSymbol,tag: u8)->Element{
+    let tx = use_coroutine_handle::<UIAction>(cx).unwrap();
+    let val = use_state(cx,||init_val.to_string());
+    cx.render(rsx! {
+        input{
+            class:"input-value",
+            r#type:"number",
+            required:true,
+            value:"{val}",
+            oninput:move |e|{
+                val.set(to_number(&e.value));
+                tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(val.parse().unwrap_or(0.0))));
+
+            }
+        }
+    })
+
+}
 
 fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
     let ConfigInputProps {
@@ -128,11 +144,11 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
         unsat,
         config,
         base,
-        is_attrib: _,
         sym,
         tag,
     } = &cx.props;
     let tx = use_coroutine_handle::<UIAction>(cx).unwrap();
+    
     if let Some(config) = config {
         let rest = rsx! {
             rsx!{button{
@@ -155,21 +171,15 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
                     class:"value-btn",
                     onclick:move |_|{
                         tx.send(UIAction::Set(*sym,*tag,ConfigValue::Bool(!b)));
-
                     },
                     "{b}"
                 }
             },
             ConfigValue::Number(num) => rsx! {
-                input{
-                    class:"input-value",
-                    r#type:"number",
-                    required:true,
-                    value:"{num}",
-                    oninput:move |e|{
-                        tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(to_number(&e.value).parse().unwrap_or(0.0))));
-                        cx.needs_update();
-                    }
+                RealInput{
+                    sym:*sym,
+                    init_val:*num,
+                    tag:*tag,
                 }
             },
             ConfigValue::String(x) => rsx! {
@@ -236,7 +246,6 @@ fn Value(cx: Scope, value: UIEntryValue, sym: ModuleSymbol, tag: u8) -> Element 
                 unsat:*unsat,
                 sym:*sym,
                 ty:*ty,
-                is_attrib:false,
                 tag:*tag,
             }
         }),
@@ -254,7 +263,6 @@ fn Value(cx: Scope, value: UIEntryValue, sym: ModuleSymbol, tag: u8) -> Element 
                 unsat:*unsat,
                 sym:*sym,
                 ty:*ty,
-                is_attrib:false,
                 tag:*tag,
             }
         }),
@@ -270,7 +278,6 @@ fn Value(cx: Scope, value: UIEntryValue, sym: ModuleSymbol, tag: u8) -> Element 
                 unsat:*unsat,
                 sym:*sym,
                 ty:default.ty(),
-                is_attrib:true,
                 tag:*tag,
             }
         }),
@@ -281,23 +288,8 @@ fn icon(value: &UIEntryValue) -> Icon {
         UIEntryValue::Attributes(..) => Icon::Attributes,
         UIEntryValue::File { .. } => Icon::File,
         UIEntryValue::Feature { .. } => Icon::Feature,
-        UIEntryValue::Attribute { .. } => Icon::Atribute,
+        UIEntryValue::Attribute { .. } => Icon::Attribute,
         UIEntryValue::Link { ..}=>Icon::Link,
-    }
-}
-fn name(value: &UIEntryValue) -> String {
-    match value {
-        UIEntryValue::File { alias, name } => {
-            if let Some(alias) = alias {
-                format!("{}", alias)
-            } else {
-                format!("{}", name)
-            }
-        },
-        UIEntryValue::Link { name,.. }=>name.clone(),
-        UIEntryValue::Attribute { name, .. }
-        | UIEntryValue::Feature { name, .. }
-        | UIEntryValue::Attributes(name) => format!("{}", name),
     }
 }
 #[inline_props]
@@ -464,6 +456,7 @@ where
 pub fn App(cx: Scope<AppProps>) -> Element {
     let config = use_ref(cx, UIConfigState::default);
     let state = use_ref(cx, || UIState {
+        solver_active:false,
         sat: SatState::UNKNOWN,
         sync: UISyncState::Dirty,
         dir: "".into(),
@@ -501,6 +494,11 @@ pub fn App(cx: Scope<AppProps>) -> Element {
         }),
         UISyncState::Valid => {
             let values = file_values_iter(&lock);
+            let solver_state = if state_lock.solver_active{
+                "active"
+            }else{
+                "idle"
+            };
             cx.render(rsx! {
                 div {
                     ul{
@@ -525,6 +523,12 @@ pub fn App(cx: Scope<AppProps>) -> Element {
                                     "unsat"
                                 },
                                 "{state_lock.sat:?}"
+                            }
+                        }
+                        li{
+                            "Solver State: "
+                            a{
+                                "{solver_state}"
                             }
                         }
                         li{

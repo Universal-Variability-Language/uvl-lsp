@@ -3,7 +3,7 @@ const PREC = {
 
     not: 6,
     consequence: 2,
-    logic: 2,
+    logic: 3,
     eq: 4,
     mul: 5,
     add: 5,

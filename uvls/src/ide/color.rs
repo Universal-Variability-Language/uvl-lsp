@@ -1,7 +1,5 @@
-use crate::ast::*;
-use crate::completion::find_section;
-use crate::semantic::{RootGraph, Snapshot};
-use crate::util::{node_range, TS};
+use crate::core::*;
+use crate::ide::completion::find_section;
 use log::info;
 use ropey::Rope;
 use std::collections::HashSet;
@@ -36,6 +34,7 @@ pub fn token_types() -> Vec<SemanticTokenType> {
         SemanticTokenType::MACRO,
         SemanticTokenType::PARAMETER,
         SemanticTokenType::NUMBER,
+        SemanticTokenType::STRING,
 
     ]
 }
@@ -67,6 +66,7 @@ fn token_index(name: &str) -> u32 {
         "macro" => 9,
         "parameter" => 10,
         "number" => 11,
+        "string"=>12,
         _ => 0,
     }
 }
@@ -170,7 +170,7 @@ impl FileState {
         for i in cursor.matches(
             &TS.queries.highlight,
             origin,
-            crate::util::node_source(source),
+            node_source(source),
         ) {
             for c in i.captures {
                 let kind = captures[c.index as usize].as_str();
@@ -316,6 +316,9 @@ impl State {
         State {
             files: Default::default(),
         }
+    }
+    pub fn remove(&self,uri: &Url){
+        self.files.remove(uri);
     }
     pub fn get(
         &self,

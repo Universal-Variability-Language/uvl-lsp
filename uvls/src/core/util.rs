@@ -1,9 +1,5 @@
-use std::{
-    fmt::Display,
-    sync::atomic::{AtomicU64, Ordering},
-};
-
-use crate::query::Queries;
+use std::fmt::Display;
+use crate::core::query::Queries;
 use futures::Future;
 use lazy_static::lazy_static;
 use ropey::Rope;
@@ -97,13 +93,6 @@ pub fn header_kind(node: Node) -> &str {
 }
 
 pub type Result<T> = std::result::Result<T, Box<dyn error::Error + Send + Sync>>;
-fn shutdown_error() -> tower_lsp::jsonrpc::Error {
-    tower_lsp::jsonrpc::Error {
-        code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-        message: "".into(),
-        data: None,
-    }
-}
 
 #[derive(Debug)]
 struct CancelledError {}
@@ -125,63 +114,11 @@ pub async fn maybe_cancel<'a, F: Future + 'a>(
     }
 }
 
-pub async fn retry<'a, T, R, F>(f: F) -> Result<T>
-where
-    F: Fn() -> R,
-    R: Future<Output = Result<T>> + 'a,
-{
-    loop {
-        match f().await {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                if e.downcast_ref::<CancelledError>().is_none() {
-                    return Err(e);
-                }
-            }
-        }
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    }
-}
-pub struct AtomicSemaphorePermit<'a> {
-    owner: &'a AtomicSemaphore,
-}
-pub struct AtomicSemaphore {
-    counter: AtomicU64,
-}
-impl AtomicSemaphore {
-    pub fn new() -> Self {
-        AtomicSemaphore {
-            counter: AtomicU64::new(0),
-        }
-    }
-    pub fn take(&self) -> AtomicSemaphorePermit<'_> {
-        self.counter.fetch_add(1, Ordering::SeqCst);
-        AtomicSemaphorePermit { owner: self }
-    }
-    pub fn zero(&self) -> bool {
-        self.counter.load(Ordering::SeqCst) == 0
-    }
-}
-impl<'a> Drop for AtomicSemaphorePermit<'a> {
-    fn drop(&mut self) {
-        self.owner.counter.fetch_sub(1, Ordering::SeqCst);
-    }
-}
 pub fn is_config(uri: &Url) -> bool {
     uri.to_file_path()
         .map(|fp| {
             fp.extension()
                 .map(|ext| ext.to_str().unwrap() == "json")
-                .unwrap_or(false)
-        })
-        .unwrap_or(false)
-}
-
-pub fn is_uvl(uri: &Url) -> bool {
-    uri.to_file_path()
-        .map(|fp| {
-            fp.extension()
-                .map(|ext| ext.to_str().unwrap() == "uvl")
                 .unwrap_or(false)
         })
         .unwrap_or(false)

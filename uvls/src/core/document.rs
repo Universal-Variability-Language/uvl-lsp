@@ -1,10 +1,7 @@
-use log::info;
 use std::time::SystemTime;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Tree};
-
-
 use ropey::Rope;
 
 //update the document text using text deltas form the editor
@@ -18,7 +15,6 @@ pub fn update_text(
     let mut whole_file = false;
     for e in changes.content_changes.iter() {
         if let Some(range) = e.range {
-            info!("apply change");
             let start_line = range.start.line as usize;
             let end_line = range.end.line as usize;
 

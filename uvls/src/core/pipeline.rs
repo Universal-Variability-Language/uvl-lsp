@@ -1,13 +1,6 @@
-use crate::{
-    ast,
-    check::{self, DiagnosticUpdate, ErrorsAcc},
-    config,
-    document::*,
-    inlays::InlayHandler,
-    parse,
-    semantic::*,
-    smt, util,
-};
+use crate::{core::*,smt,ide::inlays::InlayHandler};
+use document::*;
+use check::*;
 use dashmap::DashMap;
 use hashbrown::HashMap;
 use log::info;
@@ -28,8 +21,8 @@ use tower_lsp::lsp_types::*;
 use util::Result;
 //The parsing frontend
 //To allow for more nimble and robust parsing, we use 2 stage process to parse 2 different syntax
-//trees with different grammers:
-// - Source code is initally parsed with a very relaxed UVL tree-sitter grammar. This results in
+//trees with different grammars:
+// - Source code is initially parsed with a very relaxed UVL tree-sitter grammar. This results in a
 //   loose syntax tree of UVL codefragments. We call this tree the 'green tree'
 //   it's used for all syntax analysis. Its also very cheap to parse and incremental so it can be
 //   parsed on every keystroke for syntax highlighting and completion context information.
@@ -37,16 +30,17 @@ use util::Result;
 //   good error corrections in many cases so parsing almost never fails.
 // - The green tree is translated into the red tree asynchronously. This second tree follows the UVL
 //   grammar spec and is used for all semantic analysis. During the translation
-//   from green to red tree very specific syntax errors are possible and forwarded to the user.
-//   All red trees are lated linked into a single model (the Root Graph) asynchronously.
+//   from green to red tree very specific syntax errors can be detected and forwarded to the user.
+//   All red trees are later linked into a single model (the Root Graph).
 //Green Trees are stored as Drafts while red trees are stored as an AST-ECS like structure
+//See https://github.com/rust-lang/rust-analyzer/blob/master/docs/dev/syntax.md for inspiration
 enum DraftMsg {
     Delete(Instant),
     Update(DidChangeTextDocumentParams, Instant),
     Snapshot(oneshot::Sender<Draft>),
-    Shutdown,
+    Shutdown,//Not really needed, TODO remove this
 }
-
+//Turn a tree-sitter trees into a usable rust structure and send it to the linker
 async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
     info!("update red tree {uri}");
     match draft {
@@ -55,7 +49,7 @@ async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
             source,
             tree,
         } => {
-            let mut ast = ast::visit_root(source.clone(), tree.clone(), uri.clone(), timestamp);
+            let mut ast = ast::AstDocument::new(source.clone(), tree.clone(), uri.clone(), timestamp);
             ast.errors.append(&mut check::check_sanity(&tree, &source));
             ast.errors.append(&mut check::check_errors(&tree, &source));
             let _ = tx_link.send(LinkMsg::UpdateAst(Arc::new(ast))).await;
@@ -159,7 +153,6 @@ enum LinkMsg {
     Delete(Url, Instant),
     UpdateAst(Arc<ast::AstDocument>),
     UpdateConfig(Arc<config::ConfigDocument>),
-    Shutdown,
 }
 //This handler links documents together, it also does type checking
 async fn link_handler(
@@ -167,12 +160,13 @@ async fn link_handler(
     tx_cache: watch::Sender<Arc<RootGraph>>,
     tx_err: mpsc::Sender<DiagnosticUpdate>,
 ) {
+    //First we gather changes toavoid redundant recomputation
     let mut latest_configs: HashMap<FileID, Arc<config::ConfigDocument>> = HashMap::new();
     let mut latest_ast: HashMap<FileID, Arc<ast::AstDocument>> = HashMap::new();
     let mut timestamps: HashMap<Url, Instant> = HashMap::new();
     let (tx_execute, rx_execute) = watch::channel((latest_ast.clone(), latest_configs.clone(), 0));
     let mut dirty = false;
-    let mut revision = 0;
+    let mut revision = 0;//Each change is one revision
     info!("started link handler");
     spawn(link_executor(rx_execute, tx_cache, tx_err));
     let mut timer = tokio::time::interval(tokio::time::Duration::from_millis(100));
@@ -180,9 +174,6 @@ async fn link_handler(
         select! {
             Some(msg)=rx.recv()=>{
                 match msg{
-                    LinkMsg::Shutdown=>{
-                        break;
-                    }
                     LinkMsg::Delete(uri,timestamp)=>{
                         if timestamps.get(&uri).map(|old|old < &timestamp).unwrap_or(true){
                             let id = FileID::new(uri.as_str());
@@ -220,7 +211,7 @@ async fn link_handler(
 
                 }
             }
-            _=timer.tick()=>{
+            _=timer.tick()=>{//every 100ms relink if there are changes
                 if dirty{
                     info!("link prepare");
                     dirty=false;
@@ -251,19 +242,21 @@ async fn link_handler(
             }
             info!("link execute");
             tx_cache.borrow().cancel();
-            let (ast, configs, revison) = (*rx.borrow_and_update()).clone();
+            let (ast, configs, revision) = (*rx.borrow_and_update()).clone();
             let mut err = ErrorsAcc {
                 files: &ast,
                 configs: &configs,
                 errors: HashMap::new(),
             };
             let old = tx_cache.borrow().cache().clone();
-            let root = RootGraph::new(&ast, &configs, revison, &old, &mut err, &mut timestamps);
+
+            //link files incrementally
+            let root = RootGraph::new(&ast, &configs, revision, &old, &mut err, &mut timestamps);
 
             let _ = tx_cache.send(Arc::new(root));
             let _ = tx_err
                 .send(DiagnosticUpdate {
-                    timestamp: revison,
+                    timestamp: revision,
                     error_state: err.errors,
                 })
                 .await;
@@ -327,16 +320,6 @@ impl AsyncPipeline {
 
     pub fn client(&self) -> tower_lsp::Client {
         self.client.clone()
-    }
-    pub async fn update_config(&self, doc: config::ConfigDocument, intial: bool) {
-        self.revision_counter.fetch_add(1, Ordering::SeqCst);
-        if intial {
-            let _ = self.tx_dirty_tree.send(());
-        }
-        let _ = self
-            .tx_link
-            .send(LinkMsg::UpdateConfig(Arc::new(doc)))
-            .await;
     }
     pub fn subscribe_dirty_tree(&self) -> broadcast::Receiver<()> {
         self.tx_dirty_tree.subscribe()
@@ -431,7 +414,7 @@ impl AsyncPipeline {
         loop {
             {
                 let state = rx.borrow_and_update();
-                if state.containes(uri) {
+                if state.contains(uri) {
                     info!("waited {:?} for root", time.elapsed());
                     return Ok(state.clone());
                 }

@@ -1,6 +1,4 @@
-use crate::{
-    ast::*, config::*, module::*, pipeline::AsyncPipeline, semantic::*, smt, util::Result,
-};
+use crate::{core::*, ide, smt};
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
     response::Html,
@@ -22,20 +20,21 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use ustr::Ustr;
-/* This web interface allow simple configuration of uvl models within the sever.
+mod frontend;
+/* This web interface allows simple configuration of uvl models within the sever.
 The GUI is written as a html-over-wire liveview, via dioxus. The liveview can then be
 accessed directly in vs-code or the native browser. Each server instance has its own localhost
-TCP port {p}, configuration is possible over two diffrent entries:
+TCP port {p}, configuration is possible over two different entries:
 localhost:{p}/create/{uvl_base_file} - Create an empty config from a uvl base file
 localhost:{p}/load/{uvl_config_file} - Load a configuration from a json file
 
 
 The actual GUI is implemented as redux style asynchronous event loop. This is
-mainly due to the fact that its simple and requires minmal state management.
-Currently the whole tree is redarwn when a value changes since there is only one global
+mainly due to the fact that its simple and requires minimal state management.
+Currently the whole tree is redrawn when a value changes since there is only one global
 configuration and tree state. This should be separated.
-To synchronise the webview with the rest of the server two handlers are used:
-ui_sync and smt::web_view_handler. The first detects file changes and rebuilds the target modul,
+To synchronize the webview with the rest of the server two handlers are used:
+ui_sync and smt::web_view_handler. The first detects file changes and rebuilds the target module,
 the second handler calculates new smt values when things change.
 */
 
@@ -44,7 +43,7 @@ pub enum Icon {
     File,
     Feature,
     Attributes,
-    Atribute,
+    Attribute,
     Expand,
     Collapse,
     Circle,
@@ -154,6 +153,7 @@ pub struct UIConfigState {
 pub struct UIState {
     pub sat: SatState,
     pub sync: UISyncState,
+    pub solver_active: bool,
     pub dir: String,
     pub file_name: String,
     pub show: bool,
@@ -163,6 +163,7 @@ pub struct ConfigSource {
     pub module: ConfigModule,
     pub tag: u8,
     pub cancel: CancellationToken,
+    pub ok: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +176,7 @@ pub enum UIAction {
     Set(ModuleSymbol, u8, ConfigValue),
     Unset(ModuleSymbol, u8),
     ShowSym(ModuleSymbol, u8),
+    SolverActive,
     Save,
     Show,
 }
@@ -366,6 +368,7 @@ fn rebuild_tree(source: &ConfigSource) -> Option<UIConfigState> {
             &mut entries,
         );
     }
+
     Some(UIConfigState {
         entries,
         tag: source.tag,
@@ -385,7 +388,7 @@ async fn ui_sync(
                 info!("dirty");
                 tx_sync.send(UIAction::TreeDirty).await?;
                 let root =pipeline.sync_root_global().await?;
-                if root.containes_id(target){
+                if root.contains_id(target){
 
                 tx_sync
                     .send(UIAction::UpdateRoot(
@@ -427,12 +430,14 @@ fn rebuild_config(
 //Transfer state from with a new module
 fn transfer_config(source: &mut ConfigSource, new: Arc<Module>) {
     if !new.ok {
+        source.ok = false;
         return;
     }
     let ser = source.module.serialize();
     let (new_values, _) = new.resolve_config(&ser, |_, _| {});
     source.module.module = new;
     source.module.values = new_values;
+    source.ok = true;
 }
 
 //redux style state management
@@ -451,6 +456,17 @@ async fn ui_event_loop(
     loop {
         let e = select! {Some(e)=rx_ui.next()=>e,Some(e)=rx_sync.recv()=>e, else=>{break;}};
         match e {
+            UIAction::SolverActive => {
+                ui_state.with_mut(|state| {
+                    state.solver_active = true;
+                    state.sat = SatState::UNKNOWN;
+                });
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    for e in entries.values_mut() {
+                        e.unsat(false);
+                    }
+                });
+            }
             UIAction::TreeDirty => {
                 ui_state.with_mut(|state| {
                     state.sync = UISyncState::Dirty;
@@ -471,34 +487,8 @@ async fn ui_event_loop(
                 } else {
                     ui_state.with_mut(|x| {
                         x.sync = UISyncState::InternalError("invalid sources".into());
-                    })
+                    });
                 }
-            }
-            UIAction::ToggleEntry(sym, tag) => {
-                if tag != ctag {
-                    continue;
-                }
-                ui_config.with_mut(|UIConfigState { entries, .. }| {
-                    if let Some(v) = entries.get_mut(&sym) {
-                        v.open = !v.open;
-                    }
-                });
-            }
-            UIAction::Set(sym, tag, val) => {
-                if tag != ctag {
-                    continue;
-                }
-                ui_config.with_mut(|UIConfigState { entries, .. }| {
-                    if let Some(node) = entries.get_mut(&sym) {
-                        node.update_config(Some(val.clone()));
-                    }
-                });
-                tx_config.borrow().cancel.cancel();
-                tx_config.send_modify(|config| {
-                    config.module.values.insert(sym, val);
-                    config.cancel.cancel();
-                    config.cancel = CancellationToken::new();
-                });
             }
             UIAction::Save => {
                 let module = tx_config.borrow().module.clone();
@@ -531,18 +521,44 @@ async fn ui_event_loop(
                 if !show {
                     pipeline
                         .inlay_state()
-                        .set_source(crate::inlays::InlaySource::None)
+                        .set_source(ide::inlays::InlaySource::None)
                         .await;
                 } else {
                     pipeline
                         .inlay_state()
-                        .set_source(crate::inlays::InlaySource::Web(id))
+                        .set_source(ide::inlays::InlaySource::Web(id))
                         .await;
                     tx_config.send_modify(|config| {
                         config.cancel.cancel();
                         config.cancel = CancellationToken::new();
                     });
                 }
+            }
+            UIAction::ToggleEntry(sym, tag) => {
+                if tag != ctag {
+                    continue;
+                }
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    if let Some(v) = entries.get_mut(&sym) {
+                        v.open = !v.open;
+                    }
+                });
+            }
+            UIAction::Set(sym, tag, val) => {
+                if tag != ctag {
+                    continue;
+                }
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    if let Some(node) = entries.get_mut(&sym) {
+                        node.update_config(Some(val.clone()));
+                    }
+                });
+                tx_config.borrow().cancel.cancel();
+                tx_config.send_modify(|config| {
+                    config.module.values.insert(sym, val);
+                    config.cancel.cancel();
+                    config.cancel = CancellationToken::new();
+                });
             }
             UIAction::Unset(sym, tag) => {
                 if tag != ctag {
@@ -560,6 +576,7 @@ async fn ui_event_loop(
                     config.cancel = CancellationToken::new();
                 });
             }
+
             UIAction::ShowSym(sym, tag) => {
                 if tag != ctag {
                     continue;
@@ -583,7 +600,10 @@ async fn ui_event_loop(
                 if tag != ctag {
                     continue;
                 }
-                ui_state.with_mut(|state| state.sat = SatState::ERR(msg))
+                ui_state.with_mut(|state| {
+                    state.sat = SatState::ERR(msg);
+                    state.solver_active = false;
+                })
             }
             UIAction::UpdateSMTModel(model, tag) => {
                 if tag != ctag {
@@ -591,7 +611,10 @@ async fn ui_event_loop(
                 }
                 ui_config.with_mut(|UIConfigState { entries, .. }| match model {
                     smt::SMTModel::SAT { values, .. } => {
-                        ui_state.with_mut(|state| state.sat = SatState::SAT);
+                        ui_state.with_mut(|state| {
+                            state.sat = SatState::SAT;
+                            state.solver_active = false
+                        });
                         for (k, v) in values {
                             let entry = &mut entries[&k];
 
@@ -602,6 +625,7 @@ async fn ui_event_loop(
                     smt::SMTModel::UNSAT { reasons } => {
                         ui_state.with_mut(|state| {
                             state.sat = SatState::UNSAT;
+                            state.solver_active = false;
                         });
                         for i in entries.values_mut() {
                             i.update_smt(None);
@@ -639,7 +663,7 @@ pub async fn ui_main(
         AppInitialParams::Create(path) => {
             let root = pipeline.sync_root_global().await?;
             let id = FileID::new(format!("file:///{path}").as_str());
-            if root.containes_id(id) {
+            if root.contains_id(id) {
                 let c = ConfigSource {
                     root: id,
                     module: ConfigModule {
@@ -649,6 +673,7 @@ pub async fn ui_main(
                     },
                     tag: (root.revision() % 256) as u8,
                     cancel: CancellationToken::new(),
+                    ok: true,
                 };
                 let path = id.filepath();
                 let mut dest = path.clone();
@@ -674,6 +699,7 @@ pub async fn ui_main(
                     module: src.clone(),
                     tag: (root.revision() % 256) as u8,
                     cancel: CancellationToken::new(),
+                    ok: src.ok,
                 };
                 let dest = path.filepath();
                 let tgt_path = src.module.file(InstanceID(0)).id.filepath();
@@ -700,13 +726,13 @@ pub async fn ui_main(
         rx_config,
         tx_sync.clone(),
         pipeline.inlay_state().clone(),
-        crate::inlays::InlaySource::Web(id),
+        ide::inlays::InlaySource::Web(id),
     ));
     //Sync module with the lsp state
     spawn(ui_sync(pipeline.clone(), tx_sync, root));
     //Run the event loop
     ui_event_loop(
-        id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline, tgt_path,
+        id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline, tgt_path
     )
     .await?;
 
@@ -718,7 +744,7 @@ pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
     info!("Starting web handler");
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
     let view = dioxus_liveview::LiveViewPool::new();
-    let style = include_str!("style.css");
+    let style = include_str!("webview/style.css");
 
     let app = Router::new()
         // The root route contains the glue code to connect to the WebSocket
@@ -780,7 +806,7 @@ pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
                         _ = view
                             .launch_with_props(
                                 dioxus_liveview::axum_socket(socket),
-                                crate::webview_frontend::App,
+                                frontend::App,
                                 AppProps {
                                     initial: match op.as_str() {
                                         "create" => AppInitialParams::Create(path),
@@ -795,11 +821,11 @@ pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
 
                         if pipeline
                             .inlay_state()
-                            .is_active(crate::inlays::InlaySource::Web(id))
+                            .is_active(ide::inlays::InlaySource::Web(id))
                         {
                             pipeline
                                 .inlay_state()
-                                .set_source(crate::inlays::InlaySource::None)
+                                .set_source(ide::inlays::InlaySource::None)
                                 .await;
                         }
                         info!("Exit www");

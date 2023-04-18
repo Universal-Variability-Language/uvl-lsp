@@ -1,10 +1,5 @@
-use crate::ast::*;
-use crate::completion::*;
-use crate::document::Draft;
-use crate::parse::*;
-use crate::resolve;
-use crate::semantic::*;
-use crate::util::*;
+use crate::core::*;
+use crate::ide::completion::*;
 use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;

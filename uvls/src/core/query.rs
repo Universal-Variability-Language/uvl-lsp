@@ -1,4 +1,4 @@
-use ropey::Rope;
+//use ropey::Rope;
 use tree_sitter::{Language, Query};
 static CHECK_SANITY: &str = r#"
 (blk
@@ -76,7 +76,7 @@ impl Queries {
         }
     }
 }
-
+/*
 pub fn node_source(source: &Rope) -> impl tree_sitter::TextProvider<'_> {
     |node: tree_sitter::Node| {
         source
@@ -84,4 +84,4 @@ pub fn node_source(source: &Rope) -> impl tree_sitter::TextProvider<'_> {
             .chunks()
             .map(|i: &str| i.as_bytes())
     }
-}
+}*/

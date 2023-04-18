@@ -1,8 +1,5 @@
-use crate::ast::insert_multi;
-use crate::ast::AstDocument;
-use crate::ast::*;
-use crate::semantic::*;
-use crate::util::*;
+use crate::core::*;
+use ast::insert_multi;
 use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
@@ -12,17 +9,6 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::Client;
 use tree_sitter::{Node, QueryCursor, Tree};
 
-/*
- * Most error checking happens in here.
- * Files are checked in three phases if one phase failes checking is stopped.
- * Phase1. Check Sanity: Here we check if the file is ambiguous,
- * this happens for example if there is a missing opperand at line break
- * Phase2. Check References: When all files have correct syntax we check if pathes are valid and
- * have the correct type
- *
- *
- * All erros have a artificial severity weight to mask consequential errors.
-*/
 
 #[derive(Clone, Debug)]
 pub struct ErrorInfo {
@@ -273,7 +259,7 @@ pub async fn diagnostic_handler(mut rx: mpsc::Receiver<DiagnosticUpdate>, client
 pub fn check_includes(_doc: &AstDocument) -> Vec<ErrorInfo> {
     Default::default()
 }
-
+//Used to gather errors in compiler stages
 pub struct ErrorsAcc<'a> {
     pub errors: HashMap<FileID, Vec<ErrorInfo>>,
     pub files: &'a AstFiles,

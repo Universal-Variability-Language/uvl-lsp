@@ -1,660 +1,18 @@
-use crate::check::ErrorInfo;
-use crate::parse::*;
-use crate::semantic::FileID;
-use crate::util::{lsp_range, node_range};
-use enumflags2::bitflags;
-use hashbrown::HashMap;
-use itertools::Itertools;
+use crate::core::*;
+use ast::visitor::*;
+use ast::Ast;
+use check::ErrorInfo;
+use parse::*;
+use semantic::FileID;
+use util::{node_range};
 use log::info;
 use ropey::Rope;
 use std::borrow::{Borrow, Cow};
-use std::hash::Hash;
-use std::path::Component;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 use tree_sitter::{Node, Tree, TreeCursor};
-use ustr::Ustr;
-//Easy to work with AST parsing and util.
-//The AST is stored as an ECS like structure
-//This allows fast queries over all features groups etc.
-//Features, Attributes, Imports and Directories are stored in a typed radix tree.
-//The radix tree is represented via a maps (sym0,name,ty) -> sym1
-//where ty is the type of sym1. Using this representation lowers total
-//memory consumption by a nice 20%
-//TODO recheck if the radix tree is still required
-//TODO check if an index tree could be used
-//TODO Should be split into multiple files
-
-pub fn uri_to_path(uri: &Url) -> Option<Vec<Ustr>> {
-    let mut p = uri.to_file_path().ok()?;
-    p.set_extension("");
-    p.components()
-        .filter_map(|c| match c {
-            Component::Normal(os) => os.to_str().map(|s| Some(s.into())),
-            _ => None,
-        })
-        .collect()
-}
-
-pub fn insert_multi<K, V>(map: &mut HashMap<K, Vec<V>>, k: K, v: V)
-where
-    K: Hash + Eq,
-{
-    if let Some(old) = map.get_mut(&k) {
-        old.push(v)
-    } else {
-        map.insert(k, vec![v]);
-    }
-}
-//Basic Ast components
-pub type Span = std::ops::Range<usize>;
-#[derive(Clone, Debug)]
-pub struct SymbolSpan {
-    pub name: Ustr,
-    pub span: Span,
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Path {
-    pub names: Vec<Ustr>,
-    pub spans: Vec<Span>,
-}
-
-impl Path {
-    pub fn append(&self, arg: &SymbolSpan) -> Path {
-        let mut new = self.clone();
-        new.names.push(arg.name);
-        new.spans.push(arg.span.clone());
-        new
-    }
-    pub fn len(&self) -> usize {
-        self.names.len()
-    }
-    pub fn range(&self) -> Span {
-        if !self.spans.is_empty() {
-            self.spans[0].start..self.spans.last().unwrap().end
-        } else {
-            0..0
-        }
-    }
-    pub fn segment(&self, offset: usize) -> usize {
-        self.spans
-            .iter()
-            .take_while(|i| i.start < offset)
-            .count()
-            .saturating_sub(1)
-    }
-    pub fn to_string(&self) -> String {
-        self.names.iter().map(|i| i.as_str()).join(".")
-    }
-}
-
-//Type definitions for symboles
-
-#[bitflags]
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Type {
-    String,
-    Real,
-    Vector,
-    Attributes,
-    Bool,
-    Void,
-    Namespace,
-}
-
-#[derive(Clone, Debug)]
-pub enum GroupMode {
-    Or,
-    Alternative,
-    Optional,
-    Mandatory,
-    Cardinality(Cardinality),
-}
-#[derive(Clone, Debug)]
-pub enum Cardinality {
-    From(usize),
-    Range(usize, usize),
-    Max(usize),
-    Any,
-}
-#[derive(Clone, Debug)]
-pub enum LanguageLevelMajor {
-    SAT,
-    SMT,
-}
-#[derive(Clone, Debug)]
-pub enum LanguageLevelSMT {
-    Any,
-    FeatureCardinality,
-    Aggregate,
-}
-#[derive(Clone, Debug)]
-pub enum LanguageLevelSAT {
-    Any,
-    GroupCardinality,
-}
-#[derive(Clone, Debug)]
-pub enum LanguageLevel {
-    SAT(Vec<LanguageLevelSAT>),
-    SMT(Vec<LanguageLevelSMT>),
-}
-
-#[derive(Clone, Debug)]
-struct LanguageLevelDecl {
-    lang_lvl: LanguageLevel,
-    span: Span,
-}
-#[derive(Clone, Debug)]
-pub struct Feature {
-    pub name: SymbolSpan,
-    pub cardinality: Option<Cardinality>,
-    pub ty: Type,
-}
-#[derive(Clone, Debug)]
-pub struct Import {
-    pub path: Path,
-    pub alias: Option<SymbolSpan>,
-}
-#[derive(Clone, Debug)]
-pub struct Namespace {
-    pub prefix: Path,
-}
-#[derive(Clone, Debug)]
-pub struct Group {
-    pub mode: GroupMode,
-    pub span: Span,
-}
-#[derive(Clone, Debug)]
-pub struct Reference {
-    pub path: Path,
-}
-#[derive(Clone, Debug)]
-pub struct Attribute {
-    pub name: SymbolSpan,
-    pub value: ValueDecl,
-    pub depth: u32,
-}
-#[derive(Clone, Debug)]
-pub struct Dir {
-    pub name: Ustr,
-    pub depth: u32,
-}
-
-#[derive(Clone, Debug)]
-pub enum Value {
-    Void,
-    Number(f64),
-    String(String),
-    Vector,
-    Bool(bool),
-    Attributes,
-}
-
-#[derive(Clone, Debug)]
-pub struct ValueDecl {
-    pub value: Value,
-    pub span: Span,
-}
-
-impl Default for Value {
-    fn default() -> Self {
-        Value::Void
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum NumericOP {
-    Add,
-    Sub,
-    Div,
-    Mul,
-}
-
-impl NumericOP {
-    pub fn parse(op: &str) -> Option<Self> {
-        match op {
-            "+" => Some(NumericOP::Add),
-            "-" => Some(NumericOP::Sub),
-            "*" => Some(NumericOP::Mul),
-            "/" => Some(NumericOP::Div),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LogicOP {
-    And,
-    Or,
-    Implies,
-    Equiv,
-}
-
-impl LogicOP {
-    pub fn parse(op: &str) -> Option<Self> {
-        match op {
-            "&" => Some(LogicOP::And),
-            "|" => Some(LogicOP::Or),
-            "=>" => Some(LogicOP::Implies),
-            "<=>" => Some(LogicOP::Equiv),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum AggregateOP {
-    Avg,
-    Sum,
-}
-
-impl AggregateOP {
-    pub fn parse(source: &str, op: Node) -> Option<Self> {
-        match &source[op.byte_range()] {
-            "avg" => Some(AggregateOP::Avg),
-            "sum" => Some(AggregateOP::Sum),
-            _ => None,
-        }
-    }
-    pub fn from_str(v: &str) -> Option<Self> {
-        match v {
-            "avg" => Some(AggregateOP::Avg),
-            "sum" => Some(AggregateOP::Sum),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum EquationOP {
-    Greater,
-    Smaller,
-    Equal,
-}
-
-impl EquationOP {
-    pub fn parse(op: &str) -> Option<Self> {
-        match op {
-            ">" => Some(Self::Greater),
-            "<" => Some(Self::Smaller),
-            "==" => Some(Self::Equal),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum Constraint {
-    Constant(bool),
-    Equation {
-        op: EquationOP,
-        lhs: Box<ExprDecl>,
-        rhs: Box<ExprDecl>,
-    },
-    Logic {
-        op: LogicOP,
-        lhs: Box<ConstraintDecl>,
-        rhs: Box<ConstraintDecl>,
-    },
-    Ref(Symbol),
-    Not(Box<ConstraintDecl>),
-}
-
-#[derive(Clone, Debug)]
-pub struct ConstraintDecl {
-    pub content: Constraint,
-    pub span: Span,
-}
-
-#[derive(Clone, Debug)]
-pub enum Expr {
-    Number(f64),
-    String(String),
-    Ref(Symbol),
-    Binary {
-        op: NumericOP,
-        rhs: Box<ExprDecl>,
-        lhs: Box<ExprDecl>,
-    },
-    Aggregate {
-        op: AggregateOP,
-        context: Option<Symbol>,
-        query: Path,
-    },
-    Len(Box<ExprDecl>),
-}
-#[derive(Clone, Debug)]
-pub struct ExprDecl {
-    pub content: Expr,
-    pub span: Span,
-}
-//A symbole reprensents a entity in some document
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, enum_kinds::EnumKind)]
-#[enum_kind(SymbolKind, derive(Hash))]
-pub enum Symbol {
-    Feature(usize),
-    Constraint(usize),
-    Attribute(usize),
-    Reference(usize),
-    Group(usize),
-    Import(usize),
-    LangLvl(usize),
-    Dir(usize),
-
-    Root,
-}
-impl Symbol {
-    pub fn offset(&self) -> usize {
-        match self {
-            Self::Feature(id)
-            | Self::Constraint(id)
-            | Self::Attribute(id)
-            | Self::Reference(id)
-            | Self::Group(id)
-            | Self::LangLvl(id)
-            | Self::Dir(id)
-            | Self::Import(id) => *id,
-            _ => panic!(),
-        }
-    }
-}
-//1->N parent child relation
-#[derive(Default, Debug, Clone)]
-struct TreeMap {
-    children: HashMap<Symbol, Vec<Symbol>>,
-    parent: HashMap<Symbol, Symbol>,
-}
-impl TreeMap {
-    fn insert(&mut self, parent: Symbol, child: Symbol) {
-        insert_multi(&mut self.children, parent, child);
-        self.parent.insert(child, parent);
-    }
-}
-//Ast container each symbole kind lifes in its own vector
-#[derive(Clone, Debug, Default)]
-struct Ast {
-    namespace: Option<Path>,
-    includes: Vec<LanguageLevelDecl>,
-    import: Vec<Import>,
-    features: Vec<Feature>,
-    constraints: Vec<ConstraintDecl>,
-    attributes: Vec<Attribute>,
-    references: Vec<Reference>,
-    groups: Vec<Group>,
-    dirs: Vec<Dir>,
-    structure: TreeMap,
-    //The index is stored as a typed radix tree
-    index: HashMap<(Symbol, Ustr, SymbolKind), Symbol>,
-}
-impl Ast {
-    pub fn import_prefix(&self, sym: Symbol) -> &[Ustr] {
-        match sym {
-            Symbol::Import(i) => {
-                let im = &self.import[i];
-                if let Some(alias) = im.alias.as_ref() {
-                    std::slice::from_ref(&alias.name)
-                } else {
-                    &im.path.names
-                }
-            }
-            _ => unimplemented!(),
-        }
-    }
-    //call f for each child under sym and prefix
-    fn lookup<F: FnMut(Symbol)>(&self, sym: Symbol, prefix: Ustr, mut f: F) {
-        match sym {
-            Symbol::Root => {
-                if let Some(&dst) = self.index.get(&(sym, prefix, SymbolKind::Import)) {
-                    f(dst);
-                }
-                if let Some(&dst) = self.index.get(&(sym, prefix, SymbolKind::Dir)) {
-                    f(dst);
-                }
-                if let Some(&dst) = self.index.get(&(sym, prefix, SymbolKind::Feature)) {
-                    f(dst);
-                }
-            }
-            Symbol::Feature(..) => {
-                if let Some(&dst) = self.index.get(&(sym, prefix, SymbolKind::Attribute)) {
-                    f(dst);
-                }
-            }
-            Symbol::Attribute(..) => {
-                if let Some(&dst) = self.index.get(&(sym, prefix, SymbolKind::Attribute)) {
-                    f(dst);
-                }
-            }
-            Symbol::Dir(..) => {
-                if let Some(&dst) = self.index.get(&(sym, prefix, SymbolKind::Import)) {
-                    f(dst);
-                }
-                if let Some(&dst) = self.index.get(&(sym, prefix, SymbolKind::Dir)) {
-                    f(dst);
-                }
-            }
-            _ => {}
-        }
-    }
-    fn name(&self, sym: Symbol) -> Option<Ustr> {
-        match sym {
-            Symbol::Feature(i) => Some(self.features[i].name.name),
-            Symbol::Attribute(i) => Some(self.attributes[i].name.name),
-            Symbol::Import(i) => {
-                if let Some(alias) = self.import[i].alias.as_ref() {
-                    Some(alias.name)
-                } else {
-                    self.import[i].path.names.last().cloned()
-                }
-            }
-            Symbol::Dir(i) => Some(self.dirs[i].name),
-            _ => None,
-        }
-    }
-    fn lsp_range(&self, sym: Symbol, source: &Rope) -> Option<tower_lsp::lsp_types::Range> {
-        self.span(sym).and_then(|s| lsp_range(s, source))
-    }
-    fn span(&self, sym: Symbol) -> Option<Span> {
-        match sym {
-            Symbol::Feature(i) => Some(self.features[i].name.span.clone()),
-            Symbol::Attribute(i) => Some(self.attributes[i].name.span.clone()),
-            Symbol::Import(i) => {
-                let import = &self.import[i];
-                if let Some(alias) = import.alias.as_ref() {
-                    Some(import.path.range().start..alias.span.end)
-                } else {
-                    Some(import.path.range())
-                }
-            }
-            Symbol::Reference(i) => Some(self.references[i].path.range()),
-            Symbol::Group(i) => Some(self.groups[i].span.clone()),
-            Symbol::Constraint(i) => Some(self.constraints[i].span.clone()),
-            Symbol::LangLvl(i) => Some(self.includes[i].span.clone()),
-            _ => None,
-        }
-    }
-    fn children(&self, sym: Symbol) -> impl Iterator<Item = Symbol> + DoubleEndedIterator + '_ {
-        self.structure
-            .children
-            .get(&sym)
-            .into_iter()
-            .flat_map(|v| v.iter().cloned())
-    }
-    fn all_imports(&self) -> impl Iterator<Item = Symbol> + DoubleEndedIterator {
-        (0..self.import.len()).map(Symbol::Import)
-    }
-    fn all_features(&self) -> impl Iterator<Item = Symbol> {
-        (0..self.features.len()).map(Symbol::Feature)
-    }
-    fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
-        (0..self.attributes.len()).map(Symbol::Attribute)
-    }
-    fn all_references(&self) -> impl Iterator<Item = Symbol> {
-        (0..self.references.len()).map(Symbol::Reference)
-    }
-    fn all_constraints(&self) -> impl Iterator<Item = Symbol> {
-        (0..self.constraints.len()).map(Symbol::Constraint)
-    }
-    fn all_lang_lvls(&self) -> impl Iterator<Item = Symbol> {
-        (0..self.includes.len()).map(Symbol::LangLvl)
-    }
-    fn find(&self, offset: usize) -> Option<Symbol> {
-        self.all_imports()
-            .chain(self.all_features())
-            .chain(self.all_attributes())
-            .chain(self.all_references())
-            .find(|s| self.span(*s).unwrap().contains(&offset))
-    }
-}
-
-pub trait Visitor<'a> {
-    fn cursor(&self) -> &TreeCursor<'a>;
-    fn cursor_mut(&mut self) -> &mut TreeCursor<'a>;
-    fn source(&self) -> &Rope;
-    fn push_err_raw(&mut self, err: ErrorInfo);
-    fn skip_extra(&mut self) -> bool {
-        loop {
-            if !self.node().is_extra() && !self.node().is_error() {
-                return true;
-            }
-            if !self.cursor_mut().goto_next_sibling() {
-                return false;
-            }
-        }
-    }
-    fn goto_first_child(&mut self) -> bool {
-        if self.cursor_mut().goto_first_child() {
-            if self.skip_extra() {
-                true
-            } else {
-                self.goto_parent();
-                false
-            }
-        } else {
-            false
-        }
-    }
-    fn goto_named(&mut self) -> bool {
-        loop {
-            if self.node().is_named() {
-                return true;
-            }
-            if !self.goto_next_sibling() {
-                return false;
-            }
-        }
-    }
-    fn goto_next_sibling(&mut self) -> bool {
-        self.cursor_mut().goto_next_sibling() && self.skip_extra()
-    }
-    fn goto_parent(&mut self) {
-        self.cursor_mut().goto_parent();
-    }
-    fn kind(&self) -> &str {
-        self.cursor().node().kind()
-    }
-    fn node(&self) -> Node<'a> {
-        self.cursor().node()
-    }
-    fn child_by_name(&self, name: &str) -> Option<Node<'a>> {
-        self.node().child_by_field_name(name)
-    }
-    fn goto_next_kind(&mut self, kind: &str) -> bool {
-        loop {
-            if !self.goto_next_sibling() {
-                return false;
-            }
-            if self.kind() == kind {
-                return true;
-            }
-        }
-    }
-    fn goto_field(&mut self, name: &str) -> bool {
-        loop {
-            if self
-                .cursor()
-                .field_name()
-                .map(|f| f == name)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-            if !self.goto_next_sibling() {
-                return false;
-            }
-        }
-    }
-    fn goto_kind(&mut self, name: &str) -> bool {
-        loop {
-            if self.kind() == name {
-                return true;
-            }
-            if !self.goto_next_sibling() {
-                return false;
-            }
-        }
-    }
-    fn push_error<T: Into<String>>(&mut self, w: u32, error: T) {
-        self.push_err_raw(ErrorInfo {
-            location: node_range(self.node(), self.source()),
-            severity: DiagnosticSeverity::ERROR,
-            weight: w,
-            msg: error.into(),
-        });
-    }
-    fn push_error_node<T: Into<String>>(&mut self, node: Node, w: u32, error: T) {
-        self.push_err_raw(ErrorInfo {
-            location: node_range(node, self.source()),
-            severity: DiagnosticSeverity::ERROR,
-            weight: w,
-            msg: error.into(),
-        });
-    }
-}
-//Utilitu function, tree-sitter uses cursor to traverse trees, this function is a scope that
-//gurantees to "go down" call f and later "go up" one level. It also protects against stack
-//overflow
-pub fn visit_children<'a, F, T, V>(state: &mut V, mut f: F) -> T
-where
-    V: Visitor<'a>,
-    F: FnMut(&mut V) -> T,
-    T: Default,
-{
-    if state.goto_first_child() {
-        if stacker::remaining_stack().unwrap() <= 32 * 1024 {
-            info!("In the red zone");
-        }
-        let out = stacker::maybe_grow(32 * 1024, 1024 * 1024, || f(state));
-        state.goto_parent();
-        out
-    } else {
-        T::default()
-    }
-}
-
-pub fn visit_children_arg<'a, A, F, T, V>(state: &mut V, arg: A, mut f: F) -> T
-where
-    V: Visitor<'a>,
-    F: FnMut(&mut V, A) -> T,
-    T: Default,
-{
-    if state.goto_first_child() {
-        let out = stacker::maybe_grow(32 * 1024, 1024 * 1024, || f(state, arg));
-        state.goto_parent();
-        out
-    } else {
-        T::default()
-    }
-}
-//Loop over all sibiblings
-pub fn visit_siblings<'a, F: FnMut(&mut V), V: Visitor<'a>>(state: &mut V, mut f: F) {
-    loop {
-        f(state);
-        if !state.goto_next_sibling() {
-            break;
-        }
-    }
-}
-
+use ast::visitor::Visitor;
+//Transform a tree-sitter tree into the Ast ECS via recursive decent
 //While parsing we keep a mutable state to store entities and errors
 #[derive(Clone)]
 struct VisitorState<'a> {
@@ -697,6 +55,7 @@ impl<'a> VisitorState<'a> {
     }
     //create the import tree map and the general search index for name resolution
     fn connect(&mut self) {
+        //create the import index inside the radix tree
         for i in self.ast.all_imports() {
             let path = self.ast.import_prefix(i).to_vec();
             let mut node = Symbol::Root;
@@ -734,7 +93,7 @@ impl<'a> VisitorState<'a> {
                 });
             }
         }
-        //Create name index for features and attributes
+        //Create name index for features and attributes inside the radix tree
         let mut stack = vec![(Symbol::Root, Symbol::Root, 0)];
         while let Some((node, scope, depth)) = stack.pop() {
             let new_scope = if let Some(name) = self.ast.name(node) {
@@ -791,6 +150,7 @@ impl<'a> VisitorState<'a> {
                 stack.push((i, new_scope, depth + 1));
             }
         }
+        //find alias for different symbols and report them
         for i in self.ast.children(Symbol::Root) {
             if matches!(i, Symbol::Feature(..)) {
                 if self
@@ -822,12 +182,15 @@ impl<'a> VisitorState<'a> {
             }
         }
     }
+    //Add a child to parent
     fn push_child(&mut self, parent: Symbol, child: Symbol) {
         self.ast.structure.insert(parent, child);
     }
+    //get the current block header
     fn header(&self) -> Option<Node<'a>> {
         self.node().child_by_field_name("header")
     }
+    //Push an error with location of the current block header
     fn push_error_blk<T: Into<String>>(&mut self, w: u32, error: T) {
         self.errors.push(ErrorInfo {
             location: node_range(self.header().unwrap(), self.source),
@@ -842,7 +205,6 @@ impl<'b> SymbolSlice for VisitorState<'b> {
         self.source.byte_slice(node).into()
     }
 }
-//Parsing the AST from a tree-sitter green tree
 fn opt_name(state: &mut VisitorState) -> Option<SymbolSpan> {
     if state.kind() == "name" {
         if state.node().is_missing() {
@@ -887,6 +249,7 @@ fn opt_path(state: &mut VisitorState) -> Option<Path> {
         None
     }
 }
+//Report error if a node has children,cardinality or attributes
 fn check_simple_blk(state: &mut VisitorState, kind: &str) {
     match state.cursor.field_name() {
         Some("cardinality") => state.push_error(30, format!("{} may not have a cardinality", kind)),
@@ -896,6 +259,8 @@ fn check_simple_blk(state: &mut VisitorState, kind: &str) {
     }
 }
 
+
+//report error if a node has cardinality or attributes
 fn check_no_extra_blk(state: &mut VisitorState, kind: &str) {
     match state.cursor.field_name() {
         Some("cardinality") => state.push_error(30, format!("{} may not have a cardinality", kind)),
@@ -903,7 +268,7 @@ fn check_no_extra_blk(state: &mut VisitorState, kind: &str) {
         _ => {}
     }
 }
-
+//parse a namespace
 fn visit_namespace(state: &mut VisitorState) {
     loop {
         check_simple_blk(state, "namespace");
@@ -920,6 +285,7 @@ fn visit_namespace(state: &mut VisitorState) {
         }
     }
 }
+
 fn opt_smt_minor(state: &mut VisitorState) -> Option<LanguageLevelSMT> {
     match state.kind() {
         "*" => Some(LanguageLevelSMT::Any),
@@ -1185,7 +551,7 @@ fn opt_aggregate(state: &mut VisitorState) -> Option<Expr> {
     }
 }
 fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
-    let span = state.node().parent()?.byte_range();
+    let span = state.node().byte_range();
     state.goto_named();
     match state.kind() {
         "path" => {
@@ -1272,7 +638,7 @@ fn opt_equation(node: Node) -> Option<EquationOP> {
 }
 
 fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
-    let span = state.node().parent()?.byte_range();
+    let span = state.node().byte_range();
     state.goto_named();
     match state.kind() {
         "path" | "name" => {
@@ -1405,7 +771,6 @@ fn visit_attribute_value(state: &mut VisitorState, parent: Symbol) {
     }
 }
 fn visit_constraint_list(state: &mut VisitorState, parent: Symbol) {
-    debug_assert!(state.node().parent().unwrap().kind() == "attribute_constraints");
     loop {
         if state.kind() == "constraint" {
             visit_children_arg(state, parent, visit_constraint);
@@ -1416,7 +781,6 @@ fn visit_constraint_list(state: &mut VisitorState, parent: Symbol) {
     }
 }
 fn visit_attributes(state: &mut VisitorState, parent: Symbol) {
-    debug_assert!(state.node().parent().unwrap().kind() == "attributes");
     loop {
         match state.kind() {
             "attribute_constraints" => {
@@ -1443,7 +807,6 @@ fn visit_attributes(state: &mut VisitorState, parent: Symbol) {
 }
 
 fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty: Type) {
-    debug_assert!(state.node().parent().unwrap().kind() == "blk");
     match parent {
         Symbol::Feature(..) => {
             state.push_error(40, "features have to be separated by groups");
@@ -1480,7 +843,6 @@ fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty:
 }
 
 fn visit_ref(state: &mut VisitorState, parent: Symbol, path: Path) {
-    debug_assert!(state.node().parent().unwrap().kind() == "blk");
     match parent {
         Symbol::Feature(..) => {
             state.push_error(40, "features have to be separated by groups");
@@ -1496,7 +858,6 @@ fn visit_ref(state: &mut VisitorState, parent: Symbol, path: Path) {
     }
 }
 fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode) {
-    debug_assert!(state.node().parent().unwrap().kind() == "blk");
     match parent {
         Symbol::Group(..) => {
             state.push_error(40, "groups have to be separated by features");
@@ -1523,7 +884,6 @@ fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode) {
     }
 }
 fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
-    debug_assert!(state.node().parent().unwrap().kind() == "blk");
     state.goto_field("header");
     match state.kind() {
         "name" => {
@@ -1580,7 +940,6 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
     }
 }
 fn visit_features(state: &mut VisitorState) {
-    debug_assert!(state.node().parent().unwrap().kind() == "blk");
     loop {
         check_no_extra_blk(state, "features");
         if state.kind() == "blk" {
@@ -1718,337 +1077,5 @@ pub fn visit_root(source: Rope, tree: Tree, uri: Url, timestamp: Instant) -> Ast
         tree,
         timestamp,
         errors,
-    }
-}
-//Combines the AST with metadata, this is also a public interface to the AST.
-#[derive(Clone, Debug)]
-pub struct AstDocument {
-    ast: Ast,
-    pub source: Rope,
-    pub tree: Tree,
-    pub timestamp: Instant,
-    pub errors: Vec<ErrorInfo>,
-    pub path: Vec<Ustr>,
-    pub uri: Url,
-    pub id: FileID,
-}
-impl AstDocument {
-    pub fn parent(&self, sym: Symbol, merge_root_features: bool) -> Option<Symbol> {
-        if merge_root_features && matches!(sym, Symbol::Feature(..)) {
-            Some(Symbol::Root)
-        } else {
-            self.ast.structure.parent.get(&sym).cloned()
-        }
-    }
-    pub fn scope(&self, mut sym: Symbol) -> Symbol {
-        while let Some(p) = self.parent(sym, true) {
-            match sym {
-                Symbol::Feature(..) => return sym,
-                Symbol::Root => return sym,
-                _ => {}
-            }
-            sym = p;
-        }
-        Symbol::Root
-    }
-    pub fn name(&self, sym: Symbol) -> Option<Ustr> {
-        self.ast.name(sym)
-    }
-    pub fn all_lang_lvls(&self) -> impl Iterator<Item = Symbol> {
-        self.ast.all_lang_lvls()
-    }
-    pub fn all_imports(&self) -> impl Iterator<Item = Symbol> + DoubleEndedIterator {
-        self.ast.all_imports()
-    }
-    pub fn all_features(&self) -> impl Iterator<Item = Symbol> {
-        self.ast.all_features()
-    }
-    pub fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
-        self.ast.all_attributes()
-    }
-    pub fn all_references(&self) -> impl Iterator<Item = Symbol> {
-        self.ast.all_references()
-    }
-    pub fn all_constraints(&self) -> impl Iterator<Item = Symbol> {
-        self.ast.all_constraints()
-    }
-    pub fn lang_lvl(&self, sym: Symbol) -> Option<&LanguageLevel> {
-        if let Symbol::LangLvl(i) = sym {
-            Some(&self.ast.includes[i].lang_lvl)
-        } else {
-            None
-        }
-    }
-    pub fn group_mode(&self, sym: Symbol) -> Option<GroupMode> {
-        match sym {
-            Symbol::Group(id) => Some(self.ast.groups[id].mode.clone()),
-            _ => None,
-        }
-    }
-    pub fn constraint(&self, sym: Symbol) -> Option<&ConstraintDecl> {
-        match sym {
-            Symbol::Constraint(id) => Some(&self.ast.constraints[id]),
-            _ => None,
-        }
-    }
-    pub fn constraints(&self) -> &[ConstraintDecl] {
-        &self.ast.constraints
-    }
-
-    pub fn imports(&self) -> &[Import] {
-        &self.ast.import
-    }
-
-    pub fn value(&self, sym: Symbol) -> Option<&Value> {
-        match sym {
-            Symbol::Attribute(id) => Some(&self.ast.attributes[id].value.value),
-            _ => None,
-        }
-    }
-    pub fn direct_children(
-        &self,
-        sym: Symbol,
-    ) -> impl Iterator<Item = Symbol> + DoubleEndedIterator + '_ {
-        self.ast
-            .structure
-            .children
-            .get(&sym)
-            .into_iter()
-            .flat_map(|i| i.iter())
-            .cloned()
-    }
-    pub fn lsp_range(&self, sym: Symbol) -> Option<tower_lsp::lsp_types::Range> {
-        self.ast.lsp_range(sym, &self.source)
-    }
-
-    pub fn span(&self, sym: Symbol) -> Option<Span> {
-        self.ast.span(sym)
-    }
-    pub fn namespace(&self) -> Option<&Path> {
-        self.ast.namespace.as_ref()
-    }
-    pub fn path(&self, sym: Symbol) -> &[Ustr] {
-        match sym {
-            Symbol::Import(i) => &self.ast.import[i].path.names,
-            Symbol::Reference(i) => &self.ast.references[i].path.names,
-            _ => unimplemented!(),
-        }
-    }
-    pub fn import_prefix(&self, sym: Symbol) -> &[Ustr] {
-        self.ast.import_prefix(sym)
-    }
-    pub fn depth(&self, sym: Symbol) -> u32 {
-        match sym {
-            Symbol::Feature(..) => 1,
-            Symbol::Import(i) => self.ast.import[i].path.names.len() as u32,
-            Symbol::Dir(i) => self.ast.dirs[i].depth,
-            Symbol::Attribute(i) => self.ast.attributes[i].depth,
-            _ => 0,
-        }
-    }
-    //Find all symboles under root with prefix path.
-    //Search branches can be aborted with a filter
-    pub fn lookup<'a, F: Fn(Symbol) -> bool + 'a>(
-        &'a self,
-        root: Symbol,
-        path: &'a [Ustr],
-        filter: F,
-    ) -> impl Iterator<Item = Symbol> + 'a {
-        let mut stack = vec![(root, path)];
-        std::iter::from_fn(move || loop {
-            let (cur, base) = stack.pop()?;
-            if base.is_empty() {
-                return Some(cur);
-            }
-            self.ast.lookup(cur, base[0], |dst| {
-                if filter(dst) {
-                    stack.push((dst, &base[1..]));
-                }
-            })
-        })
-    }
-    pub fn lookup_import<'a>(
-        &'a self,
-        path: &'a [Ustr],
-    ) -> impl Iterator<Item = (Symbol, &'a [Ustr])> {
-        let mut stack = vec![(Symbol::Root, path)];
-        std::iter::from_fn(move || loop {
-            let (cur, base) = stack.pop()?;
-
-            if base.is_empty() {
-                if matches!(cur, Symbol::Import(..)) {
-                    return Some((cur, base));
-                }
-            }
-            self.ast.lookup(cur, base[0], |dst| {
-                if matches!(dst, Symbol::Dir(..) | Symbol::Import(..)) {
-                    stack.push((dst, &base[1..]));
-                }
-            });
-            if matches!(cur, Symbol::Import(..)) {
-                return Some((cur, base));
-            }
-        })
-    }
-    //Also track the binding for path
-    pub fn lookup_with_binding<'a, F: Fn(Symbol) -> bool + 'a>(
-        &'a self,
-        root: Symbol,
-        path: &'a [Ustr],
-        filter: F,
-    ) -> impl Iterator<Item = Vec<Symbol>> + 'a {
-        let mut stack = vec![(root, path, vec![])];
-        std::iter::from_fn(move || loop {
-            let (cur, base, bind) = stack.pop()?;
-            if base.is_empty() {
-                return Some(bind);
-            }
-            self.ast.lookup(cur, base[0], |dst| {
-                if filter(dst) {
-                    stack.push((dst, &base[1..], [bind.as_slice(), &[dst]].concat()));
-                }
-            })
-        })
-    }
-    //prefix of sym from root
-    pub fn prefix(&self, mut sym: Symbol) -> Vec<Ustr> {
-        if matches!(sym, Symbol::Import(..)) {
-            return self.ast.import_prefix(sym).into();
-        }
-        let mut out = Vec::new();
-        loop {
-            if let Some(name) = self.ast.name(sym) {
-                out.push(name);
-            }
-            if let Some(p) = self.ast.structure.parent.get(&sym) {
-                if matches!(p, Symbol::Feature(..)) {
-                    break;
-                }
-                sym = *p;
-            } else {
-                break;
-            }
-        }
-        out
-    }
-    pub fn type_of(&self, sym: Symbol) -> Option<Type> {
-        match sym {
-            Symbol::Root => Some(Type::Namespace),
-            Symbol::Feature(i) => Some(self.ast.features[i].ty),
-            Symbol::Attribute(i) => match &self.ast.attributes[i].value.value {
-                Value::Void => Some(Type::Void),
-                Value::Vector => Some(Type::Vector),
-                Value::Bool(..) => Some(Type::Bool),
-                Value::Attributes => Some(Type::Attributes),
-                Value::String(..) => Some(Type::String),
-                Value::Number(..) => Some(Type::Real),
-            },
-            Symbol::Import(..) => Some(Type::Namespace),
-            Symbol::Dir(..) => Some(Type::Namespace),
-            _ => None,
-        }
-    }
-    pub fn find(&self, offset: usize) -> Option<Symbol> {
-        self.ast.find(offset)
-    }
-    //All children under root, when merge_root_features sub features are ignored
-    pub fn visit_named_children<F: FnMut(Symbol, &[Ustr]) -> bool>(
-        &self,
-        root: Symbol,
-        merge_root_features: bool,
-        mut f: F,
-    ) {
-        self.visit_named_children_depth(root, merge_root_features, |sym, prefix, _| f(sym, prefix))
-    }
-
-    pub fn visit_named_children_depth<F: FnMut(Symbol, &[Ustr], usize) -> bool>(
-        &self,
-        root: Symbol,
-        merge_root_features: bool,
-        mut f: F,
-    ) {
-        let mut stack: Vec<(Symbol, usize)> = vec![(root, 0)];
-        let mut prefix = vec![];
-        while let Some((cur, depth)) = stack.pop() {
-            prefix.truncate(depth.saturating_sub(1));
-            let mut explore = true;
-            if let Some(name) = self.name(cur) {
-                if cur != root {
-                    prefix.push(name);
-                    explore = f(cur, &prefix, depth);
-                }
-            }
-            if explore {
-                for i in self.ast.children(cur).rev() {
-                    if merge_root_features
-                        && !matches!(i, Symbol::Attribute(..))
-                        && !matches!(root, Symbol::Root)
-                    {
-                        continue;
-                    }
-                    match i {
-                        Symbol::Feature(..) => {
-                            stack.push((i, 1));
-                        }
-                        Symbol::Attribute(..) | Symbol::Dir(..) | Symbol::Import(..) => {
-                            stack.push((i, depth + 1));
-                        }
-                        _ => {
-                            stack.push((i, depth));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    pub fn visit_children<F: FnMut(Symbol) -> bool>(
-        &self,
-        root: Symbol,
-        merge_root_features: bool,
-        mut f: F,
-    ) {
-        self.visit_children_depth(root, merge_root_features, |sym, _| f(sym));
-    }
-    pub fn visit_children_depth<F: FnMut(Symbol, u32) -> bool>(
-        &self,
-        root: Symbol,
-        merge_root_features: bool,
-        mut f: F,
-    ) {
-        let mut stack = vec![(root, 0)];
-        while let Some((cur, depth)) = stack.pop() {
-            let mut explore = true;
-            if cur != root {
-                explore = f(cur, depth);
-            }
-            if explore {
-                for i in self.ast.children(cur).rev() {
-                    if merge_root_features
-                        && matches!(i, Symbol::Feature(..))
-                        && !matches!(root, Symbol::Root)
-                    {
-                        continue;
-                    }
-                    stack.push((i, depth + 1));
-                }
-            }
-        }
-    }
-    pub fn visit_attributes<'a, F: FnMut(Symbol, Symbol, &[Ustr])>(&self, root: Symbol, mut f: F) {
-        assert!(matches!(root, Symbol::Feature(..) | Symbol::Root));
-        let mut owner = root;
-        let mut under_feature = 0;
-        self.visit_named_children(root, false, |i, prefix| match i {
-            Symbol::Feature(..) => {
-                owner = i;
-                under_feature = 1;
-                true
-            }
-            Symbol::Attribute(..) => {
-                f(owner, i, &prefix[under_feature..]);
-                true
-            }
-            _ => false,
-        });
     }
 }

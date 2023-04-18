@@ -1,17 +1,10 @@
-use crate::ast::*;
-use crate::cache::*;
-use crate::document::Draft;
-use crate::util::*;
-use crate::{config, parse, semantic::*};
+use crate::core::*;
 use compact_str::CompactString;
+use hashbrown::HashMap;
 use itertools::{Either, Itertools};
 use log::info;
-use parse::SymbolSlice;
 use ropey::Rope;
 use std::cmp::Ordering;
-
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::ops::Add;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
@@ -186,9 +179,10 @@ fn node_at<'a>(node: Node<'a>, line: usize, char: usize, source: &Rope) -> Node<
     node.named_descendant_for_point_range(start, end).unwrap()
 }
 
-pub fn containes(range: Range, pos: &Position) -> bool {
+pub fn contains(range: Range, pos: &Position) -> bool {
     range.start.character <= pos.character && range.end.character > pos.character
 }
+//Finde the context inside a constraint
 pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv {
     if node.is_error() && node.start_position().row == node.end_position().row {
         let err_raw: String = source.byte_slice(node.byte_range()).into();
@@ -218,7 +212,7 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
             let mut arg_offset = -1;
             let mut args = Vec::new();
             loop {
-                if containes(
+                if contains(
                     lsp_range(cursor.node().byte_range(), source).unwrap(),
                     &Position {
                         character: pos.character - 1,
@@ -273,10 +267,10 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CompletionOffset {
-    Continous, // We are in path
-    Dot,       //We are in open path ending with a dot
-    SameLine,  // We are in a unfinished line
-    Cut,       //We are in a empty line
+    Continuous, // We are in path
+    Dot,        //We are in open path ending with a dot
+    SameLine,   // We are in a unfinished line
+    Cut,        //We are in a empty line
 }
 //Search for context in the vicinity of the cursor
 //first search one char back, then inside the line, then in the previous line etc.
@@ -293,7 +287,7 @@ fn position_to_node<'a>(
         let base_offset = source.line_to_char(pos.line as usize);
         if !source.char(base_offset + rel_char - 1).is_whitespace() {
             (
-                CompletionOffset::Continous,
+                CompletionOffset::Continuous,
                 node_at(tree.root_node(), pos.line as usize, rel_char - 1, source),
             )
         } else {
@@ -324,6 +318,7 @@ fn position_to_node<'a>(
         }
     }
 }
+//guess what the user wants to write
 fn estimate_env(node: Node, source: &Rope, pos: &Position) -> Option<CompletionEnv> {
     if node.is_extra() && !node.is_error() {
         //Comment?
@@ -373,7 +368,7 @@ fn estimate_env(node: Node, source: &Rope, pos: &Position) -> Option<CompletionE
 }
 
 #[derive(Debug)]
-pub enum CompletionFormater {
+pub enum CompletionFormatter {
     UVL {
         postfix_range: Range,
     },
@@ -381,11 +376,11 @@ pub enum CompletionFormater {
         postfix_range: Range,
     },
     FreeJSONKey {
-        whole_key: Range,
-        key_prefix: String,
+        postfix_range: Range,
+        key_start: Option<Range>,
     },
 }
-impl CompletionFormater {
+impl CompletionFormatter {
     fn text_edit(&self, _: &[Ustr], postfix: TextOP) -> TextEdit {
         match (self, postfix) {
             (Self::UVL { postfix_range }, TextOP::Put(text)) => TextEdit {
@@ -401,18 +396,33 @@ impl CompletionFormater {
             }
             (
                 Self::FreeJSONKey {
-                    //TODO this only works with multiple text edits sadly
-                    whole_key,
-                    key_prefix,
+                    postfix_range,
+                    key_start,
                 },
                 TextOP::Put(text),
             ) => {
-                let key = format!(r#""{key_prefix}{}""#, text.replace('"', r#"\""#));
+                let key = if key_start.is_some() {
+                    format!(r#"{}""#, text.replace('"', r#"\""#))
+                } else {
+                    format!(r#""{}""#, text.replace('"', r#"\""#))
+                };
                 TextEdit {
                     new_text: key,
-                    range: whole_key.clone(),
+                    range: postfix_range.clone(),
                 }
             }
+        }
+    }
+    fn additional_text_edits(&self) -> Option<Vec<TextEdit>> {
+        match self {
+            Self::FreeJSONKey {
+                key_start: Some(key_start),
+                ..
+            } => Some(vec![TextEdit {
+                range: key_start.clone(),
+                new_text: "\"".into(),
+            }]),
+            _ => None,
         }
     }
 }
@@ -422,11 +432,14 @@ pub struct CompletionQuery {
     pub postfix: CompactString,
     pub env: CompletionEnv,
     pub offset: CompletionOffset,
-    pub format: CompletionFormater,
+    pub format: CompletionFormatter,
 }
 impl CompletionQuery {
     fn text_edit(&self, text: TextOP) -> TextEdit {
         self.format.text_edit(&self.prefix, text)
+    }
+    fn additional_text_edits(&self) -> Option<Vec<TextEdit>> {
+        self.format.additional_text_edits()
     }
 }
 
@@ -440,19 +453,19 @@ pub fn longest_path<'a>(node: Node<'a>, source: &Rope) -> Option<(Path, Node<'a>
         parse::parse_or_lang_lvl(node, source).map(|p| (p, node))
     }
 }
-//"smart" completion, find context arround the cursor
+//"smart" completion, find context around the cursor
 fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
     match draft {
         Draft::JSON { source, tree, .. } => config::completion_query(source, tree, pos),
         Draft::UVL { source, tree, .. } => {
             let (offset, edit_node) = position_to_node(source, tree, pos);
-            if let (Some((path, path_node)), CompletionOffset::Continous) =
+            if let (Some((path, path_node)), CompletionOffset::Continuous) =
                 (longest_path(edit_node, source), offset)
             {
                 if let Some(tail) = path_node.child_by_field_name("tail") {
                     Some(CompletionQuery {
                         offset: CompletionOffset::Dot,
-                        format: CompletionFormater::UVL {
+                        format: CompletionFormatter::UVL {
                             postfix_range: lsp_range(tail.end_byte()..tail.end_byte(), source)?,
                         },
                         postfix: CompactString::new_inline(""),
@@ -463,7 +476,7 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
                 } else {
                     Some(CompletionQuery {
                         offset,
-                        format: CompletionFormater::UVL {
+                        format: CompletionFormatter::UVL {
                             postfix_range: lsp_range(path.spans.last()?.clone(), source)?,
                         },
                         postfix: path.names.last()?.as_str().into(),
@@ -477,7 +490,7 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
                     offset,
                     prefix: Vec::new(),
                     postfix: "".into(),
-                    format: CompletionFormater::UVL {
+                    format: CompletionFormatter::UVL {
                         postfix_range: Range {
                             start: *pos,
                             end: *pos,
@@ -525,14 +538,14 @@ struct CompletionOpt {
     rank: f32,
     name: Ustr,
     op: TextOP,
-    lable: CompactString,
+    label: CompactString,
     kind: CompletionKind,
 }
 impl CompletionOpt {
     fn new(
         kind: CompletionKind,
         name: Ustr,
-        lable: CompactString,
+        label: CompactString,
         depth: usize,
         edit: TextOP,
         query: &CompletionQuery,
@@ -541,7 +554,7 @@ impl CompletionOpt {
             rank: completion_weight(&query.postfix, &name, depth as u32, &query.env, kind),
             op: edit,
             name,
-            lable,
+            label,
             kind,
         }
     }
@@ -567,7 +580,7 @@ fn add_keywords<const I: usize>(
     for word in words {
         top.push(CompletionOpt {
             op: TextOP::Put(word.clone()),
-            lable: word.clone(),
+            label: word.clone(),
             rank: if query.is_empty() {
                 w
             } else {
@@ -775,12 +788,10 @@ fn completion_symbol(
 ) {
     let mut modules: HashMap<_, Vec<Ustr>> = HashMap::new(); //Store reachable documents under the
                                                              //search perfix under a secondary prefix
-    let mut visited = HashSet::new(); //Needed for circular references?
 
     for i in snapshot.resolve(origin, &query.prefix) {
         //Find all possible continuations for the
         //search prefix
-        visited.insert(i.file);
         match &i.sym {
             Symbol::Root => {
                 let _ = modules.insert(i.file, vec![]);
@@ -816,12 +827,14 @@ fn completion_symbol(
     let root = FileID::max(); //Perform nn from all reachable documents to all other
     let pred = pathfinding::directed::dijkstra::dijkstra_all(&root, |node| {
         if node == &root {
+            //reachable under the secondary prefix
             Either::Left(
                 modules
                     .iter()
                     .map(|(k, v)| (*k, ModulePath::from(v.as_slice()))),
             )
         } else {
+            //reachable under a primary import prefix
             let node = *node;
             Either::Right(
                 snapshot
@@ -838,6 +851,7 @@ fn completion_symbol(
         while let Some((parent, _)) = pred.get(&next) {
             if *parent == root {
                 for i in modules[&next].iter().rev() {
+                    //Add the secondary prefix
                     path.push(*i);
                 }
 
@@ -900,11 +914,17 @@ fn compute_completions_impl(
             add_group_keywords(&ctx.postfix, &mut top, 2.0);
         }
         CompletionEnv::Toplevel => add_top_lvl_keywords(&ctx.postfix, &mut top, 2.0),
+
         CompletionEnv::SomeName => {}
-        CompletionEnv::Constraint
-        | CompletionEnv::Numeric
-        | CompletionEnv::Feature
-        | CompletionEnv::ConfigEntryKey => {
+        CompletionEnv::ConfigEntryKey => {
+            for i in snapshot
+                .resolve(origin, &ctx.prefix)
+                .filter(|f| f.file == origin)
+            {
+                completion_symbol_local(&snapshot, origin, i, &[], ctx, &mut top)
+            }
+        }
+        CompletionEnv::Constraint | CompletionEnv::Numeric | CompletionEnv::Feature => {
             match (&ctx.env, &ctx.offset) {
                 //heuristic to provide nearly correct predictions, to
                 //make it more accurate we need to respect
@@ -932,7 +952,7 @@ fn compute_completions_impl(
                 }
                 (
                     CompletionEnv::Constraint | CompletionEnv::Numeric,
-                    CompletionOffset::Cut | CompletionOffset::Continous,
+                    CompletionOffset::Cut | CompletionOffset::Continuous,
                 ) => {
                     add_function_keywords(&ctx.postfix, &mut top, 2.0);
                     completion_symbol(&snapshot, origin, &ctx, &mut top);
@@ -1031,17 +1051,18 @@ pub fn compute_completions(
             &snapshot,
         ),
     };
-    info!("Stat completion in  {:?}", origin);
+    info!("Stat completion in  {:?} {:#?}", origin, ctx);
     if let (Some(ctx), Some(origin)) = (ctx, origin) {
         let (top, is_incomplete) = compute_completions_impl(snapshot, draft, pos, &ctx, origin);
         let items = top
             .into_sorted_vec()
             .into_iter()
-            .unique_by(|c| c.lable.clone())
+            .unique_by(|c| c.label.clone())
             .filter(|opt| opt.kind != CompletionKind::DontCare)
             .map(|opt| CompletionItem {
-                label: opt.lable.into(),
+                label: opt.label.into(),
                 text_edit: Some(CompletionTextEdit::Edit(ctx.text_edit(opt.op))),
+                additional_text_edits: ctx.additional_text_edits(),
                 sort_text: Some(format!("{:X}", encode_float(-opt.rank))),
                 filter_text: Some(opt.name.as_str().into()),
                 kind: Some(match opt.kind {

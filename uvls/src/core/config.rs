@@ -1,13 +1,13 @@
 use std::fmt::Display;
+use crate::core::*;
 
-use crate::{
-    ast::*,
-    check::ErrorInfo,
-    completion::*,
-    parse::SymbolSlice,
-    semantic::{FileID, RootGraph},
-    util::*,
-};
+use ast::*;
+use check::ErrorInfo;
+use crate::ide::completion::*;
+use parse::SymbolSlice;
+use semantic::{FileID, RootGraph};
+use util::*;
+
 use itertools::Itertools;
 use log::info;
 use ropey::Rope;
@@ -16,6 +16,26 @@ use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tree_sitter::{Node, Tree, TreeCursor};
 use ustr::Ustr;
+
+//Configuration is stored in json files like this
+//{
+//    "file":"file.uvl",
+//    "config":{
+//          "submodels.subfile":{
+//              "subfeature":true
+//          }
+//          "someFeatures":true,
+//          "someOtherFeature":1.0,
+//          "someFeature.attribute1":"test"
+//    }
+//
+//}
+//This representation is very compact since it avoids rewriting long import prefixes but slightly
+//more complex than just using the direct raw path to external symbols. 
+//JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
+//crate for span information and partial parsing so error reporting becomes impossible.
+
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ConfigValue {
@@ -65,7 +85,7 @@ impl Serialize for ConfigEntry {
         S: serde::Serializer,
     {
         use serde::ser::SerializeMap;
-        info!("{self:?}");
+
 
         match self {
             ConfigEntry::Value(..) => panic!(),
@@ -143,6 +163,7 @@ impl<'a> Visitor<'a> for State<'a> {
     }
 }
 
+//Prase a configuration object
 fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
     let mut acc = Vec::new();
     visit_siblings(state, |state| {
@@ -248,6 +269,7 @@ fn visit_file(state: &mut State) -> Option<FileConfig> {
         }
     })
 }
+
 fn visit_root(state: &mut State) -> Option<FileConfig> {
     state.goto_first_child();
     if state.kind() == "object" {
@@ -299,13 +321,13 @@ pub fn parse_json(tree: Tree, source: Rope, uri: Url, timestamp: Instant) -> Con
         source,
     }
 }
-
-fn json_path<'a>(mut node: Node, rope: &'a Rope) -> Vec<std::borrow::Cow<'a, str>> {
+//find the path of the object containing node(ignores arrays)
+fn json_path<'a>(mut node: Node, rope: &'a Rope) -> Vec<String> {
     let mut ctx = Vec::new();
     while let Some(p) = node.parent() {
         if node.kind() == "object" && p.kind() == "pair" {
             if let Some(key) = p.child_by_field_name("key").and_then(|k| k.named_child(0)) {
-                ctx.push(rope.slice(key.byte_range()).into())
+                ctx.push(rope.slice(key.byte_range()).to_string().replace(r#"\"""#,"") )
             }
         }
         node = p;
@@ -313,7 +335,7 @@ fn json_path<'a>(mut node: Node, rope: &'a Rope) -> Vec<std::borrow::Cow<'a, str
     ctx.reverse();
     ctx
 }
-
+//select the nearest object containing pos
 fn selected_json_object<'a>(tree: &'a Tree, pos: &Position, source: &Rope) -> Option<Node<'a>> {
     let offset = byte_offset(pos, source);
     let mut node = tree
@@ -342,19 +364,19 @@ fn find_selected_json_key<'a>(
     selected_json_object(tree, pos, source).and_then(|obj| find_json_key(obj, source, key))
 }
 
-//Try to extract the selected json  value under KEY,
+//Try to extract the json value under key from node,
 fn find_json_key<'a>(mut root: Node<'a>, source: &Rope, key: &[Ustr]) -> Option<Node<'a>> {
     for k in key {
         let mut cursor = root.walk();
         if cursor.goto_first_child() {
             loop {
                 if let Some(name) = cursor.node().child_by_field_name("key") {
-                    info!("found key {:?}", name);
+                 
 
                     if source.slice_raw(name.named_child(0)?.byte_range()) == k.as_str() {
                         root = cursor.node().child_by_field_name("value")?;
 
-                        info!("set val {:?}", name);
+            
                         break;
                     }
                 }
@@ -391,6 +413,7 @@ impl Overlaps for Span {
         }
     }
 }
+//We allow for ruder
 fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
     use lazy_static::lazy_static;
     use regex::Regex;
@@ -403,11 +426,11 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
     let slice: std::borrow::Cow<'_, _> = source.line(line).into();
     let start_byte = source.line_to_byte(line);
     let pos_byte = byte_offset(pos, source) - start_byte;
-    info!("estimating json item in {}", slice);
+  
     RE.captures(&slice)
         .iter()
         .find_map(|cap| {
-            info!("Cap: {:#?} ", cap);
+
 
             match (cap.get(1), cap.get(2)) {
                 (Some(key), Some(val)) => {
@@ -437,7 +460,6 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
                 static ref RE: Regex = Regex::new(r#""((?:[^"\\]|\\.)*)""#).unwrap();
             };
 
-            info!("no normal matches");
 
             RE.captures(&slice).iter().find_map(|cap| {
                 info!("Cap: {:#?} ", cap);
@@ -458,8 +480,7 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
                 .chars()
                 .all(|c| c.is_alphanumeric() || c.is_whitespace() || c == '.')
             {
-                info!("{slice}");
-                info!("clean line");
+           
                 let start = slice
                     .char_indices()
                     .take_while(|(_, c)| c.is_whitespace())
@@ -474,7 +495,7 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
                     .unwrap_or_default()
                     .0
                     + start;
-                info!("P: {} {} {}", start, last, pos_byte);
+   
 
                 if (start..last + 1).contains(&pos_byte) {
                     Some(JSONItem::FreeKey(offset(start..last + 1, start_byte)))
@@ -490,10 +511,10 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
 }
 fn parse_json_key(text: &Rope, key: Span) -> Path {
     //TODO this does not handle escaped strings with dots inside
-    //decoding them is not determinstic so we should simply frobid them
+    //decoding them is not deterministic so we should simply forbid them
     //or use a special token
     let text_raw = text.slice(key.clone()).to_string().replace('\\', "");
-    info!("{text_raw}");
+
     text_raw
         .split('.')
         .filter(|i| i.len() > 0)
@@ -511,13 +532,13 @@ pub fn estimate_env_json<'a>(
     tree: &Tree,
     source: &'a Rope,
     pos: &Position,
-) -> Option<(CompletionEnv, Vec<std::borrow::Cow<'a, str>>)> {
+) -> Option<(CompletionEnv, Vec<String>)> {
     let offset = byte_offset(pos, source);
     let node = tree
         .root_node()
         .named_descendant_for_byte_range(offset, offset + 1)?;
     let path = json_path(node, source);
-    info!("path {:?}", path);
+
     if path.len() >= 1 && path[0] == "config" {
         Some((CompletionEnv::ConfigEntryKey, path))
     } else if path.len() <= 1 {
@@ -535,7 +556,7 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
 
     let char = char_offset(&pos, source);
     let ctx = estimate_json_item(&pos, source);
-    info!("{:#?}", ctx);
+
     match ctx? {
         JSONItem::Key { key, .. } => {
             let path = parse_json_key(source, key.clone());
@@ -543,15 +564,18 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
             let prefix: Vec<Ustr> = outer_path
                 .iter()
                 .skip(1)
-                .flat_map(|i| i.split(".").map(|i| i.replace('\\', "").into()))
-                .chain(path.names[0..path.len().saturating_sub(1)].iter().cloned())
+                .flat_map(|i| i.split(".").map(|i| i.replace(r#"\""#, "").into()))
+                .chain(path.names.iter().cloned())
                 .filter(|i| !i.is_empty())
                 .collect();
+            info!("path:{path:#?}");
+            info!("prefix:{prefix:#?}");
+            info!("char:{}",source.char(char));
             if source.char(char) == '.' {
                 Some(CompletionQuery {
                     offset: CompletionOffset::Dot,
                     env,
-                    format: CompletionFormater::JSONKey {
+                    format: CompletionFormatter::JSONKey {
                         postfix_range: tower_lsp::lsp_types::Range {
                             start: src_pos.clone(),
                             end: src_pos.clone(),
@@ -562,55 +586,65 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
                 })
             } else {
                 Some(CompletionQuery {
-                    offset: CompletionOffset::Continous,
+                    offset: CompletionOffset::Continuous,
                     env,
-                    format: CompletionFormater::JSONKey {
+                    format: CompletionFormatter::JSONKey {
                         postfix_range: lsp_range(
                             path.spans.last().cloned().unwrap_or(key),
                             source,
                         )?,
                     },
-                    prefix,
+                    prefix:prefix[0..prefix.len().saturating_sub(1)].to_vec(),
                     postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
                 })
             }
         }
         JSONItem::FreeKey(key) => {
-            info!(" free {:?}", key);
             let path = parse_json_key(source, key.clone());
-            info!("{path:?}");
             let (env, outer_path) = estimate_env_json(&path.names, tree, source, &pos)?;
             let prefix: Vec<Ustr> = outer_path
                 .iter()
                 .skip(1)
                 .flat_map(|i| i.split(".").map(|i| i.replace('\\', "").into()))
-                .chain(path.names[0..path.len().saturating_sub(1)].iter().cloned())
+                .chain(path.names.iter().cloned())
                 .filter(|i| !i.is_empty())
                 .collect();
             if source.char(char) == '.' {
                 Some(CompletionQuery {
                     offset: CompletionOffset::Dot,
                     env,
-                    format: CompletionFormater::JSONKey {
+                    format: CompletionFormatter::FreeJSONKey {
                         postfix_range: tower_lsp::lsp_types::Range {
                             start: src_pos.clone(),
                             end: src_pos.clone(),
                         },
+                        key_start:if path.len()>0{
+                            let start = lsp_position( path.spans[0].start,source).clone().unwrap();
+                            Some(Range{start:start.clone(),end:start})
+                        }else{
+                            None
+                        }
                     },
                     prefix,
                     postfix: CompactString::new_inline(""),
                 })
             } else {
                 Some(CompletionQuery {
-                    offset: CompletionOffset::Continous,
+                    offset: CompletionOffset::Continuous,
                     env,
-                    format: CompletionFormater::JSONKey {
+                    format: CompletionFormatter::FreeJSONKey {
                         postfix_range: lsp_range(
                             path.spans.last().cloned().unwrap_or(key),
                             source,
                         )?,
+                        key_start:if path.len()>1{
+                            let start = lsp_position( path.spans[0].start,source).clone().unwrap();
+                            Some(Range{start:start.clone(),end:start})
+                        }else{
+                            None
+                        }
                     },
-                    prefix,
+                    prefix:prefix[0..prefix.len().saturating_sub(1)].to_vec(),
                     postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
                 })
             }
@@ -628,11 +662,10 @@ pub fn find_file_id(
     find_selected_json_key(tree, pos, source, &["file".into()]).and_then(|n| {
         if n.kind() == "string" {
             n.named_child(0).and_then(|base| {
-                info!("JSON base is {:?}", base);
                 let mut dir = uri.to_file_path().ok()?.parent()?.to_path_buf();
                 dir.push(&*source.slice_raw(base.byte_range()));
                 let id = FileID::new(Url::from_file_path(dir).unwrap().as_str());
-                if root.containes_id(id) {
+                if root.contains_id(id) {
                     Some(id)
                 } else {
                     None
