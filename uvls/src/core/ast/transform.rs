@@ -551,7 +551,7 @@ fn opt_aggregate(state: &mut VisitorState) -> Option<Expr> {
     }
 }
 fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
-    let span = state.node().parent()?.byte_range();
+    let span = state.node().byte_range();
     state.goto_named();
     match state.kind() {
         "path" => {
@@ -638,7 +638,7 @@ fn opt_equation(node: Node) -> Option<EquationOP> {
 }
 
 fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
-    let span = state.node().parent()?.byte_range();
+    let span = state.node().byte_range();
     state.goto_named();
     match state.kind() {
         "path" | "name" => {
