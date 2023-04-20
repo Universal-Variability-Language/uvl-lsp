@@ -64,7 +64,31 @@
           "default": true
         }
       }
-    }
+    },
+    "colors": [
+      {
+        "id": "color.deadfeature",
+        "description": "color Theme for dead feature",
+        "defaults": {
+          "dark": "#ff2a2a",
+					"light": "#d6393955"
+        }
+      }, {
+        "id": "color.falseoptionalfeature",
+        "description": "color Theme for false-optional feature",
+        "defaults": {
+          "dark": "#db2ca7e5",
+					"light": "#ec8cecb6"
+        }
+      }, {
+        "id": "color.redundantconstraint",
+        "description": "color Theme for redudant Constraint",
+        "defaults": {
+          "dark": "#ffe6007c",
+					"light": "#ffef93d2"
+        }
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

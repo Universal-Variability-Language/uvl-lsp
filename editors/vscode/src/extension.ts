@@ -281,29 +281,31 @@ async function startClient(context: ExtensionContext) {
 		window.showWarningMessage("Couldn't find Zig Language Server (UVLS) executable");
 		return;
 	}
-	console.log(path);
 	outputChannel = vscode.window.createOutputChannel("UVL Language Server");
 	const serverOptions: ServerOptions = {
-		command: path, // Replace with your own command.,
-		// command: "/home/pascalfoerster/Dokumente/Studium/Master/3Semester/UVL/uvl-lsp/target/debug/uvls",
+		//command: path, // Replace with your own command.,
+		 command: "/home/pascalfoerster/Dokumente/Studium/Master/3Semester/UVL/uvl-lsp/target/debug/uvls",
 		 
 	};
     // Decorator for dead features
 	const deadFeatureDecorator = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: context.asAbsolutePath("assets/red-alert-icon.svg"),
-		gutterIconSize: "90%"
+		gutterIconSize: "90%",
+		backgroundColor: {id: 'color.deadfeature'}	
 	});
 
 	// Decorator for false-optional features
 	const optioanlFeatureDecorator = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: context.asAbsolutePath("assets/warning-icon.svg"),
-		gutterIconSize: "90%"
+		gutterIconSize: "90%",
+		backgroundColor: {id: 'color.falseoptionalfeature'}
 	});
 	
 	//Decorator for redundant Constraints
 	const redundantConstraintDecorator = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: context.asAbsolutePath("assets/exclamation-round-line-icon.svg"),
-		gutterIconSize: "90%"
+		gutterIconSize: "90%",
+		backgroundColor: {id: 'color.redundantconstraint'}
 	});
 
 	let documentSelector = [{ scheme: "file", language: "uvl" }, { scheme: "file", pattern: "**/*.uvl.json" }];
@@ -320,8 +322,6 @@ async function startClient(context: ExtensionContext) {
 				rangeOrOptionOptionalFeature = [];
 				rangeOrOptionsRedudantConstraint = [];
 				for(const ele of diagnostics){
-					console.log(ele.severity);
-					if(ele.severity === DiagnosticSeverity.Warning){
 						switch(ele.message){
 							case "dead feature":{
 								rangeOrOptionsDeadFeature.push(ele.range);
@@ -337,7 +337,6 @@ async function startClient(context: ExtensionContext) {
 							}
 							 
 						}
-					}
 				}
 				textEditor?.setDecorations(redundantConstraintDecorator,rangeOrOptionsRedudantConstraint);
 				textEditor?.setDecorations(deadFeatureDecorator,rangeOrOptionsDeadFeature);
