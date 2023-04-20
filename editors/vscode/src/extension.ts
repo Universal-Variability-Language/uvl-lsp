@@ -283,8 +283,7 @@ async function startClient(context: ExtensionContext) {
 	}
 	outputChannel = vscode.window.createOutputChannel("UVL Language Server");
 	const serverOptions: ServerOptions = {
-		//command: path, // Replace with your own command.,
-		 command: "/home/pascalfoerster/Dokumente/Studium/Master/3Semester/UVL/uvl-lsp/target/debug/uvls",
+		command: path, // Replace with your own command.,
 		 
 	};
     // Decorator for dead features
