@@ -320,6 +320,7 @@ async function startClient(context: ExtensionContext) {
 				rangeOrOptionsDeadFeature = [];
 				rangeOrOptionOptionalFeature = [];
 				rangeOrOptionsRedudantConstraint = [];
+				console.log("da");
 				for(const ele of diagnostics){
 						switch(ele.message){
 							case "dead feature":{
