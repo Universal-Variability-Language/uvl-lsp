@@ -68,7 +68,7 @@ async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
     }
 }
 
-//This handler handles update for a single draft and parses it incrementally with tree-sitter
+//Handles update for a single draft and parses it incrementally with tree-sitter
 async fn draft_handler(
     mut rx: mpsc::UnboundedReceiver<DraftMsg>,
     uri: Url,
@@ -160,7 +160,7 @@ async fn link_handler(
     tx_cache: watch::Sender<Arc<RootGraph>>,
     tx_err: mpsc::Sender<DiagnosticUpdate>,
 ) {
-    //First we gather changes toavoid redundant recomputation
+    //First we gather changes to avoid redundant recomputation
     let mut latest_configs: HashMap<FileID, Arc<config::ConfigDocument>> = HashMap::new();
     let mut latest_ast: HashMap<FileID, Arc<ast::AstDocument>> = HashMap::new();
     let mut timestamps: HashMap<Url, Instant> = HashMap::new();
@@ -266,15 +266,19 @@ async fn link_handler(
 //All the parsing components and their consumers in a central interface
 #[derive(Clone)]
 pub struct AsyncPipeline {
-    //Latest drafts of all known documents
+    //latest drafts of all known documents, each draft has its own handler process
     drafts: Arc<DashMap<Url, DraftState>>,
+    //linker
     tx_link: mpsc::Sender<LinkMsg>,
+    //error publisher
     tx_err: mpsc::Sender<DiagnosticUpdate>,
+    //latest version of the linked files 
     rx_root: watch::Receiver<Arc<RootGraph>>,
+    //fires when a file changed
     tx_dirty_tree: broadcast::Sender<()>,
     revision_counter: Arc<AtomicU64>,
     client: tower_lsp::Client,
-    //Code inlays are managed globally
+    //code inlays are managed globally
     inlay_handler: InlayHandler,
 }
 impl AsyncPipeline {
