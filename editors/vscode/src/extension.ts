@@ -31,9 +31,7 @@ import { info } from 'console';
 let client: LanguageClient | null = null;
 let outputChannel:vscode.OutputChannel|null = null ;
 const SOURCE_URI = "https://api.github.com/repos/Universal-Variability-Language/uvl-lsp/releases/latest";
-let rangeOrOptionsDeadFeature: Array<vscode.Range>;
-let rangeOrOptionOptionalFeature: Array<vscode.Range>;
-let rangeOrOptionsRedudantConstraint: Array<vscode.Range>;
+
 
 function getDefaultInstallationName(): string | null {
 	// NOTE: Not using a JS switch because they're ugly as hell and clunky :(
@@ -287,25 +285,33 @@ async function startClient(context: ExtensionContext) {
 		 
 	};
     // Decorator for dead features
-	const deadFeatureDecorator = vscode.window.createTextEditorDecorationType({
-		gutterIconPath: context.asAbsolutePath("assets/red-alert-icon.svg"),
+	const decorators: Array<vscode.TextEditorDecorationType> = new Array(4);
+	decorators[0] = vscode.window.createTextEditorDecorationType({
+		gutterIconPath: context.asAbsolutePath("assets/deadfeature.svg"),
 		gutterIconSize: "90%",
 		backgroundColor: {id: 'color.deadfeature'}	
 	});
 
 	// Decorator for false-optional features
-	const optioanlFeatureDecorator = vscode.window.createTextEditorDecorationType({
-		gutterIconPath: context.asAbsolutePath("assets/warning-icon.svg"),
+	decorators[1] = vscode.window.createTextEditorDecorationType({
+		gutterIconPath: context.asAbsolutePath("assets/falseoptional.svg"),
 		gutterIconSize: "90%",
-		backgroundColor: {id: 'color.falseoptionalfeature'}
+		backgroundColor: {id: 'color.yellow'}
 	});
 	
 	//Decorator for redundant Constraints
-	const redundantConstraintDecorator = vscode.window.createTextEditorDecorationType({
-		gutterIconPath: context.asAbsolutePath("assets/exclamation-round-line-icon.svg"),
+	decorators[2] = vscode.window.createTextEditorDecorationType({
+		gutterIconPath: context.asAbsolutePath("assets/redundantconstraint.svg"),
 		gutterIconSize: "90%",
-		backgroundColor: {id: 'color.redundantconstraint'}
+		backgroundColor: {id: 'color.yellow'}
 	});
+	//Decorator for void feature
+	decorators[3] = vscode.window.createTextEditorDecorationType({
+		gutterIconPath: context.asAbsolutePath("assets/voidfeature.svg"),
+		gutterIconSize: "90%",
+		backgroundColor: {id: 'color.voidfeature'}
+	});
+	let rangeOrOptions: Array<Array<vscode.Range>> = [[],[],[],[]];
 
 	let documentSelector = [{ scheme: "file", language: "uvl" }, { scheme: "file", pattern: "**/*.uvl.json" }];
 	const clientOptions: LanguageClientOptions = {
@@ -317,30 +323,29 @@ async function startClient(context: ExtensionContext) {
 			handleDiagnostics(uri, diagnostics, next) {
 				// handle anomilies
 				const textEditor = window.activeTextEditor;
-				rangeOrOptionsDeadFeature = [];
-				rangeOrOptionOptionalFeature = [];
-				rangeOrOptionsRedudantConstraint = [];
-				console.log("da");
+				rangeOrOptions.forEach(ele => ele = []);
 				for(const ele of diagnostics){
 						switch(ele.message){
 							case "dead feature":{
-								rangeOrOptionsDeadFeature.push(ele.range);
+								rangeOrOptions[0].push(ele.range);
 								break;
 							}
 							case "false-optional feature":{
-								rangeOrOptionOptionalFeature.push(ele.range);
+								rangeOrOptions[1].push(ele.range);
 								break;
 							}
 							case "redundant constraint":{
-								rangeOrOptionsRedudantConstraint.push(ele.range);
+								rangeOrOptions[2].push(ele.range);
+								break;
+							}
+							case "void feature":{
+								rangeOrOptions[3].push(ele.range);
 								break;
 							}
 							 
 						}
 				}
-				textEditor?.setDecorations(redundantConstraintDecorator,rangeOrOptionsRedudantConstraint);
-				textEditor?.setDecorations(deadFeatureDecorator,rangeOrOptionsDeadFeature);
-				textEditor?.setDecorations(optioanlFeatureDecorator,rangeOrOptionOptionalFeature);
+				decorators.forEach((decorator,index) => textEditor?.setDecorations(decorator,rangeOrOptions[index]));
 				next(uri,diagnostics);
 			},
 		}

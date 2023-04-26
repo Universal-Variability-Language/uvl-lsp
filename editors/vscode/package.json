@@ -70,21 +70,21 @@
         "id": "color.deadfeature",
         "description": "color Theme for dead feature",
         "defaults": {
-          "dark": "#ff2a2a",
-					"light": "#d6393955"
+          "dark": "#f34c4c",
+					"light": "#f34c4c"
         }
       }, {
-        "id": "color.falseoptionalfeature",
-        "description": "color Theme for false-optional feature",
+        "id": "color.voidfeature",
+        "description": "color Theme for void feature feature",
         "defaults": {
-          "dark": "#db2ca7e5",
-					"light": "#ec8cecb6"
+          "dark": "#ff3333e5",
+					"light": "#ff3333e5"
         }
       }, {
-        "id": "color.redundantconstraint",
-        "description": "color Theme for redudant Constraint",
+        "id": "color.yellow",
+        "description": "color Theme for redudant Constraint and false-optional feature",
         "defaults": {
-          "dark": "#ffe6007c",
+          "dark": "#8f8b66",
 					"light": "#ffef93d2"
         }
       }
