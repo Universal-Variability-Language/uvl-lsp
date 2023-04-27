@@ -11,13 +11,13 @@ import * as mkdirp from "mkdirp";
 import * as admzip from "adm-zip";
 import * as child_process from "child_process";
 import {
-	
+
 	DiagnosticSeverity,
 	LanguageClient,
 	LanguageClientOptions,
 	ServerOptions,
 	Trace,
-	
+
 	TransportKind
 } from 'vscode-languageclient/node';
 import axios from "axios";
@@ -29,7 +29,7 @@ import { ClientRequest } from 'http';
 import { info } from 'console';
 
 let client: LanguageClient | null = null;
-let outputChannel:vscode.OutputChannel|null = null ;
+let outputChannel: vscode.OutputChannel | null = null;
 const SOURCE_URI = "https://api.github.com/repos/Universal-Variability-Language/uvl-lsp/releases/latest";
 
 
@@ -244,12 +244,12 @@ export async function activate(context: vscode.ExtensionContext) {
 			'UVLS Configure', // Title of the panel displayed to the user
 			vscode.ViewColumn.One, // Editor column to show the new webview panel in.
 			{
-				enableScripts:true,
+				enableScripts: true,
 				retainContextWhenHidden: true
 			} // Webview options. More on these later.
 		);
 		outputChannel?.appendLine(`${uri}`);
-		panel.webview.html  = panel.webview.html = `<!DOCTYPE html>
+		panel.webview.html = panel.webview.html = `<!DOCTYPE html>
 		<html lang="en"">
 		<head>
 			<meta charset="UTF-8">
@@ -282,37 +282,45 @@ async function startClient(context: ExtensionContext) {
 	outputChannel = vscode.window.createOutputChannel("UVL Language Server");
 	const serverOptions: ServerOptions = {
 		command: path, // Replace with your own command.,
-		 
+
 	};
-    // Decorator for dead features
+	// Decorator for dead features
 	const decorators: Array<vscode.TextEditorDecorationType> = new Array(4);
 	decorators[0] = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: context.asAbsolutePath("assets/deadfeature.svg"),
 		gutterIconSize: "90%",
-		backgroundColor: {id: 'color.deadfeature'}	
+		backgroundColor: { id: 'color.deadfeature' }
 	});
 
 	// Decorator for false-optional features
 	decorators[1] = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: context.asAbsolutePath("assets/falseoptional.svg"),
 		gutterIconSize: "90%",
-		backgroundColor: {id: 'color.yellow'}
+		backgroundColor: { id: 'color.yellow' }
 	});
-	
+
 	//Decorator for redundant Constraints
 	decorators[2] = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: context.asAbsolutePath("assets/redundantconstraint.svg"),
 		gutterIconSize: "90%",
-		backgroundColor: {id: 'color.yellow'}
+		backgroundColor: { id: 'color.yellow' }
 	});
 	//Decorator for void feature
 	decorators[3] = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: context.asAbsolutePath("assets/voidfeature.svg"),
 		gutterIconSize: "90%",
-		backgroundColor: {id: 'color.voidfeature'}
+		backgroundColor: { id: 'color.voidfeature' }
 	});
-	let rangeOrOptions: Array<Array<vscode.Range>> = [[],[],[],[]];
-
+	let rangeOrOptions: Map<String,Array<Array<vscode.Range>>> = new Map();
+	
+	//If we change the textEditor, the Decoration remains intact 
+	window.onDidChangeActiveTextEditor((editor) =>{
+		if(editor !== undefined && rangeOrOptions !== null){
+			const range = rangeOrOptions.get(editor.document.fileName);
+			if(range !== undefined) decorators.forEach((decorator, index) => editor.setDecorations(decorator,range[0]));
+		}
+	});
+	
 	let documentSelector = [{ scheme: "file", language: "uvl" }, { scheme: "file", pattern: "**/*.uvl.json" }];
 	const clientOptions: LanguageClientOptions = {
 		documentSelector,
@@ -323,39 +331,48 @@ async function startClient(context: ExtensionContext) {
 			handleDiagnostics(uri, diagnostics, next) {
 				// handle anomilies
 				const textEditor = window.activeTextEditor;
-				rangeOrOptions.forEach(ele => ele = []);
-				for(const ele of diagnostics){
-						switch(ele.message){
-							case "dead feature":{
-								rangeOrOptions[0].push(ele.range);
+				if (textEditor !== undefined && textEditor.document.fileName === uri.path) {
+					if(!rangeOrOptions.has(textEditor.document.fileName)){
+						rangeOrOptions.set(textEditor.document.fileName,[[],[],[],[]]);
+					}
+					let range = rangeOrOptions.get(textEditor.document.fileName);
+					range![0] = [];
+					range![1] = [];
+					range![2] = [];
+					range![3] = [];
+					for (const ele of diagnostics) {
+						switch (ele.message) {
+							case "dead feature": {
+								range![0].push(ele.range);
 								break;
 							}
-							case "false-optional feature":{
-								rangeOrOptions[1].push(ele.range);
+							case "false-optional feature": {
+								range![1].push(ele.range);
 								break;
 							}
-							case "redundant constraint":{
-								rangeOrOptions[2].push(ele.range);
+							case "redundant constraint": {
+								range![2].push(ele.range);
 								break;
 							}
-							case "void feature":{
-								rangeOrOptions[3].push(ele.range);
+							case "void feature": {
+								range![3].push(ele.range);
 								break;
 							}
-							 
+
 						}
+					}
+					decorators.forEach((decorator, index) => textEditor.setDecorations(decorator, range![index]));
 				}
-				decorators.forEach((decorator,index) => textEditor?.setDecorations(decorator,rangeOrOptions[index]));
-				next(uri,diagnostics);
+				next(uri, diagnostics);
 			},
 		}
-		
+
 	};
 	outputChannel.appendLine("test")
 	client = new LanguageClient('uvls', serverOptions, clientOptions);
-	client.onRequest("workspace/executeCommand",async (args)=>{
-		await vscode.commands.executeCommand(args.command,args.arguments);
-		
+	client.onRequest("workspace/executeCommand", async (args) => {
+		await vscode.commands.executeCommand(args.command, args.arguments);
+
 	});
 	client.setTrace(Trace.Verbose);
 	client.start();
