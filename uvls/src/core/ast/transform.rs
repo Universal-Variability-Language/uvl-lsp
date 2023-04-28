@@ -523,6 +523,19 @@ fn opt_function_args(state: &mut VisitorState) -> Option<Vec<Path>> {
     })
 }
 
+fn check_aggregate(state: &mut VisitorState) {
+    info!("[START] checkAggregate");
+    for i in state.ast.includes.iter() {
+        /*if let Symbol::LangLvl(radius) = my_shape {
+            println!("value: {}", radius);
+        }*/
+        info!(" {:?}", i.lang_lvl);
+    }
+    info!("[END] checkAggregate");
+    //info!("{:?}", );
+    state.push_error(10, "aggregate function");
+}
+
 fn opt_aggregate(state: &mut VisitorState) -> Option<Expr> {
     let op = opt_aggreate_op(state)?;
     if state.child_by_name("tail").is_some() {
@@ -585,7 +598,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
             })
         }
         "nested_expr" => visit_children(state, opt_numeric).map(|c| c.content),
-        "function" => match state.slice(state.child_by_name("op")?).borrow() {
+        "function" => {check_aggregate(state); match state.slice(state.child_by_name("op")?).borrow() {
             "sum" | "avg" => opt_aggregate(state),
             "len" => {
                 if state.child_by_name("tail").is_some() {
@@ -610,7 +623,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
                 state.push_error(30, "unknown function");
                 None
             }
-        },
+        }},
         _ => {
             state.push_error(40, "found a constraint, expected a expression");
             None
