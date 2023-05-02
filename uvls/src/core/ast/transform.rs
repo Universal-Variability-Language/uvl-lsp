@@ -527,34 +527,38 @@ fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
     info!("[START] check_langlvls");
     info!("Search for: {:?}", searched_lang_lvl);
 
-    if state.ast.includes.is_empty() {
+    if state.ast.includes.is_empty() { // no includes means, that implicitly everything is included
         return ();
     }
 
     let includes: Vec<LanguageLevel> = state.ast.includes.clone().into_iter().map(|x| x.lang_lvl).collect();
 
     match searched_lang_lvl {
-        LanguageLevel::SMT(sub_lang_lvls) if sub_lang_lvls.iter().fold(true, |mut res, val| {
-            let mut is_match = false;
-            for i in includes.iter(){
-                match i {
-                    LanguageLevel::SMT(x) if x.contains(&val) => {info!("contains {:?}", val); is_match = true; ()},
-                    _ => ()
-                }
-            }
-            res &= is_match; res
+        LanguageLevel::SMT(sub_lang_lvls)
+            if (sub_lang_lvls.is_empty() && includes.iter().any(|x| matches!(x, LanguageLevel::SMT(_)))) ||
+                sub_lang_lvls.iter().fold(false, |mut res, val: &LanguageLevelSMT| {
+                    let mut is_match = false;
+                    for i in includes.iter(){
+                        match i {
+                            LanguageLevel::SMT(x) if x.contains(&LanguageLevelSMT::Any) || x.contains(&val) => {info!("contains {:?}", val); is_match = true; ()},
+                            _ => ()
+                        }
+                    }
+                    res |= is_match; res
         }) => info!("includes correct SMT lang_lvl"),
-        LanguageLevel::SAT(sub_lang_lvls) if sub_lang_lvls.iter().fold(true, |mut res, val| {
-            let mut is_match = false;
-            for i in includes.iter(){
-                match i {
-                    LanguageLevel::SAT(x) if x.contains(&val) => {info!("contains {:?}", val); is_match = true; ()},
-                    _ => ()
-                }
-            }
-            res &= is_match; res
+        LanguageLevel::SAT(sub_lang_lvls)
+            if (sub_lang_lvls.is_empty() && includes.iter().any(|x| matches!(x, LanguageLevel::SAT(_)))) ||
+                sub_lang_lvls.iter().fold(false, |mut res, val| {
+                    let mut is_match = false;
+                    for i in includes.iter(){
+                        match i {
+                            LanguageLevel::SAT(x) if x.contains(&LanguageLevelSAT::Any) || x.contains(&val) => {info!("contains {:?}", val); is_match = true; ()},
+                            _ => ()
+                        }
+                    }
+                    res |= is_match; res
         }) => info!("includes correct SAT lang_lvl"),
-        _ => state.push_error(10, format!("Syntax does not correspond includes. Please include {:?}", searched_lang_lvl))
+        _ => state.push_error(10, format!("Operation does not correspond includes. Please include {:?}", searched_lang_lvl))
     }
     info!("[END] check_langlvls");
 }
@@ -597,7 +601,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
 
         "number" => Some(Expr::Number(opt_number(state)?)),
         "string" => Some(Expr::String(opt_string(state)?)),
-        "binary_expr" => {
+        "binary_expr" => { check_langlvls(state, LanguageLevel::SMT(vec![]));
             let op = state.child_by_name("op").unwrap();
             visit_children(state, |state| {
                 if let Some(op) = opt_numeric_op(op) {
@@ -621,7 +625,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
             })
         }
         "nested_expr" => visit_children(state, opt_numeric).map(|c| c.content),
-        "function" => {check_langlvls(state, LanguageLevel::SMT(vec![LanguageLevelSMT::Any, LanguageLevelSMT::Aggregate])); match state.slice(state.child_by_name("op")?).borrow() {
+        "function" => {check_langlvls(state, LanguageLevel::SMT(vec![LanguageLevelSMT::Aggregate])); match state.slice(state.child_by_name("op")?).borrow() {
             "sum" | "avg" => opt_aggregate(state),
             "len" => {
                 if state.child_by_name("tail").is_some() {
@@ -694,6 +698,7 @@ fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
         }
         "nested_expr" => visit_children(state, opt_constraint).map(|c| c.content),
         "binary_expr" => {
+            check_langlvls(state, LanguageLevel::SMT(vec![]));
             let op = state.child_by_name("op").unwrap();
             visit_children(state, |state| {
                 if let Some(op) = opt_logic_op(op) {
@@ -857,7 +862,10 @@ fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty:
             .parent()
             .unwrap()
             .child_by_field_name("cardinality")
-            .and_then(|n| opt_cardinality(n, state)),
+            .and_then(|n| {
+                check_langlvls(state, LanguageLevel::SMT(vec![LanguageLevelSMT::FeatureCardinality]));
+                opt_cardinality(n, state)
+            }),
     };
     let sym = Symbol::Feature(state.ast.features.len());
     state.ast.features.push(feature);
@@ -967,6 +975,7 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
             visit_group(state, parent, mode);
         }
         "cardinality" => {
+            check_langlvls(state, LanguageLevel::SAT(vec![LanguageLevelSAT::GroupCardinality]));
             let card = opt_cardinality(state.node(), state).unwrap_or(Cardinality::Any);
             visit_group(state, parent, GroupMode::Cardinality(card));
         }
