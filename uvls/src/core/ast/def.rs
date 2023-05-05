@@ -130,6 +130,11 @@ pub struct Attribute {
     pub depth: u32,
 }
 #[derive(Clone, Debug)]
+pub struct Keyword {
+    pub name: Ustr,
+    pub span: Span,
+}
+#[derive(Clone, Debug)]
 pub struct Dir {
     pub name: Ustr,
     pub depth: u32,
@@ -247,6 +252,7 @@ pub struct ExprDecl {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, enum_kinds::EnumKind)]
 #[enum_kind(SymbolKind, derive(Hash))]
 pub enum Symbol {
+    Keyword(usize),
     Feature(usize),
     Constraint(usize),
     Attribute(usize),

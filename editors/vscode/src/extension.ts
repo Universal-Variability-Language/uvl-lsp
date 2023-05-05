@@ -317,7 +317,7 @@ async function startClient(context: ExtensionContext) {
 	window.onDidChangeActiveTextEditor((editor) =>{
 		if(editor !== undefined && rangeOrOptions !== null){
 			const range = rangeOrOptions.get(editor.document.fileName);
-			if(range !== undefined) decorators.forEach((decorator, index) => editor.setDecorations(decorator,range[0]));
+			if(range !== undefined) decorators.forEach((decorator, index) => editor.setDecorations(decorator,range[index]));
 		}
 	});
 	
@@ -354,7 +354,7 @@ async function startClient(context: ExtensionContext) {
 								range![2].push(ele.range);
 								break;
 							}
-							case "void feature": {
+							case "void feature model": {
 								range![3].push(ele.range);
 								break;
 							}

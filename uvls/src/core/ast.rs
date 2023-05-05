@@ -59,6 +59,7 @@ impl TreeMap {
 //Ast container each symbol kind lives in its own vector
 #[derive(Clone, Debug, Default)]
 struct Ast {
+    keywords: Vec<Keyword>,
     namespace: Option<Path>,
     includes: Vec<LanguageLevelDecl>,
     import: Vec<Import>,
@@ -156,6 +157,7 @@ impl Ast {
             Symbol::Group(i) => Some(self.groups[i].span.clone()),
             Symbol::Constraint(i) => Some(self.constraints[i].span.clone()),
             Symbol::LangLvl(i) => Some(self.includes[i].span.clone()),
+            Symbol::Keyword(i) => Some(self.keywords[i].span.clone()),
             _ => None,
         }
     }
