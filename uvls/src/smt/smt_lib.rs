@@ -4,9 +4,9 @@ use indexmap::IndexSet;
 use lazy_static::lazy_static;
 use log::info;
 use regex::Regex;
-use tokio::time::Instant;
 use std::fmt::Display;
 use std::fmt::Write;
+use tokio::time::Instant;
 #[derive(Clone, Debug)]
 pub enum AssertName {
     Config,
@@ -109,7 +109,7 @@ impl SMTModule {
     pub fn parse_values<'a>(
         &'a self,
         values: &'a str,
-        module:&'a Module,
+        module: &'a Module,
     ) -> impl Iterator<Item = (ModuleSymbol, ConfigValue)> + 'a {
         super::parse::iter_values(self, module, values)
         /*
@@ -165,7 +165,7 @@ impl SMTModule {
     }
 
     // create with all Variable the source for the SMTSolver
-    pub fn variablen_to_source(&self, module: &Module) -> String {
+    pub fn variable_to_source(&self, module: &Module) -> String {
         let mut out = "".to_string();
         for (i, v) in self.variables.iter().enumerate() {
             let ty = module.type_of(*v);
@@ -184,11 +184,11 @@ impl SMTModule {
     ) -> String {
         let mut out = "".to_string();
         let _ = write!(out, "(assert");
-        
+
         if info.is_some() {
             let _ = write!(out, "(! ");
         }
-        if not{
+        if not {
             let _ = write!(out, "( not ");
         }
         #[derive(Debug)]
@@ -320,7 +320,7 @@ impl SMTModule {
         if info.is_some() {
             let _ = write!(out, " :named a{i})");
         }
-        
+
         let _ = write!(out, ")\n");
         out
     }
@@ -330,9 +330,9 @@ impl SMTModule {
         let time = Instant::now();
         //
         let mut out = self.config_to_source();
-        let _ = writeln!(out, "{}", self.variablen_to_source(module));
+        let _ = writeln!(out, "{}", self.variable_to_source(module));
         for (i, Assert(info, expr)) in self.asserts.iter().enumerate() {
-            let _ = writeln!(out, "{}", self.assert_to_source(i, info, expr,false));
+            let _ = writeln!(out, "{}", self.assert_to_source(i, info, expr, false));
         }
         info!("model to string  in {:?}", time.elapsed());
         //info!("{out}");
@@ -364,7 +364,7 @@ impl<'a> SMTBuilder<'a> {
         Expr::Var(
             self.sym2var
                 .get_index_of(&self.module.resolve_value(ms))
-                .unwrap(),
+                .unwrap_or(0),
         )
     }
     //The language allows non boolean variables as attribute and feature parents
@@ -566,13 +566,13 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
         sym2var: IndexSet::new(),
         assert: Vec::new(),
     };
-     //encode features
+    //encode features
     for (m, file) in module.instances() {
         for f in file.all_features() {
             builder.push_var(m.sym(f));
         }
     }
-     //encode constraints
+    //encode constraints
     for (m, file) in module.instances() {
         for c in file.all_constraints() {
             let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder);

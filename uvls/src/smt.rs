@@ -231,7 +231,7 @@ async fn find_fixed(
                 });
             let values = solve.values(unknown).await?;
             //info!("model {:?}", time.elapsed());
-            for (s, v) in module.parse_values(&values,base_module) {
+            for (s, v) in module.parse_values(&values, base_module) {
                 if let Some(old) = state.get(&s) {
                     match (v, old) {
                         (ConfigValue::Bool(true), SMTValueState::Off) => {
@@ -256,34 +256,29 @@ async fn find_fixed(
     let _ = writeln!(
         source_variable,
         "{}",
-        smt_module_constraint.variablen_to_source(&base_module)
+        smt_module_constraint.variable_to_source(&base_module)
     );
     info!("{source_variable}");
     //create SMTSolver for the constraints
     let mut solver_constraint = SmtSolver::new(source_variable, &cancel).await?;
     for (i, Assert(info, expr)) in smt_module_constraint.asserts.iter().enumerate() {
-        //get the negated constraint source 
-        let constraint_assert = smt_module_constraint.assert_to_source(i, info, expr,true);
+        //get the negated constraint source
+        let constraint_assert = smt_module_constraint.assert_to_source(i, info, expr, true);
         info!("COnstraint, {constraint_assert}");
         //push negated constraint
         solver_constraint
-            .push(format!(
-                "(push 1) {}",
-                constraint_assert
-            ))
+            .push(format!("(push 1) {}", constraint_assert))
             .await?;
         //check if negated constraint is unsat
         let sat = solver_constraint.check_sat().await?;
-        if !sat{
+        if !sat {
             info!("TAUT, {constraint_assert}");
             let module_symbol = info.clone().unwrap().0;
             state.insert(module_symbol, SMTValueState::On);
         }
-        //pop negated constraint 
+        //pop negated constraint
         solver_constraint.push("(pop 1)".into()).await?;
-
     }
-    
 
     Ok(state)
 }
@@ -297,26 +292,21 @@ async fn create_model(
 ) -> Result<SMTModel> {
     let time = Instant::now();
     let mut solver = SmtSolver::new(source, &cancel).await?;
-    info!("create model: {:?}",time.elapsed());
+    info!("create model: {:?}", time.elapsed());
     if solver.check_sat().await? {
-
         let values = if value | fixed {
-
             let query = module
                 .variables
                 .iter()
                 .enumerate()
                 .fold(String::new(), |acc, (i, _)| format!("{acc} v{i}"));
-            
 
             let values = solver.values(query).await?;
 
-
             let time = Instant::now();
-            let values = module.parse_values(&values,base_module).collect();
-            info!("parse values: {:?}",time.elapsed());
+            let values = module.parse_values(&values, base_module).collect();
+            info!("parse values: {:?}", time.elapsed());
             values
-
         } else {
             HashMap::new()
         };
