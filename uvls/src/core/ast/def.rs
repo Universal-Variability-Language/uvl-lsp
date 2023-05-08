@@ -77,13 +77,13 @@ pub enum LanguageLevelMajor {
     SAT,
     SMT,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LanguageLevelSMT {
     Any,
     FeatureCardinality,
     Aggregate,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LanguageLevelSAT {
     Any,
     GroupCardinality,
