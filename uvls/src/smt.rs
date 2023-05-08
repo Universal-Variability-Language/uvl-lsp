@@ -258,13 +258,13 @@ async fn find_fixed(
         "{}",
         smt_module_constraint.variable_to_source(&base_module)
     );
-    info!("{source_variable}");
+    //info!("{source_variable}");
     //create SMTSolver for the constraints
     let mut solver_constraint = SmtSolver::new(source_variable, &cancel).await?;
     for (i, Assert(info, expr)) in smt_module_constraint.asserts.iter().enumerate() {
         //get the negated constraint source
         let constraint_assert = smt_module_constraint.assert_to_source(i, info, expr, true);
-        info!("COnstraint, {constraint_assert}");
+       // info!("COnstraint, {constraint_assert}");
         //push negated constraint
         solver_constraint
             .push(format!("(push 1) {}", constraint_assert))

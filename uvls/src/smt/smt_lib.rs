@@ -572,6 +572,19 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
             builder.push_var(m.sym(f));
         }
     }
+    //encode attributes
+    for (m, file) in module.instances() {
+        for f in file.all_features() {
+            file.visit_named_children(f, true, |a, _| {
+                if !matches!(a, Symbol::Attribute(..)) {
+                    return true;
+                }
+                let ms = m.sym(a);
+                 builder.push_var(ms);
+                true
+            });
+        }
+    }
     //encode constraints
     for (m, file) in module.instances() {
         for c in file.all_constraints() {
