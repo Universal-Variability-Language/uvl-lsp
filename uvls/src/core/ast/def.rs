@@ -76,6 +76,7 @@ pub enum Cardinality {
 pub enum LanguageLevelMajor {
     SAT,
     SMT,
+    TYPE,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum LanguageLevelSMT {
@@ -88,10 +89,17 @@ pub enum LanguageLevelSAT {
     Any,
     GroupCardinality,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub enum LanguageLevelTYPE {
+    Any,
+    NumericConstraints,
+    StringConstraints,
+}
 #[derive(Clone, Debug)]
 pub enum LanguageLevel {
     SAT(Vec<LanguageLevelSAT>),
     SMT(Vec<LanguageLevelSMT>),
+    TYPE(Vec<LanguageLevelTYPE>),
 }
 
 #[derive(Clone, Debug)]
