@@ -638,11 +638,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
         }
 
         "number" => Some(Expr::Number(opt_number(state)?)),
-        "string" => {
-            info!("opt_numeric string 01");
-            check_langlvls(state, LanguageLevel::TYPE(vec![LanguageLevelTYPE::StringConstraints]));
-            Some(Expr::String(opt_string(state)?))
-        },
+        "string" => Some(Expr::String(opt_string(state)?)),
         "binary_expr" => { check_langlvls(state, LanguageLevel::SMT(vec![]));
             let op = state.child_by_name("op").unwrap();
             visit_children(state, |state| {
@@ -660,7 +656,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
                     state.push_error_node(
                         state.node().parent().unwrap(),
                         40,
-                        "found a constraint, expected a expression",
+                        "found a constraint, expected an expression",
                     );
                     None
                 }
@@ -817,11 +813,7 @@ fn opt_attrib_expr(state: &mut VisitorState) -> Option<Value> {
     match state.kind() {
         "number" => Some(Value::Number(opt_number(state)?)),
         "bool" => Some(Value::Bool(visit_children(state, opt_bool))),
-        "string" => {
-            info!("opt_attrib_expr string 01");
-            check_langlvls(state, LanguageLevel::TYPE(vec![LanguageLevelTYPE::StringConstraints]));
-            Some(Value::String(opt_string(state)?))
-        },
+        "string" => Some(Value::String(opt_string(state)?)),
         "path" => {
             state.push_error(30, "attribute references are not supported");
             None

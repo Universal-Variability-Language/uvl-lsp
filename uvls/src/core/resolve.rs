@@ -292,10 +292,10 @@ fn resolve_constraint(
             }
 
             let rhs_ty = gather_expr_options(ctx, file, rhs, err, ref_map);
-
             if rhs_ty.is_empty() {
                 return;
             }
+
             if (rhs_ty & lhs_ty).is_empty() {
                 err.span(
                     constraint.span.clone(),
@@ -311,6 +311,26 @@ fn resolve_constraint(
             }
             let req = Type::String | Type::Real;
             let ty = req & lhs_ty & rhs_ty;
+            if !((Type::String | Type::String) & ty).is_empty() &&
+                !{  // if TYPE-level.string-constraints is not included in any way
+                    let ast_document = ctx.files.get(&file).unwrap();
+                    ast_document.all_lang_lvls()
+                        .map(|x| ast_document.lang_lvl(x).unwrap())
+                             .any(|s|
+                                matches!(s, LanguageLevel::TYPE(x) if x.contains(&LanguageLevelTYPE::Any))
+                             || matches!(s, LanguageLevel::TYPE(x) if x.contains(&LanguageLevelTYPE::StringConstraints)))
+                        || {let s: Vec<Symbol> = ast_document.all_lang_lvls().collect(); s.is_empty()}
+                }
+            {
+                err.span(
+                    constraint.span.clone(),
+                    file,
+                    30,
+                    format!(
+                        "Need to include TYPE-level.string-constraints"
+                    ),
+                );
+            }
             if ty.is_empty() {
                 err.span(
                     constraint.span.clone(),
