@@ -335,7 +335,6 @@ impl SMTModule {
             let _ = writeln!(out, "{}", self.assert_to_source(i, info, expr, false));
         }
         info!("model to string  in {:?}", time.elapsed());
-        //info!("{out}");
         out
     }
     pub fn var(&self, ms: ModuleSymbol) -> usize {
