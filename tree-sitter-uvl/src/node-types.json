@@ -970,14 +970,6 @@
     "named": false
   },
   {
-    "type": "string-function",
-    "named": false
-  },
-  {
-    "type": "numeric-function",
-    "named": false
-  },
-  {
     "type": "alternative",
     "named": false
   },
@@ -1042,11 +1034,19 @@
     "named": true
   },
   {
+    "type": "numeric-constraints",
+    "named": false
+  },
+  {
     "type": "optional",
     "named": false
   },
   {
     "type": "or",
+    "named": false
+  },
+  {
+    "type": "string-constraints",
     "named": false
   },
   {
