@@ -201,6 +201,8 @@ module.exports = grammar({
             'feature-cardinality',
             'aggregate-function',
             'type-constraints',
+            'string-constraints',
+            'numeric-constraints',
             '*'
         ),
         type: _=>choice(

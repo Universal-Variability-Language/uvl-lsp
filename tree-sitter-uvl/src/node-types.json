@@ -970,6 +970,14 @@
     "named": false
   },
   {
+    "type": "string-function",
+    "named": false
+  },
+  {
+    "type": "numeric-function",
+    "named": false
+  },
+  {
     "type": "alternative",
     "named": false
   },
