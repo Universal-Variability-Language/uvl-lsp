@@ -284,7 +284,7 @@ async function startClient(context: ExtensionContext) {
 		documentSelector: [{ scheme: "file", language: "uvl" }, { scheme: "file", pattern: "**/*.uvl.json" }],
 		outputChannel,
 	};
-	outputChannel.appendLine("test")
+	outputChannel.appendLine("test");
 	client = new LanguageClient('uvls', serverOptions, clientOptions);
 	client.onRequest("workspace/executeCommand",async (args)=>{
 		await vscode.commands.executeCommand(args.command,args.arguments);
