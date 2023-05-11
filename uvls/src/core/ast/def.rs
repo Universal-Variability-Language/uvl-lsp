@@ -203,6 +203,12 @@ pub enum AggregateOP {
     Sum,
 }
 
+#[derive(Clone, Debug)]
+pub enum IntegerOP {
+    Floor,
+    Ceil,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EquationOP {
     Greater,
@@ -248,6 +254,10 @@ pub enum Expr {
         op: AggregateOP,
         context: Option<Symbol>,
         query: Path,
+    },
+    Integer {
+        op: IntegerOP,
+        n: Box<ExprDecl>,
     },
     Len(Box<ExprDecl>),
 }
