@@ -485,6 +485,11 @@ fn commit_expr(
                 commit_expr(ctx, file, lhs, Type::String, err, ref_map);
             });
         }
+        Expr::Integer{op: _, n} => {
+            stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
+                commit_expr(ctx, file, n, Type::Real, err, ref_map);
+            });
+        }
         Expr::Ref(sym) => {
             let rs = RootSymbol { sym: *sym, file };
             let tgt = ctx
