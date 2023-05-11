@@ -668,7 +668,7 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     );
 }
 fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["sum".into(), "avg".into(), "len".into()]);
+    add_keywords(query, top, w, ["sum".into(), "avg".into(), "len".into(), "floor".into(), "ceil".into()]);
 }
 fn make_relativ_path(path: &[CompactString], origin: &[CompactString]) -> Option<CompactString> {
     if path.len() > origin.len() {

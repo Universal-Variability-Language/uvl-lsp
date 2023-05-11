@@ -524,6 +524,16 @@ fn opt_aggreate_op(state: &mut VisitorState) -> Option<AggregateOP> {
         }
     }
 }
+fn opt_integer_op(state: &mut VisitorState) -> Option<IntegerOP> {
+    match state.slice(state.child_by_name("op")?).borrow() {
+        "floor" => Some(IntegerOP::Floor),
+        "ceil" => Some(IntegerOP::Ceil),
+        _ => {
+            state.push_error(30, "unknown integer function");
+            None
+        }
+    }
+}
 fn opt_function_args(state: &mut VisitorState) -> Option<Vec<Path>> {
     visit_children(state, |state| {
         let mut args = Vec::new();
@@ -628,6 +638,25 @@ fn opt_aggregate(state: &mut VisitorState) -> Option<Expr> {
         }
     }
 }
+fn opt_integer(state: &mut VisitorState) -> Option<Expr> {
+    if state.child_by_name("tail").is_some() {
+        state.push_error(10, "tailing comma not allowed");
+    }
+    let op = opt_integer_op(state)?;
+    visit_children(state, |state| {
+        if state.goto_field("arg") {
+            let n: Box<ExprDecl> = opt_numeric(state)?.into();
+            let out = Some(Expr::Integer{op: op.clone(), n});
+            if state.goto_next_sibling() && state.goto_field("arg") {
+                state.push_error(30, "expected exactly one argument");
+            }
+            out
+        } else {
+            state.push_error(30, "missing argument");
+            None
+        }
+    })
+}
 fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
     let span = state.node().byte_range();
     state.goto_named();
@@ -688,7 +717,10 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
                     }
                 })
             },
-            
+            "floor" | "ceil" => {
+                check_langlvls(state, LanguageLevel::TYPE(vec![LanguageLevelTYPE::NumericConstraints]));
+                opt_integer(state)
+            },
             _ => {
                 state.push_error(30, "unknown function");
                 None

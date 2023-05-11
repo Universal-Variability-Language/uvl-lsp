@@ -380,6 +380,22 @@ fn gather_expr_options(
             }
             Type::Real.into()
         }
+        Expr::Integer { op: _ , n } => {
+            let n_ty = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
+                gather_expr_options(ctx, file, n, err, ref_map)
+            });
+            if (n_ty & Type::Real).is_empty() {
+                err.span(
+                    expr.span.clone(),
+                    file,
+                    30,
+                    format!("type missmatch expected Real/Number",),
+                );
+                Default::default()
+            } else {
+                Type::Real.into()
+            }
+        },
         Expr::Binary { rhs, lhs, op } => {
             let lhs_ty = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
                 gather_expr_options(ctx, file, lhs, err, ref_map)
@@ -605,6 +621,14 @@ pub fn estimate_types(
                 "len" => estimate_types(
                     node.child_by_field_name("arg").unwrap(),
                     Type::String.into(),
+                    source,
+                    ty_map,
+                    file,
+                    root,
+                ),
+                "floor" | "ceil" => estimate_types(
+                    node.child_by_field_name("arg").unwrap(),
+                    Type::Real.into(),
                     source,
                     ty_map,
                     file,
