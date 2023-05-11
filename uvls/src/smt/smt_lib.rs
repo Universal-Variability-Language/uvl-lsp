@@ -4,9 +4,9 @@ use indexmap::IndexSet;
 use lazy_static::lazy_static;
 use log::info;
 use regex::Regex;
-use tokio::time::Instant;
 use std::fmt::Display;
 use std::fmt::Write;
+use tokio::time::Instant;
 #[derive(Clone, Debug)]
 pub enum AssertName {
     Config,
@@ -109,7 +109,7 @@ impl SMTModule {
     pub fn parse_values<'a>(
         &'a self,
         values: &'a str,
-        module:&'a Module,
+        module: &'a Module,
     ) -> impl Iterator<Item = (ModuleSymbol, ConfigValue)> + 'a {
         super::parse::iter_values(self, module, values)
         /*
@@ -117,7 +117,7 @@ impl SMTModule {
         //The problem is that z3 encodes numbers using nested expressions instead of simple floating point
         //values. Hopefully all cases are covered here...
         //TODO replace this with a true eval parser(best use NOM)
-        
+
         lazy_static! {
             static ref RE: Regex = Regex::new(
                 r#"\(\s*v(\d+)\s+(?:(true|false)|\(- ((?:[0-9]*\.)?[0-9]+)\??|((?:[0-9]*\.)?[0-9]+)\??|"([^"]*)")\s*\)"#
@@ -155,152 +155,186 @@ impl SMTModule {
             self.asserts[idx].0.clone()
         })
     }
-    //tree to source
-    pub fn to_source(&self, module: &Module) -> String {
-        let time = Instant::now();
-        let mut out = "(set-option :produce-unsat-cores true)
-            (define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))
-            (set-option :smt.core.minimize true)\n"
+    // create source to config z3 Solver
+    pub fn config_to_source(&self) -> String {
+        let out = "(set-option :produce-unsat-cores true)
+        (define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))
+        (set-option :smt.core.minimize true)\n"
             .to_string();
+        out
+    }
+
+    // create with all Variable the source for the SMTSolver
+    pub fn variable_to_source(&self, module: &Module) -> String {
+        let mut out = "".to_string();
         for (i, v) in self.variables.iter().enumerate() {
             let ty = module.type_of(*v);
             let _ = writeln!(out, "(declare-const v{i} {ty})");
         }
-        for (i, Assert(info, expr)) in self.asserts.iter().enumerate() {
-            let _ = write!(out, "(assert");
-            if info.is_some() {
-                let _ = write!(out, "(! ");
-            }
-            #[derive(Debug)]
-            enum CExpr<'a> {
-                Expr(&'a Expr),
-                End,
-            }
-            let mut stack = vec![CExpr::Expr(expr)];
-            while let Some(e) = stack.pop() {
-                match e {
-                    CExpr::End => {
-                        let _ = write!(out, ")");
+        out
+    }
+
+    // create the source for an assert, if the assert should be negated the variable neg must be true
+    pub fn assert_to_source(
+        &self,
+        i: usize,
+        info: &Option<AssertInfo>,
+        expr: &Expr,
+        not: bool,
+    ) -> String {
+        let mut out = "".to_string();
+        let _ = write!(out, "(assert");
+
+        if info.is_some() {
+            let _ = write!(out, "(! ");
+        }
+        if not {
+            let _ = write!(out, "( not ");
+        }
+        #[derive(Debug)]
+        enum CExpr<'a> {
+            Expr(&'a Expr),
+            End,
+        }
+        let mut stack = vec![CExpr::Expr(expr)];
+        while let Some(e) = stack.pop() {
+            match e {
+                CExpr::End => {
+                    let _ = write!(out, ")");
+                }
+                //Head
+                CExpr::Expr(e) => {
+                    match e {
+                        Expr::Bool(b) => {
+                            let _ = write!(out, " {b}");
+                        }
+                        Expr::Real(r) => {
+                            let _ = write!(out, " {r:?}");
+                        }
+                        Expr::String(val) => {
+                            let _ = write!(out, " \"{val}\"");
+                        }
+                        Expr::Var(off) => {
+                            let _ = write!(out, " v{off}");
+                        }
+                        Expr::Add(..) => {
+                            let _ = write!(out, "(+");
+                        }
+                        Expr::Sub(..) => {
+                            let _ = write!(out, "(-");
+                        }
+                        Expr::Mul(..) => {
+                            let _ = write!(out, "(*");
+                        }
+                        Expr::Div(..) => {
+                            let _ = write!(out, "(smooth_div");
+                        }
+                        Expr::And(..) => {
+                            let _ = write!(out, "(and");
+                        }
+                        Expr::Or(..) => {
+                            let _ = write!(out, "(or");
+                        }
+                        Expr::Implies(..) => {
+                            let _ = write!(out, "(=>");
+                        }
+                        Expr::Not(..) => {
+                            let _ = write!(out, "(not");
+                        }
+                        Expr::Ite(..) => {
+                            let _ = write!(out, "(ite");
+                        }
+                        Expr::Equal(..) => {
+                            let _ = write!(out, "(=");
+                        }
+                        Expr::Greater(..) => {
+                            let _ = write!(out, "(>");
+                        }
+                        Expr::Less(..) => {
+                            let _ = write!(out, "(<");
+                        }
+                        Expr::Strlen(..) => {
+                            let _ = write!(out, "(str.len");
+                        }
+                        Expr::AtLeast(min, ..) => {
+                            let _ = write!(out, "((_ at-least {min})");
+                        }
+                        Expr::AtMost(max, ..) => {
+                            let _ = write!(out, "((_ at-most {max})");
+                        }
+                        Expr::StrConcat(..) => {
+                            let _ = write!(out, "(str.++");
+                        }
+                        Expr::StrLess(..) => {
+                            let _ = write!(out, "(str.<");
+                        }
+                        Expr::StrLessEq(..) => {
+                            let _ = write!(out, "(str.<=");
+                        }
                     }
-                    //Head
-                    CExpr::Expr(e) => {
-                        match e {
-                            Expr::Bool(b) => {
-                                let _ = write!(out, " {b}");
-                            }
-                            Expr::Real(r) => {
-                                let _ = write!(out, " {r:?}");
-                            }
-                            Expr::String(val) => {
-                                let _ = write!(out, " \"{val}\"");
-                            }
-                            Expr::Var(off) => {
-                                let _ = write!(out, " v{off}");
-                            }
-                            Expr::Add(..) => {
-                                let _ = write!(out, "(+");
-                            }
-                            Expr::Sub(..) => {
-                                let _ = write!(out, "(-");
-                            }
-                            Expr::Mul(..) => {
-                                let _ = write!(out, "(*");
-                            }
-                            Expr::Div(..) => {
-                                let _ = write!(out, "(smooth_div");
-                            }
-                            Expr::And(..) => {
-                                let _ = write!(out, "(and");
-                            }
-                            Expr::Or(..) => {
-                                let _ = write!(out, "(or");
-                            }
-                            Expr::Implies(..) => {
-                                let _ = write!(out, "(=>");
-                            }
-                            Expr::Not(..) => {
-                                let _ = write!(out, "(not");
-                            }
-                            Expr::Ite(..) => {
-                                let _ = write!(out, "(ite");
-                            }
-                            Expr::Equal(..) => {
-                                let _ = write!(out, "(=");
-                            }
-                            Expr::Greater(..) => {
-                                let _ = write!(out, "(>");
-                            }
-                            Expr::Less(..) => {
-                                let _ = write!(out, "(<");
-                            }
-                            Expr::Strlen(..) => {
-                                let _ = write!(out, "(str.len");
-                            }
-                            Expr::AtLeast(min, ..) => {
-                                let _ = write!(out, "((_ at-least {min})");
-                            }
-                            Expr::AtMost(max, ..) => {
-                                let _ = write!(out, "((_ at-most {max})");
-                            }
-                            Expr::StrConcat(..) => {
-                                let _ = write!(out, "(str.++");
-                            }
-                            Expr::StrLess(..) => {
-                                let _ = write!(out, "(str.<");
-                            }
-                            Expr::StrLessEq(..) => {
-                                let _ = write!(out, "(str.<=");
+                    //Args
+                    match e {
+                        Expr::Add(v)
+                        | Expr::Sub(v)
+                        | Expr::Mul(v)
+                        | Expr::Div(v)
+                        | Expr::Or(v)
+                        | Expr::And(v)
+                        | Expr::Implies(v)
+                        | Expr::AtLeast(_, v)
+                        | Expr::AtMost(_, v)
+                        | Expr::Greater(v)
+                        | Expr::Less(v)
+                        | Expr::StrLess(v)
+                        | Expr::StrLessEq(v)
+                        | Expr::Equal(v) => {
+                            stack.push(CExpr::End);
+                            for i in v.iter().rev() {
+                                stack.push(CExpr::Expr(i));
                             }
                         }
-                        //Args
-                        match e {
-                            Expr::Add(v)
-                            | Expr::Sub(v)
-                            | Expr::Mul(v)
-                            | Expr::Div(v)
-                            | Expr::Or(v)
-                            | Expr::And(v)
-                            | Expr::Implies(v)
-                            | Expr::AtLeast(_, v)
-                            | Expr::AtMost(_, v)
-                            | Expr::Greater(v)
-                            | Expr::Less(v)
-                            | Expr::StrLess(v)
-                            | Expr::StrLessEq(v)
-                            | Expr::Equal(v) => {
-                                stack.push(CExpr::End);
-                                for i in v.iter().rev() {
-                                    stack.push(CExpr::Expr(i));
-                                }
-                            }
-                            Expr::Strlen(e) | Expr::Not(e) => {
-                                stack.push(CExpr::End);
-                                stack.push(CExpr::Expr(e));
-                            }
-                            Expr::StrConcat(rhs, lhs) => {
-                                stack.push(CExpr::End);
-                                stack.push(CExpr::Expr(rhs));
-                                stack.push(CExpr::Expr(lhs));
-                            }
-                            Expr::Ite(cond, lhs, rhs) => {
-                                stack.push(CExpr::End);
-                                stack.push(CExpr::Expr(rhs));
-                                stack.push(CExpr::Expr(lhs));
-                                stack.push(CExpr::Expr(cond));
-                            }
-                            Expr::Bool(..) | Expr::String(..) | Expr::Real(..) | Expr::Var(..) => {}
+                        Expr::Strlen(e) | Expr::Not(e) => {
+                            stack.push(CExpr::End);
+                            stack.push(CExpr::Expr(e));
                         }
+                        Expr::StrConcat(rhs, lhs) => {
+                            stack.push(CExpr::End);
+                            stack.push(CExpr::Expr(rhs));
+                            stack.push(CExpr::Expr(lhs));
+                        }
+                        Expr::Ite(cond, lhs, rhs) => {
+                            stack.push(CExpr::End);
+                            stack.push(CExpr::Expr(rhs));
+                            stack.push(CExpr::Expr(lhs));
+                            stack.push(CExpr::Expr(cond));
+                        }
+                        Expr::Bool(..) | Expr::String(..) | Expr::Real(..) | Expr::Var(..) => {}
                     }
                 }
             }
-            //name tag
-            if info.is_some() {
-                let _ = write!(out, " :named a{i})");
-            }
-            let _ = write!(out, ")\n");
         }
-        info!("model to string  in {:?}",time.elapsed());
-        //info!("{out}");
+        if not {
+            let _ = write!(out, " )");
+        }
+        //name tag
+        if info.is_some() {
+            let _ = write!(out, " :named a{i})");
+        }
+
+        let _ = write!(out, ")\n");
+        out
+    }
+
+    //tree to source
+    pub fn to_source(&self, module: &Module) -> String {
+        let time = Instant::now();
+        //
+        let mut out = self.config_to_source();
+        let _ = writeln!(out, "{}", self.variable_to_source(module));
+        for (i, Assert(info, expr)) in self.asserts.iter().enumerate() {
+            let _ = writeln!(out, "{}", self.assert_to_source(i, info, expr, false));
+        }
+        info!("model to string  in {:?}", time.elapsed());
         out
     }
     pub fn var(&self, ms: ModuleSymbol) -> usize {
@@ -329,7 +363,7 @@ impl<'a> SMTBuilder<'a> {
         Expr::Var(
             self.sym2var
                 .get_index_of(&self.module.resolve_value(ms))
-                .unwrap(),
+                .unwrap_or(0),
         )
     }
     //The language allows non boolean variables as attribute and feature parents
@@ -517,6 +551,49 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
         }
     }
 
+    SMTModule {
+        variables: builder.sym2var,
+        asserts: builder.assert,
+    }
+}
+
+//create an SMTModule, but the asserts are only constraints
+pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
+    assert!(module.ok);
+    let mut builder = SMTBuilder {
+        module,
+        sym2var: IndexSet::new(),
+        assert: Vec::new(),
+    };
+    //encode features
+    for (m, file) in module.instances() {
+        for f in file.all_features() {
+            builder.push_var(m.sym(f));
+        }
+    }
+    //encode attributes
+    for (m, file) in module.instances() {
+        for f in file.all_features() {
+            file.visit_named_children(f, true, |a, _| {
+                if !matches!(a, Symbol::Attribute(..)) {
+                    return true;
+                }
+                let ms = m.sym(a);
+                 builder.push_var(ms);
+                true
+            });
+        }
+    }
+    //encode constraints
+    for (m, file) in module.instances() {
+        for c in file.all_constraints() {
+            let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder);
+            builder.assert.push(Assert(
+                Some(AssertInfo(m.sym(c), AssertName::Constraint)),
+                expr,
+            ));
+        }
+    }
     SMTModule {
         variables: builder.sym2var,
         asserts: builder.assert,
