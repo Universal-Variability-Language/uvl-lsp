@@ -985,6 +985,11 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
     }
 }
 fn visit_features(state: &mut VisitorState) {
+    let keyword = Keyword { 
+        name: state.name(state.node()), 
+        span: state.node().byte_range()
+     };
+    state.ast.keywords.push(keyword);
     loop {
         check_no_extra_blk(state, "features");
         if state.kind() == "blk" {

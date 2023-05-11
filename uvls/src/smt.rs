@@ -409,9 +409,15 @@ async fn check_base_sat(
             }
             Ok((SMTModel::UNSAT { reasons }, module)) => {
                 let mut visited = HashSet::new();
+                let mut void_is_marked = false;
                 for r in reasons {
                     let file = module.file(r.0.instance).id;
-
+                    if !void_is_marked {
+                        // works only if keyword feature is the only keyword stored in the Keyword vector in the AST, but since I see no reason 
+                        // why another keyword is needed in the green tree, so the features keyword would always have id 0.
+                        e.sym(Symbol::Keyword(0), file, 12, "void feature model");
+                        void_is_marked = true;
+                    }
                     if visited.insert((r.0.sym, file)) {
                         e.sym(r.0.sym, file, 12, format!("UNSAT: {}", r.1))
                     }

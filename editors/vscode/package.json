@@ -64,7 +64,31 @@
           "default": true
         }
       }
-    }
+    },
+    "colors": [
+      {
+        "id": "color.deadfeature",
+        "description": "color Theme for dead feature",
+        "defaults": {
+          "dark": "#f34c4c",
+					"light": "#f34c4c"
+        }
+      }, {
+        "id": "color.voidfeature",
+        "description": "color Theme for void feature feature",
+        "defaults": {
+          "dark": "#ff3333e5",
+					"light": "#ff3333e5"
+        }
+      }, {
+        "id": "color.yellow",
+        "description": "color Theme for redudant Constraint and false-optional feature",
+        "defaults": {
+          "dark": "#8f8b66",
+					"light": "#ffef93d2"
+        }
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
