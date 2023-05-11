@@ -1,0 +1,162 @@
+ RootGraph { 
+	cache: Cache { 
+		fs: FileSystem { 
+			graph: Graph { 
+				Ty: "Directed", 
+				node_count: 6, 
+				edge_count: 5, 
+				edges: (0, 1), (1, 2), (2, 3), (3, 4), (4, 5), 
+				node weights: {0: Dir, 1: Dir, 2: Dir, 3: Dir, 4: Dir, 5: File(test.uvl)}, 
+				edge weights: {
+					0: Path(u!("Users")), 
+					1: Path(u!("Thilo")), 
+					2: Path(u!("Documents")), 
+					3: Path(u!("UVL_Testdaten")), 
+					4: Path(u!("test"))
+				} 
+			}, 
+			file2node: {test.uvl: NodeIndex(5)} 
+		}, 
+		config_modules: {}, 
+		ast: {
+			test.uvl: LinkedAstDocument { 
+				content: AstDocument { 
+					ast: Ast { 
+						namespace: None, 
+						includes: [], 
+						import: [], 
+						features: [Feature { 
+							name: SymbolSpan { 
+								name: u!("test"), span: 22..26
+							}, 
+							cardinality: None, 
+							ty: Bool }], 
+							constraints: [], 
+							attributes: [], 
+							references: [], 
+							groups: [], 
+							dirs: [], 
+							structure: TreeMap {
+								children: {Root: [Feature(0)]
+							}, 
+							parent: {
+								Feature(0): Root
+							} 
+						}, 
+						index: {
+							(Root, u!("test"), Feature): Feature(0)
+						} 
+					}, 
+					source: ["include\r\n\r\nfeatures\r\n\ttest"], 
+					tree: {Tree {Node source_file (0, 0) - (3, 5)}}, 
+					timestamp: Instant { t: 635856.4236229s }, 
+					errors: [], 
+					path: [u!("Users"), u!("Thilo"), u!("Documents"), u!("UVL_Testdaten"), u!("test")], 
+					uri: Url { 
+						scheme: "file", 
+						cannot_be_a_base: false, 
+						username: "",
+						password: None,
+						host: None, 
+						port: None, 
+						path: "/c%3A/Users/Thilo/Documents/UVL_Testdaten/test.uvl", 
+						query: None, 
+						fragment: None 
+					}, 
+					id: test.uvl
+				}, 
+				resolved: {}, 
+				revision: 30, 
+				ok: true 
+			}
+		}, 
+		modules: {
+			test.uvl: Module { 
+				instance_files: [test.uvl], 
+				instances: {(InstanceID(0), Root)}, 
+				timestamp: Instant { t: 635856.5293503s }, 
+				files: {
+					test.uvl: LinkedAstDocument { 
+						content: AstDocument { 
+							ast: Ast { 
+								namespace: None,
+								includes: [], 
+								import: [], 
+								features: [Feature { name: SymbolSpan { name: u!("test"), span: 22..26 }, cardinality: None, ty: Bool }],
+								constraints: [], 
+								attributes: [], 
+								references: [], 
+								groups: [], 
+								dirs: [], 
+								structure: TreeMap { children: {Root: [Feature(0)]}, parent: {Feature(0): Root} }, 
+								index: {(Root, u!("test"), Feature): Feature(0)} }, 
+								source: ["include\r\n\r\nfeatures\r\n\ttest"], 
+								tree: {Tree {Node source_file (0, 0) - (3, 5)}}, 
+								timestamp: Instant { t: 635856.4236229s }, 
+								errors: [], 
+								path: [u!("Users"), u!("Thilo"), u!("Documents"), u!("UVL_Testdaten"), u!("test")], 
+								uri: Url { 
+									scheme: "file", 
+									cannot_be_a_base: false,
+									username: "",
+									password: None, 
+									host: None,
+									port: None, 
+									path: "/c%3A/Users/Thilo/Documents/UVL_Testdaten/test.uvl",
+									query: None, 
+									fragment: None 
+								}, 
+								id: test.uvl
+							}, 
+							resolved: {},
+							revision: 30, 
+							ok: true
+						}
+					}, 
+					ok: true 
+				}
+			}
+		}, 
+		revision: 30, 
+		cancel: CancellationToken { is_cancelled: false },
+		files: {
+			test.uvl: AstDocument {
+				ast: Ast {
+					namespace: None, 
+					includes: [], 
+					import: [], 
+					features: [Feature { name: SymbolSpan { name: u!("test"), span: 22..26 }, cardinality: None, ty: Bool }],
+					constraints: [],
+					attributes: [],
+					references: [],
+					groups: [], 
+					dirs: [],
+					structure: TreeMap {
+						children: {
+							Root: [Feature(0)]
+						}, 
+						parent: {Feature(0): Root} 
+					}, 
+					index: {(Root, u!("test"), Feature): Feature(0)}
+				},
+				source: ["include\r\n\r\nfeatures\r\n\ttest"],
+				tree: {Tree {Node source_file (0, 0) - (3, 5)}},
+				timestamp: Instant { t: 635856.4236229s }, 
+				errors: [],
+				path: [u!("Users"), u!("Thilo"), u!("Documents"), u!("UVL_Testdaten"), u!("test")],
+				uri: Url { 
+					scheme: "file", 
+					cannot_be_a_base: false, 
+					username: "",
+					password: None, 
+					host: None,
+					port: None, 
+					path: "/c%3A/Users/Thilo/Documents/UVL_Testdaten/test.uvl", 
+					query: None,
+					fragment: None
+				}, 
+				id: test.uvl 
+			}
+		},
+		configs: {}
+	}
