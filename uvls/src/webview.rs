@@ -662,10 +662,7 @@ pub async fn ui_main(
     let (initial_config, dest, tgt_path) = match initial {
         AppInitialParams::Create(path) => {
             let root = pipeline.sync_root_global().await?;
-            let mut id = FileID::new(format!("file:///{path}").as_str());
-            for (key, _) in &root.files {
-                id = *key;
-            }
+            let id = FileID::new(format!("file:///{path}").as_str());
             if root.contains_id(id) {
                 let c = ConfigSource {
                     root: id,
