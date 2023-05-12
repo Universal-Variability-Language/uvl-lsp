@@ -620,7 +620,7 @@ fn add_group_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     );
 }
 fn add_lang_lvl_major_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["SMT-level".into(), "SAT-level".into()]);
+    add_keywords(query, top, w, ["SMT-level".into(), "SAT-level".into(), "TYPE-level".into()]);
 }
 fn add_lang_lvl_smt(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(
@@ -630,6 +630,18 @@ fn add_lang_lvl_smt(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         [
             "feature-cardinality".into(),
             "aggregate-function".into(),
+            "*".into(),
+        ],
+    );
+}
+fn add_lang_lvl_type(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+    add_keywords(
+        query,
+        top,
+        w,
+        [
+            "string-constraints".into(),
+            "numeric-constraints".into(),
             "*".into(),
         ],
     );
@@ -656,7 +668,7 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     );
 }
 fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["sum".into(), "avg".into(), "len".into()]);
+    add_keywords(query, top, w, ["sum".into(), "avg".into(), "len".into(), "floor".into(), "ceil".into()]);
 }
 fn make_relativ_path(path: &[CompactString], origin: &[CompactString]) -> Option<CompactString> {
     if path.len() > origin.len() {
@@ -985,6 +997,7 @@ fn compute_completions_impl(
                 match ctx.prefix[0].as_str() {
                     "SAT-level" => add_lang_lvl_sat(&ctx.postfix, &mut top, 2.0),
                     "SMT-level" => add_lang_lvl_smt(&ctx.postfix, &mut top, 2.0),
+                    "TYPE-level" => add_lang_lvl_type(&ctx.postfix, &mut top, 2.0),
                     _ => {}
                 }
             } else {

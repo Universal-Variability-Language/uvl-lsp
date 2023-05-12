@@ -76,6 +76,7 @@ pub enum Cardinality {
 pub enum LanguageLevelMajor {
     SAT,
     SMT,
+    TYPE,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum LanguageLevelSMT {
@@ -88,10 +89,17 @@ pub enum LanguageLevelSAT {
     Any,
     GroupCardinality,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub enum LanguageLevelTYPE {
+    Any,
+    NumericConstraints,
+    StringConstraints,
+}
 #[derive(Clone, Debug)]
 pub enum LanguageLevel {
     SAT(Vec<LanguageLevelSAT>),
     SMT(Vec<LanguageLevelSMT>),
+    TYPE(Vec<LanguageLevelTYPE>),
 }
 
 #[derive(Clone, Debug)]
@@ -195,6 +203,12 @@ pub enum AggregateOP {
     Sum,
 }
 
+#[derive(Clone, Debug)]
+pub enum IntegerOP {
+    Floor,
+    Ceil,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EquationOP {
     Greater,
@@ -240,6 +254,10 @@ pub enum Expr {
         op: AggregateOP,
         context: Option<Symbol>,
         query: Path,
+    },
+    Integer {
+        op: IntegerOP,
+        n: Box<ExprDecl>,
     },
     Len(Box<ExprDecl>),
 }

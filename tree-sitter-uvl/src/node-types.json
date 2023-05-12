@@ -1034,11 +1034,19 @@
     "named": true
   },
   {
+    "type": "numeric-constraints",
+    "named": false
+  },
+  {
     "type": "optional",
     "named": false
   },
   {
     "type": "or",
+    "named": false
+  },
+  {
+    "type": "string-constraints",
     "named": false
   },
   {

@@ -1448,6 +1448,14 @@
         },
         {
           "type": "STRING",
+          "value": "string-constraints"
+        },
+        {
+          "type": "STRING",
+          "value": "numeric-constraints"
+        },
+        {
+          "type": "STRING",
           "value": "*"
         }
       ]

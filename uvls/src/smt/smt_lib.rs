@@ -62,6 +62,9 @@ pub enum Expr {
     Sub(Vec<Expr>),
     Mul(Vec<Expr>),
     Div(Vec<Expr>),
+    //Integer Arithmetic
+    Ceil(Box<Expr>),
+    Floor(Box<Expr>),
     //String ops
     Strlen(Box<Expr>),
     StrLess(Vec<Expr>),
@@ -159,11 +162,13 @@ impl SMTModule {
     pub fn config_to_source(&self) -> String {
         let out = "(set-option :produce-unsat-cores true)
         (define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))
+        (define-fun floor ((x Real)) Int (to_int x))
+        (define-fun ceil ((x Real)) Int (ite (= (to_int x) x) (to_int x) (to_int (+ x 1)) ))
         (set-option :smt.core.minimize true)\n"
+
             .to_string();
         out
     }
-
     // create with all Variable the source for the SMTSolver
     pub fn variable_to_source(&self, module: &Module) -> String {
         let mut out = "".to_string();
@@ -229,6 +234,12 @@ impl SMTModule {
                         Expr::Div(..) => {
                             let _ = write!(out, "(smooth_div");
                         }
+                        Expr::Ceil(..) => {
+                            let _ = write!(out, "(ceil");
+                        }
+                        Expr::Floor(..) => {
+                            let _ = write!(out, "(floor");
+                        }
                         Expr::And(..) => {
                             let _ = write!(out, "(and");
                         }
@@ -293,10 +304,13 @@ impl SMTModule {
                                 stack.push(CExpr::Expr(i));
                             }
                         }
-                        Expr::Strlen(e) | Expr::Not(e) => {
-                            stack.push(CExpr::End);
-                            stack.push(CExpr::Expr(e));
-                        }
+                        Expr::Strlen(e)
+                            | Expr::Ceil(e)
+                            | Expr::Floor(e)
+                            | Expr::Not(e) => {
+                                stack.push(CExpr::End);
+                                stack.push(CExpr::Expr(e));
+                            }
                         Expr::StrConcat(rhs, lhs) => {
                             stack.push(CExpr::End);
                             stack.push(CExpr::Expr(rhs));
@@ -706,6 +720,15 @@ fn translate_expr(decl: &ast::ExprDecl, m: InstanceID, builder: &mut SMTBuilder)
                     Type::Real,
                 )
             }
+        }
+        ast::Expr::Integer { op, n} => {
+           (
+                match op {
+                    ast::IntegerOP::Ceil => Expr::Ceil(translate_expr(n, m, builder).0.into()),
+                    ast::IntegerOP::Floor => Expr::Floor(translate_expr(n, m, builder).0.into())
+                },
+                Type::Real,
+            )
         }
     }
 }

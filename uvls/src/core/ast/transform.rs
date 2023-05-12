@@ -291,7 +291,7 @@ fn opt_smt_minor(state: &mut VisitorState) -> Option<LanguageLevelSMT> {
         "*" => Some(LanguageLevelSMT::Any),
         "feature-cardinality" => Some(LanguageLevelSMT::FeatureCardinality),
         "aggregate-function" => Some(LanguageLevelSMT::Aggregate),
-        "group-cardinality" => {
+        "group-cardinality" | "string-constraints" | "numeric-constraints" => {
             state.push_error(30, "not allowed under SMT");
             None
         }
@@ -305,7 +305,7 @@ fn opt_sat_minor(state: &mut VisitorState) -> Option<LanguageLevelSAT> {
     match state.kind() {
         "*" => Some(LanguageLevelSAT::Any),
         "group-cardinality" => Some(LanguageLevelSAT::GroupCardinality),
-        "feature-cardinality" | "aggregate-function" => {
+        "feature-cardinality" | "aggregate-function" | "string-constraints" | "numeric-constraints" => {
             state.push_error(30, "not allowed under SAT");
             None
         }
@@ -315,10 +315,26 @@ fn opt_sat_minor(state: &mut VisitorState) -> Option<LanguageLevelSAT> {
         }
     }
 }
+fn opt_type_minor(state: &mut VisitorState) -> Option<LanguageLevelTYPE> {
+    match state.kind() {
+        "*" => Some(LanguageLevelTYPE::Any),
+        "numeric-constraints" => Some(LanguageLevelTYPE::NumericConstraints),
+        "string-constraints" => Some(LanguageLevelTYPE::StringConstraints),
+        "feature-cardinality" | "aggregate-function" | "group-cardinality" => {
+            state.push_error(30, "not allowed under TYPE");
+            None
+        }
+        _ => {
+            state.push_error(30, "unknown TYPE level");
+            None
+        }
+    }
+}
 fn opt_major_lang_lvl(state: &mut VisitorState) -> Option<LanguageLevel> {
     match state.node().kind() {
         "SMT-level" => Some(LanguageLevel::SMT(vec![])),
         "SAT-level" => Some(LanguageLevel::SAT(vec![])),
+        "TYPE-level" => Some(LanguageLevel::TYPE(vec![])),
         _ => {
             state.push_error(30, "unknown major language level");
             None
@@ -345,9 +361,16 @@ fn opt_lang_lvl(state: &mut VisitorState) -> Option<LanguageLevel> {
                         } else {
                             return None;
                         }
-                    }
+                    },
                     LanguageLevel::SAT(v) => {
                         if let Some(lvl) = visit_children(state, opt_sat_minor) {
+                            v.push(lvl);
+                        } else {
+                            return None;
+                        }
+                    },
+                    LanguageLevel::TYPE(v) => {
+                        if let Some(lvl) = visit_children(state, opt_type_minor) {
                             v.push(lvl);
                         } else {
                             return None;
@@ -355,7 +378,7 @@ fn opt_lang_lvl(state: &mut VisitorState) -> Option<LanguageLevel> {
                     }
                 }
             } else {
-                state.push_error(30, "missing major level, please specify SMT or SAT level");
+                state.push_error(30, "missing major level, please specify SMT, SAT or TYPE level");
                 return None;
             }
         }
@@ -393,7 +416,7 @@ fn visit_include(state: &mut VisitorState) {
                 "lang_lvl" => visit_children(state, visit_lang_lvl),
                 "ref" => state.push_error_blk(
                     30,
-                    "unknown language level start with SMT-level or SAT-level",
+                    "unknown language level start with SMT-level, SAT-level or TYPE-level",
                 ),
                 _ => {
                     state.push_error_blk(40, "expected a language level");
@@ -501,6 +524,16 @@ fn opt_aggreate_op(state: &mut VisitorState) -> Option<AggregateOP> {
         }
     }
 }
+fn opt_integer_op(state: &mut VisitorState) -> Option<IntegerOP> {
+    match state.slice(state.child_by_name("op")?).borrow() {
+        "floor" => Some(IntegerOP::Floor),
+        "ceil" => Some(IntegerOP::Ceil),
+        _ => {
+            state.push_error(30, "unknown integer function");
+            None
+        }
+    }
+}
 fn opt_function_args(state: &mut VisitorState) -> Option<Vec<Path>> {
     visit_children(state, |state| {
         let mut args = Vec::new();
@@ -524,8 +557,7 @@ fn opt_function_args(state: &mut VisitorState) -> Option<Vec<Path>> {
 }
 
 fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
-    info!("[START] check_langlvls");
-    info!("Search for: {:?}", searched_lang_lvl);
+    //info!("[check_langlvls] Search for: {:?}", searched_lang_lvl);
 
     if state.ast.includes.is_empty() { // no includes means, that implicitly everything is included
         return ();
@@ -533,34 +565,37 @@ fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
 
     let includes: Vec<LanguageLevel> = state.ast.includes.clone().into_iter().map(|x| x.lang_lvl).collect();
 
-    match searched_lang_lvl {
-        LanguageLevel::SMT(sub_lang_lvls)
-            if (sub_lang_lvls.is_empty() && includes.iter().any(|x| matches!(x, LanguageLevel::SMT(_)))) ||
-                sub_lang_lvls.iter().fold(false, |mut res, val: &LanguageLevelSMT| {
+    fn check_sub_lang_lvls<'a, F, G, L: PartialEq>(mut m: F, mut get: G, sub_lang_lvls: Vec<L>, includes: Vec<LanguageLevel>, any: L) -> bool
+        where F: FnMut(&LanguageLevel) -> bool, G: FnMut(&LanguageLevel) -> Option<Vec<L>>,  {
+            sub_lang_lvls.is_empty() && includes.iter().any(|x| m(x)) ||
+                sub_lang_lvls.iter().fold(false, |mut res, val: &L| {
                     let mut is_match = false;
                     for i in includes.iter(){
-                        match i {
-                            LanguageLevel::SMT(x) if x.contains(&LanguageLevelSMT::Any) || x.contains(&val) => {info!("contains {:?}", val); is_match = true; ()},
-                            _ => ()
-                        }
+                        let x = get(i).unwrap_or(vec![]);
+                        is_match = x.contains(&any) || x.contains(&val);
+                        //info!("[check_langlvls] includes correct LanguageLevel");
+                        ()
                     }
                     res |= is_match; res
-        }) => info!("includes correct SMT lang_lvl"),
-        LanguageLevel::SAT(sub_lang_lvls)
-            if (sub_lang_lvls.is_empty() && includes.iter().any(|x| matches!(x, LanguageLevel::SAT(_)))) ||
-                sub_lang_lvls.iter().fold(false, |mut res, val| {
-                    let mut is_match = false;
-                    for i in includes.iter(){
-                        match i {
-                            LanguageLevel::SAT(x) if x.contains(&LanguageLevelSAT::Any) || x.contains(&val) => {info!("contains {:?}", val); is_match = true; ()},
-                            _ => ()
-                        }
-                    }
-                    res |= is_match; res
-        }) => info!("includes correct SAT lang_lvl"),
-        _ => state.push_error(10, format!("Operation does not correspond includes. Please include {:?}", searched_lang_lvl))
+                })
     }
-    info!("[END] check_langlvls");
+
+    if !match searched_lang_lvl.borrow() {
+        LanguageLevel::SMT(s) => check_sub_lang_lvls(
+            |x| matches!(x, LanguageLevel::SMT(_)),
+            |x| -> Option<Vec<LanguageLevelSMT>> {match x { LanguageLevel::SMT(l) => Some(l.to_vec()), _ => None}},
+            s.clone(), includes, LanguageLevelSMT::Any),
+        LanguageLevel::SAT(s) => check_sub_lang_lvls(
+            |x| matches!(x, LanguageLevel::SAT(_)),
+            |x| -> Option<Vec<LanguageLevelSAT>> {match x { LanguageLevel::SAT(l) => Some(l.to_vec()), _ => None}},
+            s.clone(), includes, LanguageLevelSAT::Any),
+        LanguageLevel::TYPE(s) => check_sub_lang_lvls(
+            |x| matches!(x, LanguageLevel::TYPE(_)),
+            |x| -> Option<Vec<LanguageLevelTYPE>> {match x { LanguageLevel::TYPE(l) => Some(l.to_vec()), _ => None}},
+            s.clone(), includes, LanguageLevelTYPE::Any)
+    } {
+        state.push_error(10, format!("Operation does not correspond includes. Please include {:?}", searched_lang_lvl))
+    }
 }
 
 fn opt_aggregate(state: &mut VisitorState) -> Option<Expr> {
@@ -590,6 +625,25 @@ fn opt_aggregate(state: &mut VisitorState) -> Option<Expr> {
         }
     }
 }
+fn opt_integer(state: &mut VisitorState) -> Option<Expr> {
+    if state.child_by_name("tail").is_some() {
+        state.push_error(10, "tailing comma not allowed");
+    }
+    let op = opt_integer_op(state)?;
+    visit_children(state, |state| {
+        if state.goto_field("arg") {
+            let n: Box<ExprDecl> = opt_numeric(state)?.into();
+            let out = Some(Expr::Integer{op: op.clone(), n});
+            if state.goto_next_sibling() && state.goto_field("arg") {
+                state.push_error(30, "expected exactly one argument");
+            }
+            out
+        } else {
+            state.push_error(30, "missing argument");
+            None
+        }
+    })
+}
 fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
     let span = state.node().byte_range();
     state.goto_named();
@@ -618,16 +672,20 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
                     state.push_error_node(
                         state.node().parent().unwrap(),
                         40,
-                        "found a constraint, expected a expression",
+                        "found a constraint, expected an expression",
                     );
                     None
                 }
             })
         }
         "nested_expr" => visit_children(state, opt_numeric).map(|c| c.content),
-        "function" => {check_langlvls(state, LanguageLevel::SMT(vec![LanguageLevelSMT::Aggregate])); match state.slice(state.child_by_name("op")?).borrow() {
-            "sum" | "avg" => opt_aggregate(state),
+        "function" => {match state.slice(state.child_by_name("op")?).borrow() {
+            "sum" | "avg" => {
+                check_langlvls(state, LanguageLevel::SMT(vec![LanguageLevelSMT::Aggregate]));
+                opt_aggregate(state)
+            },
             "len" => {
+                check_langlvls(state, LanguageLevel::TYPE(vec![LanguageLevelTYPE::StringConstraints]));
                 if state.child_by_name("tail").is_some() {
                     state.push_error(10, "tailing comma not allowed");
                 }
@@ -645,7 +703,11 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
                         None
                     }
                 })
-            }
+            },
+            "floor" | "ceil" => {
+                check_langlvls(state, LanguageLevel::TYPE(vec![LanguageLevelTYPE::NumericConstraints]));
+                opt_integer(state)
+            },
             _ => {
                 state.push_error(30, "unknown function");
                 None
@@ -935,6 +997,7 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
             visit_feature(state, parent, name, Type::Bool);
         }
         "typed_feature" => {
+            check_langlvls(state, LanguageLevel::TYPE(vec![]));
             let (name, ty) = visit_children(state, |state| {
                 state.goto_field("type");
                 let ty = match &*state.slice_raw(state.node().byte_range()) {
