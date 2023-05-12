@@ -557,57 +557,44 @@ fn opt_function_args(state: &mut VisitorState) -> Option<Vec<Path>> {
 }
 
 fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
-    info!("[check_langlvls] Search for: {:?}", searched_lang_lvl);
+    //info!("[check_langlvls] Search for: {:?}", searched_lang_lvl);
 
     if state.ast.includes.is_empty() { // no includes means, that implicitly everything is included
         return ();
     }
 
     let includes: Vec<LanguageLevel> = state.ast.includes.clone().into_iter().map(|x| x.lang_lvl).collect();
-    info!("includes: {:?}", includes);
-    info!("any include matches type: {:?}", includes.iter().any(|x| matches!(x, LanguageLevel::TYPE(_))));
 
-    match searched_lang_lvl {
-        LanguageLevel::SMT(sub_lang_lvls)
-            if (sub_lang_lvls.is_empty() && includes.iter().any(|x| matches!(x, LanguageLevel::SMT(_)))) ||
-                sub_lang_lvls.iter().fold(false, |mut res, val: &LanguageLevelSMT| {
+    fn check_sub_lang_lvls<'a, F, G, L: PartialEq>(mut m: F, mut get: G, sub_lang_lvls: Vec<L>, includes: Vec<LanguageLevel>, any: L) -> bool
+        where F: FnMut(&LanguageLevel) -> bool, G: FnMut(&LanguageLevel) -> Option<Vec<L>>,  {
+            sub_lang_lvls.is_empty() && includes.iter().any(|x| m(x)) ||
+                sub_lang_lvls.iter().fold(false, |mut res, val: &L| {
                     let mut is_match = false;
                     for i in includes.iter(){
-                        match i {
-                            LanguageLevel::SMT(x) if x.contains(&LanguageLevelSMT::Any) || x.contains(&val) => {info!("contains {:?}", val); is_match = true; ()},
-                            _ => ()
-                        }
+                        let x = get(i).unwrap_or(vec![]);
+                        is_match = x.contains(&any) || x.contains(&val);
+                        //info!("[check_langlvls] includes correct LanguageLevel");
+                        ()
                     }
                     res |= is_match; res
-        }) => info!("[check_langlvls] includes correct SMT lang_lvl"),
-        LanguageLevel::SAT(sub_lang_lvls)
-            if (sub_lang_lvls.is_empty() && includes.iter().any(|x| matches!(x, LanguageLevel::SAT(_)))) ||
-                sub_lang_lvls.iter().fold(false, |mut res, val| {
-                    let mut is_match = false;
-                    for i in includes.iter(){
-                        match i {
-                            LanguageLevel::SAT(x) if x.contains(&LanguageLevelSAT::Any) || x.contains(&val) => {info!("contains {:?}", val); is_match = true; ()},
-                            _ => ()
-                        }
-                    }
-                    res |= is_match; res
-        }) => info!("[check_langlvls] includes correct SAT lang_lvl"),
-        LanguageLevel::TYPE(sub_lang_lvls)
-            if (sub_lang_lvls.is_empty() && includes.iter().any(|x| matches!(x, LanguageLevel::TYPE(_)))) ||
-                sub_lang_lvls.iter().fold(false, |mut res, val| {
-                    let mut is_match = false;
-                    for i in includes.iter(){
-                        match i {
-                            LanguageLevel::TYPE(x) if x.contains(&LanguageLevelTYPE::Any) || x.contains(&val) => {info!("contains {:?}", val); is_match = true; ()},
-                            _ => ()
-                        }
-                    }
-                    res |= is_match; res
-        }) => info!("[check_langlvls] includes correct TYPE lang_lvl"),
-        _ => {
-            info!("[check_langlvls] {:?} not found", searched_lang_lvl);
-            state.push_error(10, format!("Operation does not correspond includes. Please include {:?}", searched_lang_lvl));
-        }
+                })
+    }
+
+    if !match searched_lang_lvl.borrow() {
+        LanguageLevel::SMT(s) => check_sub_lang_lvls(
+            |x| matches!(x, LanguageLevel::SMT(_)),
+            |x| -> Option<Vec<LanguageLevelSMT>> {match x { LanguageLevel::SMT(l) => Some(l.to_vec()), _ => None}},
+            s.clone(), includes, LanguageLevelSMT::Any),
+        LanguageLevel::SAT(s) => check_sub_lang_lvls(
+            |x| matches!(x, LanguageLevel::SAT(_)),
+            |x| -> Option<Vec<LanguageLevelSAT>> {match x { LanguageLevel::SAT(l) => Some(l.to_vec()), _ => None}},
+            s.clone(), includes, LanguageLevelSAT::Any),
+        LanguageLevel::TYPE(s) => check_sub_lang_lvls(
+            |x| matches!(x, LanguageLevel::TYPE(_)),
+            |x| -> Option<Vec<LanguageLevelTYPE>> {match x { LanguageLevel::TYPE(l) => Some(l.to_vec()), _ => None}},
+            s.clone(), includes, LanguageLevelTYPE::Any)
+    } {
+        state.push_error(10, format!("Operation does not correspond includes. Please include {:?}", searched_lang_lvl))
     }
 }
 
