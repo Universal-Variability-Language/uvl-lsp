@@ -8,6 +8,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::*;
 use ustr::Ustr;
+use percent_encoding::percent_decode_str;
 
 pub type Snapshot = Arc<RootGraph>;
 #[derive(Hash, PartialEq, Eq, Clone, Copy)]
@@ -15,7 +16,7 @@ pub struct FileID(Ustr);
 impl FileID {
     pub fn new(i: &str) -> Self {
         assert!(i != "");
-        Self(i.into())
+        Self((percent_decode_str(i).decode_utf8().unwrap().into_owned()[..]).into())
     }
     pub fn from_uri(uri: &Url) -> FileID {
         Self::new(uri.as_str())
@@ -29,7 +30,6 @@ impl FileID {
     pub fn is_virtual(&self) -> bool {
         self.0.as_str().ends_with(".VIRTUAL_CONFIG")
     }
-
     pub fn is_config(&self) -> bool {
         self.0.as_str().ends_with(".json") | self.is_virtual()
     }
