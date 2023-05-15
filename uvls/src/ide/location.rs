@@ -317,6 +317,8 @@ fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<RootSymb
         sym: tgt,
         file: dst_id,
     });
+    info!("[REVERSE_RESOLVE] target = {:?}", tgt); // DEBUG
+    info!("[REVERSE_RESOLVE] type = {:?}", ty); // DEBUG
     root.fs()
         .recursive_imported(dst_id)
         .iter()
@@ -325,17 +327,16 @@ fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<RootSymb
             src_file
                 .all_references()
                 .filter(move |r| {
-                    root.type_of(RootSymbol {
-                        sym: *r,
-                        file: src_id,
-                    }) == ty
+                    info!("[REVERSE_RESOLVE] filter1, r = {:?}", r); // DEBUG
+                    // root.type_of(RootSymbol {sym: *r,file: src_id,}) == ty // DEBUG
+                    true// DEBUG
                 })
                 .filter(move |r| {
+                    info!("[REVERSE_RESOLVE] filter2, r = {:?}", r); // DEBUG
                     root.resolve(src_id, src_file.path(*r)).any(|sym| {
-                        sym == RootSymbol {
-                            file: dst_id,
-                            sym: tgt,
-                        }
+                        info!("[REVERSE_RESOLVE] filter2any, sym = {:?}", sym); // DEBUG
+                        sym == RootSymbol {file: dst_id,sym: tgt,} ||
+                        matches!(tgt, Symbol::Feature(_)) && matches!(sym, RootSymbol {file, sym: Symbol::Attribute(_)} if file == dst_id) // DEBUG
                     })
                 })
                 .map(move |i| RootSymbol {
@@ -366,6 +367,7 @@ fn find_references_symboles(
 
         TextObjectKind::Attribute => file
             .lookup(Symbol::Root, &obj.path.names, |sym| {
+                //info!("[FIND_REFERENCE_SYMBOLES] sym = {:?}", sym); // DEBUG
                 matches!(sym, Symbol::Feature(..) | Symbol::Attribute(..))
             })
             .next()
@@ -389,6 +391,7 @@ pub fn find_references(
     uri: &Url,
 ) -> Option<Vec<Location>> {
     let refs = find_references_symboles(root, draft, pos, uri)?;
+    info!("[FIND REFERENCES] refs: {:?}", refs); // DEBUG
     Some(
         refs.iter()
             .filter_map(|sym| {
@@ -410,3 +413,18 @@ pub fn find_references(
             .collect(),
     )
 }
+
+pub fn rename(
+    root: &Snapshot,
+    draft: &Draft,
+    pos: &Position,
+    uri: &Url,
+) -> Option<WorkspaceEdit> {
+    let refs = find_references(root, draft, pos, uri)?;
+
+    info!("[RENAME] refs: {:?}", refs); 
+
+    // TODO: add changes
+    Some(WorkspaceEdit { changes: None, document_changes: None, change_annotations: None })
+}
+

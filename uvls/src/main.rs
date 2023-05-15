@@ -172,6 +172,7 @@ impl LanguageServer for Backend {
                     ),
                 ),
                 references_provider: Some(OneOf::Left(true)),
+                rename_provider : Some(OneOf::Left(true)),
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(true),
                 }),
@@ -264,6 +265,20 @@ impl LanguageServer for Backend {
         let uri = &params.text_document_position.text_document.uri;
         if let Some((draft, root)) = self.snapshot(uri, true).await? {
             Ok(ide::location::find_references(
+                &root,
+                &draft,
+                &params.text_document_position.position,
+                uri,
+            ))
+        } else {
+            return Ok(None);
+        }
+    }
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        info!("[RENAME] params: {:?}", params);
+        let uri = &params.text_document_position.text_document.uri;
+        if let Some((draft, root)) = self.snapshot(uri, true).await? {
+            Ok(ide::location::rename(
                 &root,
                 &draft,
                 &params.text_document_position.position,
