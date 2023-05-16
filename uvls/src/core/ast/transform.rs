@@ -568,16 +568,16 @@ fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
     fn check_sub_lang_lvls<'a, F, G, L: PartialEq>(mut m: F, mut get: G, sub_lang_lvls: Vec<L>, includes: Vec<LanguageLevel>, any: L) -> bool
         where F: FnMut(&LanguageLevel) -> bool, G: FnMut(&LanguageLevel) -> Option<Vec<L>>,  {
             sub_lang_lvls.is_empty() && includes.iter().any(|x| m(x)) ||
-                sub_lang_lvls.iter().fold(false, |mut res, val: &L| {
-                    let mut is_match = false;
-                    for i in includes.iter(){
-                        let x = get(i).unwrap_or(vec![]);
-                        is_match = x.contains(&any) || x.contains(&val);
-                        //info!("[check_langlvls] includes correct LanguageLevel");
-                        ()
+            sub_lang_lvls.iter().fold(false, |mut res, val: &L| -> bool {
+                for i in includes.iter(){
+                    let x = get(i).unwrap_or(vec![]);
+                    if x.contains(&any) || x.contains(&val) {
+                        res = true;
+                        break;
                     }
-                    res |= is_match; res
-                })
+                }
+                res
+            })
     }
 
     if !match searched_lang_lvl.borrow() {
