@@ -33,6 +33,7 @@ pub fn attribute_prefix(node: Node, source: &Rope) -> Option<Path> {
             let header = node.child_by_field_name("header")?;
             match header.kind() {
                 "name" => parse_path(header, source),
+                "typed_feature" => parse_path(header.child_by_field_name("name")?, source),
                 _ => None,
             }
         }
@@ -90,6 +91,7 @@ pub fn find_text_object_impl(
             }
         }
         Section::Attribute => match node.kind() {
+            
             "name" => {
                 let path = attribute_prefix(node.parent().unwrap(), source)?;
                 Some(TextObject {
@@ -317,27 +319,22 @@ fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<RootSymb
         sym: tgt,
         file: dst_id,
     });
-    info!("[REVERSE_RESOLVE] target = {:?}", tgt); // DEBUG
-    info!("[REVERSE_RESOLVE] type = {:?}", ty); // DEBUG
+
     root.fs()
         .recursive_imported(dst_id)
         .iter()
         .flat_map(|&src_id| {
             let src_file = root.file(src_id);
+
             src_file
                 .all_references()
                 .filter(move |r| {
-                    info!("[REVERSE_RESOLVE] filter1, r = {:?}", r); // DEBUG
-                    // root.type_of(RootSymbol {sym: *r,file: src_id,}) == ty // DEBUG
-                    true// DEBUG
+                    root.type_of(RootSymbol {sym: *r,file: src_id,}) == ty
                 })
                 .filter(move |r| {
-                    info!("[REVERSE_RESOLVE] filter2, r = {:?}", r); // DEBUG
-                    root.resolve(src_id, src_file.path(*r)).any(|sym| {
-                        info!("[REVERSE_RESOLVE] filter2any, sym = {:?}", sym); // DEBUG
+                    root.resolve(src_id, src_file.path(*r)).any(|sym|
                         sym == RootSymbol {file: dst_id,sym: tgt,} ||
-                        matches!(tgt, Symbol::Feature(_)) && matches!(sym, RootSymbol {file, sym: Symbol::Attribute(_)} if file == dst_id) // DEBUG
-                    })
+                        matches!(tgt, Symbol::Feature(_)) && matches!(sym, RootSymbol {file, sym: Symbol::Attribute(_)} if file == dst_id))
                 })
                 .map(move |i| RootSymbol {
                     file: src_id,
@@ -356,7 +353,6 @@ fn find_references_symboles(
     let file_id = root.file_id(uri)?;
     let file = root.file(file_id);
     let obj = find_text_object(draft, pos, file_id, root)?;
-    info!("{:?}", obj);
     match obj.kind {
         TextObjectKind::Feature => file
             .lookup(Symbol::Root, &obj.path.names, |sym| {
@@ -367,7 +363,6 @@ fn find_references_symboles(
 
         TextObjectKind::Attribute => file
             .lookup(Symbol::Root, &obj.path.names, |sym| {
-                //info!("[FIND_REFERENCE_SYMBOLES] sym = {:?}", sym); // DEBUG
                 matches!(sym, Symbol::Feature(..) | Symbol::Attribute(..))
             })
             .next()
@@ -391,7 +386,6 @@ pub fn find_references(
     uri: &Url,
 ) -> Option<Vec<Location>> {
     let refs = find_references_symboles(root, draft, pos, uri)?;
-    info!("[FIND REFERENCES] refs: {:?}", refs); // DEBUG
     Some(
         refs.iter()
             .filter_map(|sym| {
