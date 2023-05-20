@@ -281,8 +281,9 @@ impl LanguageServer for Backend {
             Ok(ide::location::rename(
                 &root,
                 &draft,
-                &params.text_document_position.position,
                 uri,
+                &params.text_document_position.position,
+                params.new_name
             ))
         } else {
             return Ok(None);

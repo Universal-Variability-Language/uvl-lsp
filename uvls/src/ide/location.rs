@@ -286,7 +286,7 @@ fn find_definitions(
             for i in root.resolve(file_id, &obj.path.names) {
                 if matches!(i.sym, Symbol::Feature(_)) {
                     return Some(vec![i]);
-        }
+                }
             }
             None
         },
@@ -431,14 +431,27 @@ pub fn find_references(
 pub fn rename(
     root: &Snapshot,
     draft: &Draft,
-    pos: &Position,
     uri: &Url,
+    pos: &Position,
+    new_text: String
 ) -> Option<WorkspaceEdit> {
-    let refs = find_references_symboles(root, draft, pos, uri)?;
+    let mut changes = std::collections::HashMap::<Url, Vec<TextEdit>>::new();
 
-    info!("[RENAME] refs: {:?}", refs); 
+    // Add definition changes
+    let binding = find_definitions(root, draft, pos, uri)?;
+    let RootSymbol { file, sym } = binding.iter().next()?;
+    changes.insert(uri.clone(), vec![TextEdit {range: root.file(*file).lsp_range(*sym)?, new_text: new_text.clone()}]);
 
-    // TODO: add changes
-    Some(WorkspaceEdit { changes: None, document_changes: None, change_annotations: None })
+    // Add reference changes
+    find_references(root, draft, pos, uri)?.iter().for_each(|location|{
+        let edit = TextEdit { range: location.range, new_text: new_text.clone()};
+        if let Some(edits) = changes.get_mut(&location.uri){
+            edits.push(edit);
+        } else {
+            changes.insert(location.uri.clone(), vec![edit]);
+        }
+    });
+
+    Some(WorkspaceEdit { changes: Some(changes), document_changes: None, change_annotations: None })
 }
 
