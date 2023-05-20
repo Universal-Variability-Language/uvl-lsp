@@ -334,6 +334,7 @@ fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<(RootSym
         sym: tgt,
         file: dst_id,
     });
+    let dst_file = root.file(dst_id);
 
     root.fs()
         .recursive_imported(dst_id)
@@ -349,7 +350,8 @@ fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<(RootSym
                 .filter(move |r| {
                     root.resolve(src_id, src_file.path(*r)).any(|sym|
                         sym == RootSymbol {file: dst_id,sym: tgt,} ||
-                        matches!(tgt, Symbol::Feature(_)) && matches!(sym, RootSymbol {file, sym: Symbol::Attribute(_)} if file == dst_id))
+                            matches!(tgt, Symbol::Feature(_)) && matches!(sym, RootSymbol {file, sym: Symbol::Attribute(n)}
+                                if file == dst_id && dst_file.scope(Symbol::Attribute(n)) == tgt))
                 })
                 .map(move |sym| -> (RootSymbol, Option<Range>) {
                     fn get_range(root: &Snapshot, sym: Symbol, src_file: &AstDocument, dst_id: FileID, tgt: Symbol) -> Option<Range> {
@@ -440,7 +442,7 @@ pub fn rename(
     // Add definition changes
     let binding = find_definitions(root, draft, pos, uri)?;
     let RootSymbol { file, sym } = binding.iter().next()?;
-    changes.insert(uri.clone(), vec![TextEdit {range: root.file(*file).lsp_range(*sym)?, new_text: new_text.clone()}]);
+    changes.insert(file.url(), vec![TextEdit {range: root.file(*file).lsp_range(*sym)?, new_text: new_text.clone()}]);
 
     // Add reference changes
     find_references(root, draft, pos, uri)?.iter().for_each(|location|{
