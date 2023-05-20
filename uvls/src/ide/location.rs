@@ -314,7 +314,7 @@ pub fn goto_definition(
     ))
 }
 
-fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<RootSymbol> {
+fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<(RootSymbol, Option<Range>)> {
     let ty = root.type_of(RootSymbol {
         sym: tgt,
         file: dst_id,
@@ -336,9 +336,17 @@ fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<RootSymb
                         sym == RootSymbol {file: dst_id,sym: tgt,} ||
                         matches!(tgt, Symbol::Feature(_)) && matches!(sym, RootSymbol {file, sym: Symbol::Attribute(_)} if file == dst_id))
                 })
-                .map(move |i| RootSymbol {
-                    file: src_id,
-                    sym: i,
+                .map(move |sym| -> (RootSymbol, Option<Range>) {
+                    fn get_range(root: &Snapshot, sym: Symbol, src_file: &AstDocument, dst_id: FileID, tgt: Symbol) -> Option<Range> {
+                        let reference = if let Symbol::Reference(n) = sym {src_file.get_reference(n)?} else {return None};
+                        for i in 0..reference.path.names.len() {
+                            if root.resolve(src_file.id, &reference.path.names[0..=i]).any(|sym| sym == RootSymbol {file: dst_id, sym: tgt}) {
+                                return lsp_range(reference.path.spans.get(i).unwrap().clone(), &src_file.source);
+                            }
+                        }
+                        None
+                    }
+                    (RootSymbol {file: src_id, sym}, get_range(root, sym, src_file, dst_id, tgt))
                 })
         })
         .collect()
@@ -349,7 +357,7 @@ fn find_references_symboles(
     draft: &Draft,
     pos: &Position,
     uri: &Url,
-) -> Option<Vec<RootSymbol>> {
+) -> Option<Vec<(RootSymbol, Option<Range>)>> {
     let file_id = root.file_id(uri)?;
     let file = root.file(file_id);
     let obj = find_text_object(draft, pos, file_id, root)?;
@@ -388,20 +396,17 @@ pub fn find_references(
     let refs = find_references_symboles(root, draft, pos, uri)?;
     Some(
         refs.iter()
-            .filter_map(|sym| {
+            .filter_map(|(sym, range)| {
                 let file = root.file(sym.file);
                 match sym.sym {
                     Symbol::Root => Some(Location {
                         uri: file.uri.clone(),
                         range: Range::default(),
                     }),
-                    _ => {
-                        let range = file.lsp_range(sym.sym)?;
-                        Some(Location {
-                            uri: file.uri.clone(),
-                            range,
-                        })
-                    }
+                    _ => Some(Location {
+                        uri: file.uri.clone(),
+                        range: range.unwrap_or(file.lsp_range(sym.sym).unwrap_or_default()),
+                    })
                 }
             })
             .collect(),
@@ -414,7 +419,7 @@ pub fn rename(
     pos: &Position,
     uri: &Url,
 ) -> Option<WorkspaceEdit> {
-    let refs = find_references(root, draft, pos, uri)?;
+    let refs = find_references_symboles(root, draft, pos, uri)?;
 
     info!("[RENAME] refs: {:?}", refs); 
 
