@@ -281,8 +281,23 @@ fn find_definitions(
                 },
             );
             Some(out)
+        },
+        TextObjectKind::Feature => {
+            for i in root.resolve(file_id, &obj.path.names) {
+                if matches!(i.sym, Symbol::Feature(_)) {
+                    return Some(vec![i]);
         }
-        _ => None,
+            }
+            None
+        },
+        TextObjectKind::Attribute => {
+            for i in root.resolve(file_id, &obj.path.names) {
+                if matches!(i.sym, Symbol::Attribute(_)) {
+                    return Some(vec![i]);
+                }
+            }
+            None
+        }
     }
 }
 pub fn goto_definition(
