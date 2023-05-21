@@ -330,10 +330,6 @@ pub fn goto_definition(
 }
 
 fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<(RootSymbol, Option<Range>)> {
-    let ty = root.type_of(RootSymbol {
-        sym: tgt,
-        file: dst_id,
-    });
     let dst_file = root.file(dst_id);
 
     root.fs()
@@ -344,9 +340,6 @@ fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<(RootSym
 
             src_file
                 .all_references()
-                .filter(move |r| {
-                    root.type_of(RootSymbol {sym: *r,file: src_id,}) == ty
-                })
                 .filter(move |r| {
                     root.resolve(src_id, src_file.path(*r)).any(|sym|
                         sym == RootSymbol {file: dst_id,sym: tgt,} ||
