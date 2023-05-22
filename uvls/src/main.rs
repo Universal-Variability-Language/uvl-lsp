@@ -44,6 +44,35 @@ impl Backend {
             load_blocking(uri, &pipeline);
         });
     }
+
+    fn async load_all_imports(&self, uri: Url) {
+        let pipeline = self.pipeline.clone();
+        let uri_clone = uri.clone();
+        info!("load path :{}", uri);
+        tokio::task::spawn_blocking(move || {
+             load_blocking(uri, &pipeline);
+        }).await;
+        tokio::task::spawn_blocking(|| {
+            let piplineAfterLoad = self.pipeline.clone();
+            let root = pipeline.root();
+            let broot = root.borrow();
+            let document = broot.file_by_uri(&uri_clone);
+
+            match document {
+                Some(ast) => {
+                    let imports = ast.imports();
+                    info!("imports amount {}", imports.len());
+                    for import in imports {
+                        info!("import : {:?}", import.path);
+                    }
+                }
+                None => {
+                    info!("test")
+                }
+            }
+        });
+    }
+
     async fn snapshot(&self, uri: &Url, sync: bool) -> Result<Option<(Draft, Arc<RootGraph>)>> {
         self.pipeline
             .snapshot(uri, sync)
@@ -88,6 +117,7 @@ fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
         info!("Failed to load file {} : {}", uri, e);
     }
 }
+//TODO remove method
 //load all files under given a path
 fn load_all_blocking(path: &Path, pipeline: AsyncPipeline) {
     for e in walkdir::WalkDir::new(path)
@@ -121,17 +151,17 @@ impl LanguageServer for Backend {
             .as_deref()
             .or_else(|| init_params.root_uri.as_ref().map(|p| p.path()))
             .map(PathBuf::from);
-        if let Some(root_folder) = root_folder {
-            let semantic = self.pipeline.clone();
-            //cheap fix for better intial load, we should really use priority model to prefer
-            //editor owned files
-            spawn(async move {
-                tokio::task::spawn_blocking(move || {
-                    load_all_blocking(&root_folder, semantic);
-                })
-                .await
-            });
-        }
+        // if let Some(root_folder) = root_folder {
+        //     let semantic = self.pipeline.clone();
+        //     //cheap fix for better intial load, we should really use priority model to prefer
+        //     //editor owned files
+        //     spawn(async move {
+        //         tokio::task::spawn_blocking(move || {
+        //             load_all_blocking(&root_folder, semantic);
+        //         })
+        //         .await
+        //     });
+        // }
         if init_params
             .client_info
             .map(|info| matches!(info.name.as_str(), "Visual Studio Code"))
@@ -219,11 +249,14 @@ impl LanguageServer for Backend {
     }
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         info!("received did_open {:?}", params.text_document.uri);
-        self.pipeline.open(
-            params.text_document.uri,
-            params.text_document.text,
-            DocumentState::OwnedByEditor,
-        );
+        let state = self.pipeline.root();
+        let uri = params.text_document.uri;
+        if state.borrow().contains(&uri) {
+            self.pipeline
+                .open(uri, params.text_document.text, DocumentState::OwnedByEditor);
+        } else {
+            self.load_all_imports(uri);
+        }
         info!("done did_open");
     }
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -411,12 +444,9 @@ impl LanguageServer for Backend {
                             character: 0,
                         },
                     },
-                    command: if self
-                        .pipeline
-                        .inlay_state()
-                        .is_active(ide::inlays::InlaySource::File(semantic::FileID::new(
-                            uri.as_str(),
-                        ))) {
+                    command: if self.pipeline.inlay_state().is_active(
+                        ide::inlays::InlaySource::File(semantic::FileID::new(uri.as_str())),
+                    ) {
                         Some(Command {
                             title: "hide".into(),
                             command: "uvls/hide_config".into(),
@@ -487,12 +517,11 @@ fn main() {
 }
 async fn server_main() {
     std::env::set_var("RUST_BACKTRACE", "1");
-    
+
     log_panics::Config::new()
         .backtrace_mode(log_panics::BacktraceMode::Unresolved)
         .install_panic_hook();
 
-    
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     //only needed for vscode auto update
