@@ -1,10 +1,13 @@
-use crate::{core::*,smt,ide::inlays::InlayHandler};
+use crate::ROOT_FILE;
+use crate::{core::*,smt,ide::inlays::InlayHandler,load_blocking};
 use document::*;
 use check::*;
 use dashmap::DashMap;
 use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
+use tokio::net::unix::pipe;
+use std::path::Path;
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -486,14 +489,35 @@ impl AsyncPipeline {
         let time = Instant::now();
         if let Some(draft) = self.snapshot_draft(uri).await? {
             info!("waited {:?} for draft", time.elapsed());
-            Ok(Some(if sync {
+            let result = Ok(Some(if sync {
                 let timestamp = draft.timestamp();
                 (draft, self.snapshot_root_sync(uri, timestamp).await?)
             } else {
                 (draft, self.snapshot_root(uri).await?)
-            }))
+            }));
+            self.load_imports(uri);
+            result
         } else {
             Ok(None)
+        }
+    }
+    fn load_imports(&self, uri: &Url){
+        let rootBinding = self.rx_root.borrow();
+        let doc = rootBinding.file_by_uri(&uri);
+        match doc {
+            Some(ast) =>{
+                let imports = ast.imports();
+              for import in imports {
+                    let relative_path_string = import.path.to_file( ROOT_FILE.try_lock().unwrap().as_mut().to_string());
+                    let url_import = Url::from_file_path(&relative_path_string).unwrap();
+                    if !rootBinding.contains(&url_import) {
+                        info!("load import{}",url_import);
+                        load_blocking(url_import, self)
+                    }
+                }  
+            }
+            None =>{
+            }
         }
     }
 }

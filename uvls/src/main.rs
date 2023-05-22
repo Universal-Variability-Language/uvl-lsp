@@ -2,15 +2,17 @@
 #![forbid(unsafe_code)]
 
 use flexi_logger::FileSpec;
+use futures_util::lock::Mutex;
 use get_port::Ops;
+use lazy_static::lazy_static;
 
-use serde::Serialize;
-use tokio::{join, spawn};
 use log::info;
+use serde::Serialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::{join, spawn};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -29,6 +31,11 @@ impl Default for Settings {
         Settings { has_webview: false }
     }
 }
+
+lazy_static! {
+    pub static ref ROOT_FILE: Mutex<String> = Mutex::new("".to_string());
+}
+
 //The LSP
 struct Backend {
     client: Client,
@@ -44,35 +51,6 @@ impl Backend {
             load_blocking(uri, &pipeline);
         });
     }
-
-    fn async load_all_imports(&self, uri: Url) {
-        let pipeline = self.pipeline.clone();
-        let uri_clone = uri.clone();
-        info!("load path :{}", uri);
-        tokio::task::spawn_blocking(move || {
-             load_blocking(uri, &pipeline);
-        }).await;
-        tokio::task::spawn_blocking(|| {
-            let piplineAfterLoad = self.pipeline.clone();
-            let root = pipeline.root();
-            let broot = root.borrow();
-            let document = broot.file_by_uri(&uri_clone);
-
-            match document {
-                Some(ast) => {
-                    let imports = ast.imports();
-                    info!("imports amount {}", imports.len());
-                    for import in imports {
-                        info!("import : {:?}", import.path);
-                    }
-                }
-                None => {
-                    info!("test")
-                }
-            }
-        });
-    }
-
     async fn snapshot(&self, uri: &Url, sync: bool) -> Result<Option<(Draft, Arc<RootGraph>)>> {
         self.pipeline
             .snapshot(uri, sync)
@@ -151,17 +129,9 @@ impl LanguageServer for Backend {
             .as_deref()
             .or_else(|| init_params.root_uri.as_ref().map(|p| p.path()))
             .map(PathBuf::from);
-        // if let Some(root_folder) = root_folder {
-        //     let semantic = self.pipeline.clone();
-        //     //cheap fix for better intial load, we should really use priority model to prefer
-        //     //editor owned files
-        //     spawn(async move {
-        //         tokio::task::spawn_blocking(move || {
-        //             load_all_blocking(&root_folder, semantic);
-        //         })
-        //         .await
-        //     });
-        // }
+        if let Some(root_folder) = root_folder {
+            *ROOT_FILE.lock().await = root_folder.to_str().unwrap().to_string();
+        }
         if init_params
             .client_info
             .map(|info| matches!(info.name.as_str(), "Visual Studio Code"))
@@ -249,14 +219,12 @@ impl LanguageServer for Backend {
     }
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         info!("received did_open {:?}", params.text_document.uri);
-        let state = self.pipeline.root();
-        let uri = params.text_document.uri;
-        if state.borrow().contains(&uri) {
-            self.pipeline
-                .open(uri, params.text_document.text, DocumentState::OwnedByEditor);
-        } else {
-            self.load_all_imports(uri);
-        }
+        self.pipeline.open(
+            params.text_document.uri,
+            params.text_document.text,
+            DocumentState::OwnedByEditor,
+        );
+
         info!("done did_open");
     }
     async fn did_change(&self, params: DidChangeTextDocumentParams) {

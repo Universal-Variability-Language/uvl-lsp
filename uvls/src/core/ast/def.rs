@@ -41,6 +41,11 @@ impl Path {
     pub fn to_string(&self) -> String {
         self.names.iter().map(|i| i.as_str()).join(".")
     }
+    pub fn to_file(&self,root_folder: String) -> String {
+        let absoultpath = self.names.iter().map(|i| i.as_str()).join("/");
+        let path = root_folder+ "/"+ &absoultpath+".uvl";
+        path
+    }
 }
 
 //Type definitions for symbols
