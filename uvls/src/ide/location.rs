@@ -33,6 +33,7 @@ pub fn attribute_prefix(node: Node, source: &Rope) -> Option<Path> {
             let header = node.child_by_field_name("header")?;
             match header.kind() {
                 "name" => parse_path(header, source),
+                "typed_feature" => parse_path(header.child_by_field_name("name")?, source),
                 _ => None,
             }
         }
@@ -90,6 +91,7 @@ pub fn find_text_object_impl(
             }
         }
         Section::Attribute => match node.kind() {
+            
             "name" => {
                 let path = attribute_prefix(node.parent().unwrap(), source)?;
                 Some(TextObject {
@@ -279,8 +281,23 @@ fn find_definitions(
                 },
             );
             Some(out)
+        },
+        TextObjectKind::Feature => {
+            for i in root.resolve(file_id, &obj.path.names) {
+                if matches!(i.sym, Symbol::Feature(_)) {
+                    return Some(vec![i]);
+                }
+            }
+            None
+        },
+        TextObjectKind::Attribute => {
+            for i in root.resolve(file_id, &obj.path.names) {
+                if matches!(i.sym, Symbol::Attribute(_)) {
+                    return Some(vec![i]);
+                }
+            }
+            None
         }
-        _ => None,
     }
 }
 pub fn goto_definition(
@@ -312,35 +329,34 @@ pub fn goto_definition(
     ))
 }
 
-fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<RootSymbol> {
-    let ty = root.type_of(RootSymbol {
-        sym: tgt,
-        file: dst_id,
-    });
+fn reverse_resolve(root: &Snapshot, dst_id: FileID, tgt: Symbol) -> Vec<(RootSymbol, Option<Range>)> {
+    let dst_file = root.file(dst_id);
+
     root.fs()
         .recursive_imported(dst_id)
         .iter()
         .flat_map(|&src_id| {
             let src_file = root.file(src_id);
+
             src_file
                 .all_references()
                 .filter(move |r| {
-                    root.type_of(RootSymbol {
-                        sym: *r,
-                        file: src_id,
-                    }) == ty
+                    root.resolve(src_id, src_file.path(*r)).any(|sym|
+                        sym == RootSymbol {file: dst_id,sym: tgt,} ||
+                            matches!(tgt, Symbol::Feature(_)) && matches!(sym, RootSymbol {file, sym: Symbol::Attribute(n)}
+                                if file == dst_id && dst_file.scope(Symbol::Attribute(n)) == tgt))
                 })
-                .filter(move |r| {
-                    root.resolve(src_id, src_file.path(*r)).any(|sym| {
-                        sym == RootSymbol {
-                            file: dst_id,
-                            sym: tgt,
+                .map(move |sym| -> (RootSymbol, Option<Range>) {
+                    fn get_range(root: &Snapshot, sym: Symbol, src_file: &AstDocument, dst_id: FileID, tgt: Symbol) -> Option<Range> {
+                        let reference = if let Symbol::Reference(n) = sym {src_file.get_reference(n)?} else {return None};
+                        for i in 0..reference.path.names.len() {
+                            if root.resolve(src_file.id, &reference.path.names[0..=i]).any(|sym| sym == RootSymbol {file: dst_id, sym: tgt}) {
+                                return lsp_range(reference.path.spans.get(i).unwrap().clone(), &src_file.source);
+                            }
                         }
-                    })
-                })
-                .map(move |i| RootSymbol {
-                    file: src_id,
-                    sym: i,
+                        None
+                    }
+                    (RootSymbol {file: src_id, sym}, get_range(root, sym, src_file, dst_id, tgt))
                 })
         })
         .collect()
@@ -351,11 +367,10 @@ fn find_references_symboles(
     draft: &Draft,
     pos: &Position,
     uri: &Url,
-) -> Option<Vec<RootSymbol>> {
+) -> Option<Vec<(RootSymbol, Option<Range>)>> {
     let file_id = root.file_id(uri)?;
     let file = root.file(file_id);
     let obj = find_text_object(draft, pos, file_id, root)?;
-    info!("{:?}", obj);
     match obj.kind {
         TextObjectKind::Feature => file
             .lookup(Symbol::Root, &obj.path.names, |sym| {
@@ -391,22 +406,47 @@ pub fn find_references(
     let refs = find_references_symboles(root, draft, pos, uri)?;
     Some(
         refs.iter()
-            .filter_map(|sym| {
+            .filter_map(|(sym, range)| {
                 let file = root.file(sym.file);
                 match sym.sym {
                     Symbol::Root => Some(Location {
                         uri: file.uri.clone(),
                         range: Range::default(),
                     }),
-                    _ => {
-                        let range = file.lsp_range(sym.sym)?;
-                        Some(Location {
-                            uri: file.uri.clone(),
-                            range,
-                        })
-                    }
+                    _ => Some(Location {
+                        uri: file.uri.clone(),
+                        range: range.unwrap_or(file.lsp_range(sym.sym).unwrap_or_default()),
+                    })
                 }
             })
             .collect(),
     )
 }
+
+pub fn rename(
+    root: &Snapshot,
+    draft: &Draft,
+    uri: &Url,
+    pos: &Position,
+    new_text: String
+) -> Option<WorkspaceEdit> {
+    let mut changes = std::collections::HashMap::<Url, Vec<TextEdit>>::new();
+
+    // Add definition changes
+    let binding = find_definitions(root, draft, pos, uri)?;
+    let RootSymbol { file, sym } = binding.iter().next()?;
+    changes.insert(file.url(), vec![TextEdit {range: root.file(*file).lsp_range(*sym)?, new_text: new_text.clone()}]);
+
+    // Add reference changes
+    find_references(root, draft, pos, uri)?.iter().for_each(|location|{
+        let edit = TextEdit { range: location.range, new_text: new_text.clone()};
+        if let Some(edits) = changes.get_mut(&location.uri){
+            edits.push(edit);
+        } else {
+            changes.insert(location.uri.clone(), vec![edit]);
+        }
+    });
+
+    Some(WorkspaceEdit { changes: Some(changes), document_changes: None, change_annotations: None })
+}
+

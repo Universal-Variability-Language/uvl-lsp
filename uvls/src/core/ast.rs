@@ -295,6 +295,9 @@ impl AstDocument {
             .flat_map(|i| i.iter())
             .cloned()
     }
+    pub fn get_reference(&self, index: usize) -> Option<&Reference> {
+        self.ast.references.get(index)
+    }
     pub fn lsp_range(&self, sym: Symbol) -> Option<tower_lsp::lsp_types::Range> {
         self.ast.lsp_range(sym, &self.source)
     }
