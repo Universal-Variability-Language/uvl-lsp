@@ -95,23 +95,7 @@ fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
         info!("Failed to load file {} : {}", uri, e);
     }
 }
-//TODO remove method
-//load all files under given a path
-fn load_all_blocking(path: &Path, pipeline: AsyncPipeline) {
-    for e in walkdir::WalkDir::new(path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|e| e == std::ffi::OsStr::new("uvl"))
-                .unwrap_or(false)
-        })
-    {
-        load_blocking(Url::from_file_path(e.path()).unwrap(), &pipeline)
-    }
-}
+
 fn shutdown_error() -> tower_lsp::jsonrpc::Error {
     tower_lsp::jsonrpc::Error {
         code: tower_lsp::jsonrpc::ErrorCode::InternalError,
@@ -219,11 +203,20 @@ impl LanguageServer for Backend {
     }
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         info!("received did_open {:?}", params.text_document.uri);
-        self.pipeline.open(
-            params.text_document.uri,
-            params.text_document.text,
-            DocumentState::OwnedByEditor,
-        );
+        if self
+            .pipeline
+            .root()
+            .borrow()
+            .contains(&params.text_document.uri)
+        {
+            self.pipeline.open(
+                params.text_document.uri,
+                params.text_document.text,
+                DocumentState::OwnedByEditor,
+            );
+        } else {
+            load_blocking(params.text_document.uri, &self.pipeline);
+        }
 
         info!("done did_open");
     }

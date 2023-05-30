@@ -3,6 +3,7 @@ use crate::{core::*,smt,ide::inlays::InlayHandler,load_blocking};
 use document::*;
 use check::*;
 use dashmap::DashMap;
+use document::*;
 use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
@@ -501,22 +502,39 @@ impl AsyncPipeline {
             Ok(None)
         }
     }
-    fn load_imports(&self, uri: &Url){
-        let rootBinding = self.rx_root.borrow();
-        let doc = rootBinding.file_by_uri(&uri);
+    //load import  if not already loaded and if the file is a uvl.json then load the corresponding uvl file
+    // this method is called after the complete red tree of the uri is created
+    fn load_imports(&self, uri: &Url) {
+        let root_binding = self.rx_root.borrow();
+        let doc = root_binding.file_by_uri(&uri);
         match doc {
-            Some(ast) =>{
+            // it is a uvl
+            Some(ast) => {
+                // get all imports
                 let imports = ast.imports();
-              for import in imports {
-                    let relative_path_string = import.path.to_file( ROOT_FILE.try_lock().unwrap().as_mut().to_string());
+                for import in imports {
+                    let relative_path_string = import
+                        .path
+                        .to_file(ROOT_FILE.try_lock().unwrap().as_mut().to_string());
                     let url_import = Url::from_file_path(&relative_path_string).unwrap();
-                    if !rootBinding.contains(&url_import) {
-                        info!("load import{}",url_import);
-                        load_blocking(url_import, self)
+                    //check if import is already loaded, if not, load
+                    if !root_binding.contains(&url_import) {
+                        load_blocking(url_import, self);
                     }
-                }  
+                }
             }
-            None =>{
+            // it is a uvl.json
+            None => {
+                let config = root_binding.config_by_uri(&uri);
+                match config {
+                    Some(config_doc) => {
+                        let url_file = config_doc.config.as_ref().unwrap().file.url();
+                        if !root_binding.contains(&url_file) {
+                            load_blocking(url_file, self);
+                        }
+                    }
+                    None => {}
+                }
             }
         }
     }
