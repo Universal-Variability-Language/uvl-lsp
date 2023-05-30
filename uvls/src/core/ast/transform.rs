@@ -557,7 +557,6 @@ fn opt_function_args(state: &mut VisitorState) -> Option<Vec<Path>> {
 }
 
 fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
-    //info!("[check_langlvls] Search for: {:?}", searched_lang_lvl);
 
     if state.ast.includes.is_empty() { // no includes means, that implicitly everything is included
         return ();
@@ -1175,7 +1174,6 @@ pub fn visit_root(source: Rope, tree: Tree, uri: Url, timestamp: Instant) -> Ast
         state.connect();
         (state.ast, state.errors)
     };
-    info!("[TRANSFORM] visit_root uri = {:?}", uri);
     let mut path = uri_to_path(&uri).unwrap();
     if let Some(ns) = ast.namespace.as_ref() {
         let len = path.len().saturating_sub(ns.names.len());
