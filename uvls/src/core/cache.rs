@@ -8,6 +8,7 @@ use petgraph::prelude::*;
 use resolve::*;
 use std::sync::Arc;
 use ustr::Ustr;
+use std::path;
 #[derive(Debug, Clone, PartialEq)]
 enum FSEdge {
     Path(Ustr),
@@ -251,6 +252,7 @@ impl FileSystem {
             .find(|n| matches!(self.graph[*n], FSNode::Dir))
             .unwrap()
     }
+
     //all subfiles from origin under path, returns (prefix,filename,filenode)
     pub fn sub_files<'a>(
         &'a self,
@@ -264,7 +266,90 @@ impl FileSystem {
                 _ => true,
             })
     }
+
+    // find all files and subfiles of one file which are not loaded
+    pub fn all_sub_files<'a>(
+        &self,
+        origin_unc: FileID,
+        prefix: &[Ustr],
+    ) -> impl Iterator<Item = (compact_str::CompactString, Ustr, FSNode)> + 'a {
+        //
+        let origin = origin_unc.as_str().strip_prefix("file://").unwrap();
+
+        let mut suffix_helper: Vec<&str> = origin.split("/").collect();
+        let suffix = suffix_helper.pop().unwrap(); 
+        let root_dir = origin.strip_suffix(suffix).unwrap();
+
+
+        let mut stack: Vec<(compact_str::CompactString, Ustr, FSNode)> = Vec::new();
+        let mut dirs: Vec<String> = Vec::new();
+        for entry in walkdir::WalkDir::new(path::Path::new(root_dir))
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|e| e == std::ffi::OsStr::new("uvl"))
+                    .unwrap_or(false)
+            })
+        {   
+            let path = entry.path().to_str().unwrap();
+            
+            if path != origin && !self.file2node.contains_key(&FileID::new(path)){
+                info!("paht not loaded {}",path);
+                let mut valid_path = true;
+                let mut check_path = origin.clone();
+                for i in prefix.iter() {
+                    let mut check_prefix = "/".to_owned();
+                    check_prefix.push_str(&i.as_str().to_owned());
+                    if check_path.starts_with(check_prefix.as_str()) {
+                        let strip_prefix = check_path.strip_prefix(check_prefix.as_str());
+                        check_path = strip_prefix.unwrap();
+                    } else {
+                        valid_path = false;
+                        break;
+                    }
+                }
+                if valid_path {
+                    let name_op = path
+                        .strip_prefix(root_dir);
+                    match name_op {
+                        Some(name) => {
+                            let new_name = name.replace("/", ".").replace(".uvl", "");
+                            stack.push((
+                                new_name.as_str().into(),
+                                Ustr::from(new_name.as_str()),
+                                FSNode::File(FileID::new(&path)),
+                            ));
+                            let mut is_dir = true;
+                            let mut dir_names: Vec<&str> = new_name.split(".").collect();
+                            while is_dir {
+                                let dir_name = dir_names.join(".");
+                                if dir_name.is_empty() || dirs.contains(&dir_name) {
+                                    is_dir = false;
+                                } else {
+                                    stack.push((
+                                        dir_name.as_str().into(),
+                                        Ustr::from(&dir_name.as_str()),
+                                        FSNode::Dir,
+                                    ));
+                                    dirs.push(dir_name);
+                                    let _ = dir_names.pop();
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        std::iter::from_fn(move || stack.pop())
+    }
+    
 }
+
+
 
 #[derive(Debug, Clone)]
 pub struct LinkedAstDocument {

@@ -990,6 +990,21 @@ fn compute_completions_impl(
                     &ctx,
                 ))
             }
+            for (path, name, node) in snapshot.fs().all_sub_files(origin, &ctx.prefix) {
+                let len = path.as_str().chars().filter(|c| c == &'.').count();
+                top.push(CompletionOpt::new(
+                    match node {
+                        FSNode::Dir => CompletionKind::Folder,
+                        _ => CompletionKind::File,
+                    },
+                    name,
+                    path.clone(),
+                    len,
+                    TextOP::Put(path),
+                    &ctx,
+                ))
+            }
+
             is_incomplete = true
         }
         CompletionEnv::Include => {
