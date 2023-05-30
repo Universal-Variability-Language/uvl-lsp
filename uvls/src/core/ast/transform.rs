@@ -1175,6 +1175,7 @@ pub fn visit_root(source: Rope, tree: Tree, uri: Url, timestamp: Instant) -> Ast
         state.connect();
         (state.ast, state.errors)
     };
+    info!("[TRANSFORM] visit_root uri = {:?}", uri);
     let mut path = uri_to_path(&uri).unwrap();
     if let Some(ns) = ast.namespace.as_ref() {
         let len = path.len().saturating_sub(ns.names.len());

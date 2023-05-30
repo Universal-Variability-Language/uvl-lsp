@@ -102,8 +102,14 @@ impl FileSystem {
             file2node.insert(n, id);
         }
         //resolve imports
+        info!("[CACHE] graph {:?}", graph);
+        info!("[CACHE] file2node {:?}", file2node);
         for (&n, f) in files.iter() {
+            info!("[CACHE] Check for file {:?}", n);
             for i in f.all_imports().rev() {
+                info!("[CACHE] Check for import {:?}", i);
+                info!("[CACHE] file.path {:?}", f.path(i));
+                info!("[CACHE] goto_file {:?}", Self::goto_file(&graph, file2node[&n], f.path(i)));
                 if let Some(node) = Self::goto_file(&graph, file2node[&n], f.path(i)) {
                     if graph.contains_edge(node, file2node[&n]) {
                         errors.sym(i, n, 50, "cyclic import not allowed");

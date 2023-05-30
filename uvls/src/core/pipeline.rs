@@ -149,6 +149,8 @@ struct DraftState {
     state: DocumentState,
     timestamp: Instant,
 }
+
+#[derive(Debug)]
 enum LinkMsg {
     Delete(Url, Instant),
     UpdateAst(Arc<ast::AstDocument>),
@@ -164,6 +166,8 @@ async fn link_handler(
     let mut latest_configs: HashMap<FileID, Arc<config::ConfigDocument>> = HashMap::new();
     let mut latest_ast: HashMap<FileID, Arc<ast::AstDocument>> = HashMap::new();
     let mut timestamps: HashMap<Url, Instant> = HashMap::new();
+    // info!("[PIPELINE] empty, latest_ast = {:?}", latest_ast);
+    // info!("[PIPELINE] empty, latest_configs = {:?}", latest_configs);
     let (tx_execute, rx_execute) = watch::channel((latest_ast.clone(), latest_configs.clone(), 0));
     let mut dirty = false;
     let mut revision = 0;//Each change is one revision
@@ -173,6 +177,7 @@ async fn link_handler(
     loop {
         select! {
             Some(msg)=rx.recv()=>{
+                //info!("[PIPELINE] rx.recv msg = {:?}", msg);
                 match msg{
                     LinkMsg::Delete(uri,timestamp)=>{
                         if timestamps.get(&uri).map(|old|old < &timestamp).unwrap_or(true){
@@ -251,7 +256,9 @@ async fn link_handler(
             let old = tx_cache.borrow().cache().clone();
 
             //link files incrementally
+            info!("[PIPELINE] link_executor, AstFiles: {:?}", ast);
             let root = RootGraph::new(&ast, &configs, revision, &old, &mut err, &mut timestamps);
+            info!("[PIPELINE] link_executor, RootGraph: {:?}", root);
 
             let _ = tx_cache.send(Arc::new(root));
             let _ = tx_err

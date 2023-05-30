@@ -71,18 +71,25 @@ impl Backend {
         }
     }
 }
-//load a file this is tricky because the editor can also load it at the same time
-fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
+//load a file, this is tricky because the editor can also load it at the same time
+fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {    
     if let Err(e) = std::fs::File::open(uri.path()).and_then(|mut f| {
+        info!("[MAIN] load_blocking 00");
         let meta = f.metadata()?;
         let modified = meta.modified()?;
 
+        info!("[MAIN] load_blocking 01");
+        //let newuri = Url::from_file_path(Path::new(uri.path())).unwrap();
+        //info!("[MAIN] load_blocking newuri = {:?}", newuri);
         if !pipeline.should_load(&uri, modified) {
             return Ok(());
         }
+        info!("[MAIN] load_blocking 02");
         let mut data = String::new();
         f.read_to_string(&mut data)?;
+        info!("[MAIN] load_blocking 03");
         pipeline.open(uri.clone(), data, DocumentState::OwnedByOs(modified));
+        info!("[MAIN] load_blocking 04");
         Ok(())
     }) {
         info!("Failed to load file {} : {}", uri, e);
@@ -90,18 +97,33 @@ fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
 }
 //load all files under given a path
 fn load_all_blocking(path: &Path, pipeline: AsyncPipeline) {
+    info!("[MAIN] load_all_blocking path = {:?}", path);
     for e in walkdir::WalkDir::new(path)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_file())
         .filter(|e| {
+            info!("[MAIN] load_all_blocking file path = {:?}", e.path());
+            info!("[MAIN] load_all_blocking file extension = {:?}", e.path().extension());
             e.path()
                 .extension()
                 .map(|e| e == std::ffi::OsStr::new("uvl"))
                 .unwrap_or(false)
         })
     {
-        load_blocking(Url::from_file_path(e.path()).unwrap(), &pipeline)
+        info!("[MAIN] load_all_blocking path = {:?}", e);
+        /*if e.path().to_string_lossy().contains("test.uvl"){
+            let p = Path::new("C:/uvl_test/test.uvl");
+            info!("[MAIN] load_all_blocking path01 = {:?}", p);
+            load_blocking(Url::parse(p.to_str().unwrap()).unwrap(), &pipeline)
+        }else if e.path().to_string_lossy().contains("test2.uvl") {
+            let p = Path::new("C:/uvl_test/test2.uvl");
+            info!("[MAIN] load_all_blocking path02 = {:?}", p);
+            load_blocking(Url::parse(p.to_str().unwrap()).unwrap(), &pipeline)
+        } else {*/
+            info!("[MAIN] load_all_blocking path03 = {:?}", e.path());
+            load_blocking(Url::from_file_path(e.path()).unwrap(), &pipeline)
+        //}
     }
 }
 fn shutdown_error() -> tower_lsp::jsonrpc::Error {
@@ -125,6 +147,7 @@ impl LanguageServer for Backend {
             let semantic = self.pipeline.clone();
             //cheap fix for better intial load, we should really use priority model to prefer
             //editor owned files
+            info!("[Backend] root_folder = {:?}", root_folder);
             spawn(async move {
                 tokio::task::spawn_blocking(move || {
                     load_all_blocking(&root_folder, semantic);
