@@ -137,7 +137,27 @@ fn RealInput(cx: Scope,init_val:f64,sym: ModuleSymbol,tag: u8)->Element{
     })
 
 }
+#[inline_props]
+fn RangeInput(cx: Scope,init_val:f64,sym: ModuleSymbol,tag: u8,min: f64,max:f64)->Element{
+    let tx = use_coroutine_handle::<UIAction>(cx).unwrap();
+    let val = use_state(cx,||init_val.to_string());
+    cx.render(rsx! {
+        input{
+            class:"input-value",
+            r#type:"number",
+            required:true,
+            value:"{val}",
+            min:"{min}",
+            max:"{max}",
+            oninput:move |e|{
+                val.set(to_number(&e.value));
+                tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(val.parse().unwrap_or(0.0))));
 
+            }
+        }
+    })
+
+}
 fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
     let ConfigInputProps {
         ty,
@@ -195,6 +215,15 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
                     }
                 }
             },
+            ConfigValue::Range(min,max, x) => rsx! {
+                RangeInput{
+                    sym:*sym,
+                    init_val:*x,
+                    tag:*tag,
+                    min: *min,
+                    max: *max,
+                }
+            }
         };
         cx.render(rsx! {
             div{

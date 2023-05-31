@@ -35,6 +35,8 @@ use ustr::Ustr;
 //JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
 //crate for span information and partial parsing so error reporting becomes impossible.
 
+type  Min  = f64;
+type Max = f64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
@@ -42,6 +44,7 @@ pub enum ConfigValue {
     Bool(bool),
     Number(f64),
     String(String),
+    Range(Min,Max,f64),
 }
 impl ConfigValue {
     pub fn ty(&self) -> Type {
@@ -49,12 +52,15 @@ impl ConfigValue {
             Self::Bool(..) => Type::Bool,
             Self::Number(..) => Type::Real,
             Self::String(..) => Type::String,
+            Self::Range(..) => Type::Range,
+
         }
     }
     pub fn default(ty: Type) -> ConfigValue {
         match ty {
             Type::Bool => ConfigValue::Bool(false),
             Type::Real => ConfigValue::Number(0.0),
+            Type::Range => ConfigValue::Range(0.0, 4.0,0.0),
             Type::String => ConfigValue::String("".into()),
             _ => unimplemented!(),
         }
@@ -69,6 +75,7 @@ impl Display for ConfigValue {
             Self::Bool(x) => write!(f, "{x}"),
             Self::Number(x) => write!(f, "{x}"),
             Self::String(x) => write!(f, "{x}"),
+            Self::Range(_,_,x) => write!(f, "{x}"),
         }
     }
 }

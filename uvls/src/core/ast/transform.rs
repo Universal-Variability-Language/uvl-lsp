@@ -909,16 +909,16 @@ fn visit_attributes(state: &mut VisitorState, parent: Symbol) {
     }
 }
 
-fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty: Type) {
+fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, mut ty: Type) {
     match parent {
         Symbol::Feature(..) => {
             state.push_error(40, "features have to be separated by groups");
         }
         _ => {}
     }
+    
     let feature = Feature {
         name,
-        ty,
         cardinality: state
             .node()
             .parent()
@@ -926,8 +926,11 @@ fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty:
             .child_by_field_name("cardinality")
             .and_then(|n| {
                 check_langlvls(state, LanguageLevel::SMT(vec![LanguageLevelSMT::FeatureCardinality]));
+                ty = Type::Range;
                 opt_cardinality(n, state)
             }),
+        ty,
+        
     };
     let sym = Symbol::Feature(state.ast.features.len());
     state.ast.features.push(feature);
