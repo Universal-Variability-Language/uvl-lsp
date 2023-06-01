@@ -7,7 +7,7 @@ use get_port::Ops;
 use serde::Serialize;
 use tokio::{join, spawn};
 use log::info;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -392,7 +392,18 @@ impl LanguageServer for Backend {
             }
             "uvls/generate_diagram" => {
                 info!("[MAIN] execute_command, generate Diagram!");
-                // TODO: create a file and fill it with the DOT content
+                let diagram_file_name = "uvl_diagram.dot";
+                let re = regex::Regex::new(r"(.*\\)(.*)").unwrap();
+                let path = re.replace(uri.path(), |caps: &regex::Captures| {format!("{} {}", &caps[1], diagram_file_name)});
+                let mut file = std::fs::File::create(path.as_ref()).expect("Error encountered while creating dot file!");
+
+                let root_fileid = FileID::from_uri(&Url::parse(format!("file://{}",uri.as_str()).as_str()).unwrap());
+                let root_graph = self.pipeline.root().borrow_and_update().clone();
+                if !root_graph.contains_id(root_fileid){{}}
+                
+                let document = root_graph.files.get(&root_fileid).unwrap();
+                let g = ast::graph::Graph::new(document.source.clone(), document.tree.clone(), uri);
+                file.write_all(g.dot.as_bytes()).expect("Error while writing to dot file");
             }
             _ => {}
         }
