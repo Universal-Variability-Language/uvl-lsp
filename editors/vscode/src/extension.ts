@@ -13,6 +13,7 @@ import * as child_process from "child_process";
 import {
 
 	DiagnosticSeverity,
+	ExecuteCommandRequest,
 	LanguageClient,
 	LanguageClientOptions,
 	ServerOptions,
@@ -258,8 +259,19 @@ export async function activate(context: vscode.ExtensionContext) {
 		<body>
 			<iframe src="${uri}" style="position:fixed; top:0; left:0; bottom:0; right:0; width:100%; height:100%; border:none; margin:0; padding:0; overflow:hidden; z-index:999999;"></iframe>
 		</body>
-		</html>`
-	})
+		</html>`;
+	});
+	vscode.commands.registerCommand('uvls.generate_diagram', async () => {
+		if(!client){return;}
+
+        const uri = window.activeTextEditor?.document.fileName;
+        if (uri === undefined){return;}
+
+        await client.sendRequest(ExecuteCommandRequest.method, {
+            command: "uvls/generate_diagram",
+            arguments: [uri]
+        });
+	});
 	await checkUpdateMaybe(context);
 	await startClient(context);
 

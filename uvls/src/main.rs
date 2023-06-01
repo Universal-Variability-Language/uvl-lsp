@@ -183,6 +183,7 @@ impl LanguageServer for Backend {
                         "uvls/hide_config".into(),
                         "uvls/open_config".into(),
                         "uvls/load_config".into(),
+                        "uvls/generate_diagram".into(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,
@@ -388,6 +389,10 @@ impl LanguageServer for Backend {
                     .await;
                 self.pipeline.touch(&uri);
                 self.client.code_lens_refresh().await?;
+            }
+            "uvls/generate_diagram" => {
+                info!("[MAIN] execute_command, generate Diagram!");
+                // TODO: create a file and fill it with the DOT content
             }
             _ => {}
         }
