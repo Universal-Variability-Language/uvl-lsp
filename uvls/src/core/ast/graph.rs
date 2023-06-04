@@ -87,7 +87,8 @@ impl<'a> VisitorGraph<'a> {
     fn add_feature(&mut self, feature: GraphNode) {
         //info!("[GRAPH] add Feature '{}'", feature.name);
         let shape = Shape::by_mode(feature.group_mode.clone().unwrap_or(GroupMode::Optional));
-        self.dot.push_str(format!("{} [fillcolor=\"{}\" tooltip=\"Additional information\" shape=\"{}\"]\n", feature.name, FEATURE_COLOR, shape.as_str()).as_str());
+        self.dot.push_str(format!("{} [fillcolor=\"{}\" tooltip=\"Cardinality: {:?}\" shape=\"{}\"]\n",
+            feature.name, FEATURE_COLOR, feature.cardinality, shape.as_str()).as_str());
     }
     
     fn add_feature_link(&mut self, feature: GraphNode, parent: GraphNode) {
