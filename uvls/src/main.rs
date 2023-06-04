@@ -391,10 +391,9 @@ impl LanguageServer for Backend {
                 self.client.code_lens_refresh().await?;
             }
             "uvls/generate_diagram" => {
-                info!("[MAIN] execute_command, generate Diagram!");
-                let diagram_file_name = "uvl_diagram.dot";
-                let re = regex::Regex::new(r"(.*\\)(.*)").unwrap();
-                let path = re.replace(uri.path(), |caps: &regex::Captures| {format!("{} {}", &caps[1], diagram_file_name)});
+                let diagram_file_extension = "dot";
+                let re = regex::Regex::new(r"(.*\.)(.*)").unwrap();
+                let path = re.replace(uri.path(), |caps: &regex::Captures| {format!("{}{}", &caps[1], diagram_file_extension)});
                 let mut file = std::fs::File::create(path.as_ref()).expect("Error encountered while creating dot file!");
 
                 let root_fileid = FileID::from_uri(&Url::parse(format!("file://{}",uri.as_str()).as_str()).unwrap());

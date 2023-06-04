@@ -40,8 +40,7 @@
       {
         "command":"uvls.generate_diagram",
         "title": "Generate a DOT file to visualize with Graphviz",
-        "category": "UVLS",
-        "args": {"uri": "${file}"}
+        "category": "UVLS"
       }
     ],
     "languages": [
@@ -125,5 +124,6 @@
     "mkdirp": "^1.0.4",
     "vscode-languageclient": "^8.0.2",
     "which": "^3.0.0"
-  }
+  },
+  "extensionDependencies": ["tintinweb.graphviz-interactive-preview"]
 }

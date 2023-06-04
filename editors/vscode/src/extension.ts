@@ -66,7 +66,7 @@ async function fetchInfo(): Promise<Metadata> {
 
 async function uvlsPath(context: ExtensionContext) {
 	const configuration = workspace.getConfiguration("uvls");
-	var uvlsPath = configuration.get<string | null>("path", null);
+	let uvlsPath = configuration.get<string | null>("path", null);
 
 	if (!uvlsPath) {
 		uvlsPath = which.sync('uvls', { nothrow: true });
@@ -76,7 +76,7 @@ async function uvlsPath(context: ExtensionContext) {
 		uvlsPath = which.sync(uvlsPath, { nothrow: true });
 	}
 	const uvlsPathExists = uvlsPath !== null && fs.existsSync(uvlsPath);
-	var message: string | null = null;
+	let message: string | null = null;
 	if (uvlsPath && uvlsPathExists) {
 		try {
 			fs.accessSync(uvlsPath, fs.constants.R_OK | fs.constants.X_OK);
@@ -264,13 +264,23 @@ export async function activate(context: vscode.ExtensionContext) {
 	vscode.commands.registerCommand('uvls.generate_diagram', async () => {
 		if(!client){return;}
 
-        const uri = window.activeTextEditor?.document.fileName;
-        if (uri === undefined){return;}
+        const uri = window.activeTextEditor?.document.uri;
+        if (uri === undefined || !uri.toString().endsWith('uvl')){return;}
 
         await client.sendRequest(ExecuteCommandRequest.method, {
             command: "uvls/generate_diagram",
-            arguments: [uri]
+            arguments: [uri.fsPath]
         });
+
+        const regex = /(.*\.)(.*)/gm;
+        const subst = '$1dot';
+        let doturi = vscode.Uri.file(uri.fsPath.replace(regex, subst));
+        /* // open graphviz (dot) source file
+        vscode.workspace.openTextDocument(doturi).then(doc => {
+            vscode.window.showTextDocument(doc);
+        });*/
+        let options = { uri: doturi, title: "Feature Model",};
+        vscode.commands.executeCommand("graphviz-interactive-preview.preview.beside", options);
 	});
 	await checkUpdateMaybe(context);
 	await startClient(context);
