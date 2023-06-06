@@ -124,6 +124,5 @@
     "mkdirp": "^1.0.4",
     "vscode-languageclient": "^8.0.2",
     "which": "^3.0.0"
-  },
-  "extensionDependencies": ["tintinweb.graphviz-interactive-preview"]
+  }
 }
