@@ -535,6 +535,7 @@ impl AsyncPipeline {
                             let open_url = uri.clone();
                             tokio::task::spawn_blocking(move || {
                                 load_blocking(url_file, &pipeline);
+                                //update modified so uvl.json can be loaded
                                 let _ = set_file_mtime(open_url.path(), FileTime::now());
                                 load_blocking(open_url, &pipeline);
                             });

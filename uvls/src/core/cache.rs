@@ -6,9 +6,9 @@ use log::info;
 use module::{ConfigModule, Module};
 use petgraph::prelude::*;
 use resolve::*;
+use std::path;
 use std::sync::Arc;
 use ustr::Ustr;
-use std::path;
 #[derive(Debug, Clone, PartialEq)]
 enum FSEdge {
     Path(Ustr),
@@ -33,11 +33,7 @@ pub struct FileSystem {
     file2node: HashMap<FileID, NodeIndex>,
 }
 impl FileSystem {
-    fn goto_dir(
-        graph: &DiGraph<FSNode, FSEdge>,
-        mut root: NodeIndex,
-        path: &[Ustr],
-    ) -> Option<NodeIndex> {
+    fn goto_dir(graph: &DiGraph<FSNode, FSEdge>, mut root: NodeIndex, path: &[Ustr]) -> Option<NodeIndex> {
         if !graph[root].is_dir() {
             root = graph
                 .neighbors_directed(root, Incoming)
@@ -63,18 +59,10 @@ impl FileSystem {
             None
         }
     }
-    fn goto_file(
-        graph: &DiGraph<FSNode, FSEdge>,
-        root: NodeIndex,
-        path: &[Ustr],
-    ) -> Option<NodeIndex> {
+    fn goto_file(graph: &DiGraph<FSNode, FSEdge>, root: NodeIndex, path: &[Ustr]) -> Option<NodeIndex> {
         Self::goto_dir(graph, root, &path[0..path.len() - 1]).and_then(|dir| {
             graph.edges(dir).find_map(|e| match e.weight() {
-                FSEdge::Path(name)
-                    if name == &path[path.len() - 1] && !graph[e.target()].is_dir() =>
-                {
-                    Some(e.target())
-                }
+                FSEdge::Path(name) if name == &path[path.len() - 1] && !graph[e.target()].is_dir() => Some(e.target()),
                 _ => None,
             })
         })
@@ -130,12 +118,12 @@ impl FileSystem {
     }
     //all imports from a
     pub fn imports(&self, a: FileID) -> impl Iterator<Item = (Symbol, FileID)> + '_ {
-        self.graph.edges(self.file2node[&a]).filter_map(|e| {
-            match (e.weight(), &self.graph[e.target()]) {
+        self.graph
+            .edges(self.file2node[&a])
+            .filter_map(|e| match (e.weight(), &self.graph[e.target()]) {
                 (FSEdge::Import(sym), FSNode::File(name)) => Some((*sym, *name)),
                 _ => None,
-            }
-        })
+            })
     }
     pub fn recursive_imports(&self, src: FileID) -> Vec<FileID> {
         let mut out = HashSet::new();
@@ -198,11 +186,9 @@ impl FileSystem {
                 return None;
             }
         }
-        Self::goto_file(&self.graph, self.file2node[&origin], path).and_then(|node| {
-            match &self.graph[node] {
-                FSNode::File(id) => Some(*id),
-                _ => None,
-            }
+        Self::goto_file(&self.graph, self.file2node[&origin], path).and_then(|node| match &self.graph[node] {
+            FSNode::File(id) => Some(*id),
+            _ => None,
         })
     }
     pub fn dir_files<'a>(
@@ -234,11 +220,9 @@ impl FileSystem {
             stack.pop().map(|(path, name, node)| {
                 for i in self.graph.edges(node) {
                     match i.weight() {
-                        FSEdge::Path(name) => stack.push((
-                            [path.as_str(), name.as_str()].join_compact("."),
-                            *name,
-                            i.target(),
-                        )),
+                        FSEdge::Path(name) => {
+                            stack.push(([path.as_str(), name.as_str()].join_compact("."), *name, i.target()))
+                        }
                         _ => {}
                     }
                 }
@@ -260,88 +244,101 @@ impl FileSystem {
         path: &[Ustr],
     ) -> impl Iterator<Item = (compact_str::CompactString, Ustr, FSNode)> + 'a {
         let dir = self.dir_of(origin);
-        self.dir_files(dir, path)
-            .filter(move |(_, _, node)| match node {
-                FSNode::File(tgt) => tgt != &origin,
-                _ => true,
-            })
+        self.dir_files(dir, path).filter(move |(_, _, node)| match node {
+            FSNode::File(tgt) => tgt != &origin,
+            _ => true,
+        })
     }
-
-    // find all files and subfiles of one file which are not loaded
+    /**
+     * find all subfiles, subdirectories and files on the same level as the currently opened file,
+     *  but only those that have not been loaded yet
+     */
     pub fn all_sub_files<'a>(
         &self,
         origin_unc: FileID,
         prefix: &[Ustr],
     ) -> impl Iterator<Item = (compact_str::CompactString, Ustr, FSNode)> + 'a {
-        //
-        let origin = origin_unc.as_str().strip_prefix("file://").unwrap();
-
-        let mut suffix_helper: Vec<&str> = origin.split("/").collect();
-        let suffix = suffix_helper.pop().unwrap(); 
-        let root_dir = origin.strip_suffix(suffix).unwrap();
-
-
         let mut stack: Vec<(compact_str::CompactString, Ustr, FSNode)> = Vec::new();
         let mut dirs: Vec<String> = Vec::new();
-        for entry in walkdir::WalkDir::new(path::Path::new(root_dir))
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|e| e == std::ffi::OsStr::new("uvl"))
-                    .unwrap_or(false)
-            })
-        {   
-            let path= entry.path().to_str().unwrap();
-            
-            if path != origin && None == self.file2node.keys().find(|&&ele| {
-                let check_path = ele.as_str().strip_prefix("file://").unwrap();
-                check_path.eq(path)
-                
-            }){
-                let mut valid_path = true;
-                let mut check_path = origin.clone();
-                for i in prefix.iter() {
-                    let mut check_prefix = "/".to_owned();
-                    check_prefix.push_str(&i.as_str().to_owned());
-                    if check_path.starts_with(check_prefix.as_str()) {
-                        let strip_prefix = check_path.strip_prefix(check_prefix.as_str());
-                        check_path = strip_prefix.unwrap();
-                    } else {
-                        valid_path = false;
-                        break;
-                    }
-                }
-                if valid_path {
-                    let name_op = path
-                        .strip_prefix(root_dir);
-                    match name_op {
-                        Some(name) => {
-                            let new_name = name.replace("/", ".").replace(".uvl", "");
-                            stack.push((
-                                new_name.as_str().into(),
-                                Ustr::from(new_name.as_str()),
-                                FSNode::File(FileID::new(&path)),
-                            ));
-                            let mut is_dir = true;
-                            let mut dir_names: Vec<&str> = new_name.split(".").collect();
-                            if ! dir_names.is_empty() {
-                                let _ = dir_names.pop();
-                            }
-                            while is_dir {
-                                let dir_name = dir_names.join(".");
-                                if dir_name.is_empty() || dirs.contains(&dir_name) {
-                                    is_dir = false;
-                                } else {
-                                    stack.push((
-                                        dir_name.as_str().into(),
-                                        Ustr::from(&dir_name.as_str()),
-                                        FSNode::Dir,
-                                    ));
-                                    dirs.push(dir_name);
-                                    let _ = dir_names.pop();
+        //remove "file://"" from uri, because only the path is needed
+        match origin_unc.as_str().strip_prefix("file://") {
+            Some(origin) => {
+                let mut suffix_helper: Vec<&str> = origin.split("/").collect();
+                let suffix = suffix_helper.pop().unwrap();
+                let root_dir = origin.strip_suffix(suffix).unwrap();
+                //Retrieve all uvl files and subfiles from the current directory
+                for entry in walkdir::WalkDir::new(path::Path::new(root_dir))
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_file())
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .map(|e| e == std::ffi::OsStr::new("uvl"))
+                            .unwrap_or(false)
+                    })
+                {
+                    match entry.path().to_str() {
+                        Some(path) => {
+                            // check if the file has not been loaded yet and if it is not an open file
+                            if path != origin
+                                && None
+                                    == self
+                                        .file2node
+                                        .keys()
+                                        .find(|&&ele| match ele.as_str().strip_prefix("file://") {
+                                            Some(check_path) => check_path.eq(path),
+                                            None => false,
+                                        })
+                            {
+                                // checks if already written text is prefix of the path
+                                let mut valid_path = true;
+                                let mut check_path = origin.clone();
+                                for i in prefix.iter() {
+                                    let mut check_prefix = "/".to_owned();
+                                    check_prefix.push_str(&i.as_str().to_owned());
+                                    if check_path.starts_with(check_prefix.as_str()) {
+                                        let strip_prefix = check_path.strip_prefix(check_prefix.as_str());
+                                        check_path = strip_prefix.unwrap();
+                                    } else {
+                                        valid_path = false;
+                                        break;
+                                    }
+                                }
+                                if valid_path {
+                                    let name_op = path.strip_prefix(root_dir);
+                                    match name_op {
+                                        Some(name) => {
+                                            let new_name = name.replace("/", ".").replace(".uvl", "");
+                                            // safe file for autoCompletion
+                                            stack.push((
+                                                new_name.as_str().into(),
+                                                Ustr::from(new_name.as_str()),
+                                                FSNode::File(FileID::new(&path)),
+                                            ));
+                                            let mut is_dir = true;
+                                            let mut dir_names: Vec<&str> = new_name.split(".").collect();
+                                            if !dir_names.is_empty() {
+                                                let _ = dir_names.pop();
+                                            }
+                                            // add all parent directories, for autocompletion, but only if they are not yet added
+                                            while is_dir {
+                                                let dir_name = dir_names.join(".");
+                                                if dir_name.is_empty() || dirs.contains(&dir_name) {
+                                                    is_dir = false;
+                                                } else {
+                                                    stack.push((
+                                                        dir_name.as_str().into(),
+                                                        Ustr::from(&dir_name.as_str()),
+                                                        FSNode::Dir,
+                                                    ));
+                                                    dirs.push(dir_name);
+                                                    let _ = dir_names.pop();
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
                                 }
                             }
                         }
@@ -349,13 +346,14 @@ impl FileSystem {
                     }
                 }
             }
+            _ => {
+                info!("uri has wrong form: {} ", origin_unc.as_str());
+            }
         }
+
         std::iter::from_fn(move || stack.pop())
     }
-    
 }
-
-
 
 #[derive(Debug, Clone)]
 pub struct LinkedAstDocument {
@@ -372,10 +370,7 @@ fn find_root_files<'a>(fs: &FileSystem, files: &'a AstFiles) -> impl Iterator<It
             not_root.insert(tgt);
         }
     }
-    files
-        .keys()
-        .filter(move |&i| !not_root.contains(i))
-        .cloned()
+    files.keys().filter(move |&i| !not_root.contains(i)).cloned()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -435,9 +430,7 @@ impl Cache {
         let modules: HashMap<_, _> = find_root_files(&fs, files)
             .map(|root| {
                 let imports = fs.recursive_imports(root);
-                if imports.iter().any(|i| trans_dirty.contains(i))
-                    || !old.modules.contains_key(&root)
-                {
+                if imports.iter().any(|i| trans_dirty.contains(i)) || !old.modules.contains_key(&root) {
                     (root, Arc::new(Module::new(root, &fs, &linked_ast)))
                 } else {
                     (root, old.modules[&root].clone())
@@ -450,9 +443,8 @@ impl Cache {
             if let Some(content) = v.config.as_ref() {
                 info!("uri {}", content.file.as_str());
                 if files.contains_key(&content.file) {
-                    let dirty = trans_dirty.contains(&content.file)
-                        || dirty.contains(k)
-                        || !old.config_modules.contains_key(k);
+                    let dirty =
+                        trans_dirty.contains(&content.file) || dirty.contains(k) || !old.config_modules.contains_key(k);
                     if dirty {
                         //recreate
                         let mut module = Module::new(content.file, &fs, &linked_ast);
@@ -461,15 +453,13 @@ impl Cache {
                                 *k,
                                 Arc::new(ConfigModule {
                                     module: Arc::new(module),
-                                    values:Default::default(),
-                                    source_map:Default::default(),
+                                    values: Default::default(),
+                                    source_map: Default::default(),
                                 }),
                             );
                         } else {
-                            let (values, source_map) = module
-                                .resolve_config(&content.config, |span, err| {
-                                    errors.span(span, *k, 20, err)
-                                });
+                            let (values, source_map) =
+                                module.resolve_config(&content.config, |span, err| errors.span(span, *k, 20, err));
                             module.ok &= !errors.has_error(*k);
                             config_modules.insert(
                                 *k,
