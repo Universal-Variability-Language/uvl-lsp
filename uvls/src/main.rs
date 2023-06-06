@@ -4,13 +4,13 @@
 use flexi_logger::FileSpec;
 use get_port::Ops;
 
-use serde::Serialize;
-use tokio::{join, spawn};
 use log::info;
+use serde::Serialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::{join, spawn};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -172,11 +172,12 @@ impl LanguageServer for Backend {
                     ),
                 ),
                 references_provider: Some(OneOf::Left(true)),
-                rename_provider : Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Left(true)),
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(true),
                 }),
                 inlay_hint_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         "uvls/show_config".into(),
@@ -283,7 +284,7 @@ impl LanguageServer for Backend {
                 &draft,
                 uri,
                 &params.text_document_position.position,
-                params.new_name
+                params.new_name,
             ))
         } else {
             return Ok(None);
@@ -427,12 +428,9 @@ impl LanguageServer for Backend {
                             character: 0,
                         },
                     },
-                    command: if self
-                        .pipeline
-                        .inlay_state()
-                        .is_active(ide::inlays::InlaySource::File(semantic::FileID::new(
-                            uri.as_str(),
-                        ))) {
+                    command: if self.pipeline.inlay_state().is_active(
+                        ide::inlays::InlaySource::File(semantic::FileID::new(uri.as_str())),
+                    ) {
                         Some(Command {
                             title: "hide".into(),
                             command: "uvls/hide_config".into(),
@@ -503,12 +501,11 @@ fn main() {
 }
 async fn server_main() {
     std::env::set_var("RUST_BACKTRACE", "1");
-    
+
     log_panics::Config::new()
         .backtrace_mode(log_panics::BacktraceMode::Unresolved)
         .install_panic_hook();
 
-    
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     //only needed for vscode auto update
