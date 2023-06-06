@@ -294,10 +294,13 @@ impl FileSystem {
                     .unwrap_or(false)
             })
         {   
-            let path = entry.path().to_str().unwrap();
+            let path= entry.path().to_str().unwrap();
             
-            if path != origin && !self.file2node.contains_key(&FileID::new(path)){
-                info!("paht not loaded {}",path);
+            if path != origin && None == self.file2node.keys().find(|&&ele| {
+                let check_path = ele.as_str().strip_prefix("file://").unwrap();
+                check_path.eq(path)
+                
+            }){
                 let mut valid_path = true;
                 let mut check_path = origin.clone();
                 for i in prefix.iter() {
@@ -324,6 +327,9 @@ impl FileSystem {
                             ));
                             let mut is_dir = true;
                             let mut dir_names: Vec<&str> = new_name.split(".").collect();
+                            if ! dir_names.is_empty() {
+                                let _ = dir_names.pop();
+                            }
                             while is_dir {
                                 let dir_name = dir_names.join(".");
                                 if dir_name.is_empty() || dirs.contains(&dir_name) {

@@ -976,6 +976,7 @@ fn compute_completions_impl(
             is_incomplete = true
         }
         CompletionEnv::Import => {
+            // complete all files and dic which are already loaded 
             for (path, name, node) in snapshot.fs().sub_files(origin, &ctx.prefix) {
                 let len = path.as_str().chars().filter(|c| c == &'.').count();
                 top.push(CompletionOpt::new(
@@ -990,6 +991,7 @@ fn compute_completions_impl(
                     &ctx,
                 ))
             }
+             // complete all files and dic which are not loaded 
             for (path, name, node) in snapshot.fs().all_sub_files(origin, &ctx.prefix) {
                 let len = path.as_str().chars().filter(|c| c == &'.').count();
                 top.push(CompletionOpt::new(

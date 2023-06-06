@@ -1,14 +1,11 @@
 use crate::ROOT_FILE;
-use crate::{core::*,smt,ide::inlays::InlayHandler,load_blocking};
-use document::*;
+use crate::{core::*, ide::inlays::InlayHandler, load_blocking, smt};
 use check::*;
 use dashmap::DashMap;
 use document::*;
 use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
-use tokio::net::unix::pipe;
-use std::path::Path;
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -16,6 +13,7 @@ use std::{
     },
     time::SystemTime,
 };
+use filetime::{set_file_mtime, FileTime};
 use tokio::{
     select, spawn,
     sync::{broadcast, mpsc, oneshot, watch},
@@ -519,7 +517,10 @@ impl AsyncPipeline {
                     let url_import = Url::from_file_path(&relative_path_string).unwrap();
                     //check if import is already loaded, if not, load
                     if !root_binding.contains(&url_import) {
-                        load_blocking(url_import, self);
+                        let pipeline = self.clone();
+                        tokio::task::spawn_blocking(move || {
+                            load_blocking(url_import, &pipeline);
+                        });
                     }
                 }
             }
@@ -530,7 +531,13 @@ impl AsyncPipeline {
                     Some(config_doc) => {
                         let url_file = config_doc.config.as_ref().unwrap().file.url();
                         if !root_binding.contains(&url_file) {
-                            load_blocking(url_file, self);
+                            let pipeline = self.clone();
+                            let open_url = uri.clone();
+                            tokio::task::spawn_blocking(move || {
+                                load_blocking(url_file, &pipeline);
+                                let _ = set_file_mtime(open_url.path(), FileTime::now());
+                                load_blocking(open_url, &pipeline);
+                            });
                         }
                     }
                     None => {}
