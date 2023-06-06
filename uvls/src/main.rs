@@ -396,7 +396,7 @@ impl LanguageServer for Backend {
                 let path = re.replace(uri.path(), |caps: &regex::Captures| {format!("{}{}", &caps[1], diagram_file_extension)});
                 let mut file = std::fs::File::create(path.as_ref()).expect("Error encountered while creating dot file!");
 
-                let root_fileid = FileID::from_uri(&Url::parse(format!("file://{}",uri.as_str()).as_str()).unwrap());
+                let root_fileid = FileID::from_uri(&Url::parse(uri.as_str()).unwrap());
                 let root_graph = self.pipeline.root().borrow_and_update().clone();
                 if !root_graph.contains_id(root_fileid){{}}
                 
