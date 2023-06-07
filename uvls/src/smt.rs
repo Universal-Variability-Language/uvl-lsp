@@ -347,6 +347,8 @@ async fn check_base_sat(
         async move {
             let smt_module = uvl2smt(&module, &HashMap::new());
             let source = smt_module.to_source(&module);
+            info!("da");
+            info!("{}",source);
             let model = create_model(
                 &module,
                 root.cancellation_token(),
@@ -561,6 +563,7 @@ pub async fn check_handler(
     loop {
         info!("Check SMT");
         let root = rx_root.borrow_and_update().clone();
+        info!("test");
         latest_versions = check_base_sat(&root, &tx_err, latest_versions).await;
         latest_versions_config =
             check_config(&root, &tx_err, &inlay_state, latest_versions_config).await;

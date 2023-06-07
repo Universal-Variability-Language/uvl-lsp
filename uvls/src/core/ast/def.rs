@@ -67,9 +67,7 @@ pub enum GroupMode {
 }
 #[derive(Clone, Debug)]
 pub enum Cardinality {
-    From(usize),
     Range(usize, usize),
-    Max(usize),
     Any,
 }
 #[derive(Clone, Debug)]

@@ -4,6 +4,7 @@ use ast::Ast;
 use check::ErrorInfo;
 use parse::*;
 use semantic::FileID;
+use ustr::Ustr;
 use util::{node_range};
 use log::info;
 use ropey::Rope;
@@ -491,8 +492,7 @@ fn opt_cardinality(node: Node, state: &mut VisitorState) -> Option<Cardinality> 
             opt_int(begin, state)?,
             opt_int(end.unwrap(), state)?,
         )),
-        (Some(begin), Some("*")) => Some(Cardinality::From(opt_int(begin, state)?)),
-        (None, Some("int")) => Some(Cardinality::Max(opt_int(end.unwrap(), state)?)),
+        (None, Some("int")) => Some(Cardinality::Range(0, opt_int(end.unwrap(), state)?)),
         (_, _) => Some(Cardinality::Any),
     }
 }
@@ -909,7 +909,45 @@ fn visit_attributes(state: &mut VisitorState, parent: Symbol) {
     }
 }
 
+fn visit_cardinality(state: &mut VisitorState, parent: Symbol, ty: Type, feature: Feature){
+    let cardinality = feature.cardinality.unwrap();
+    match cardinality {
+        Cardinality::Any => info!("FUUUUUUUCK Cardinality Any detected!!!!!!!!!"),
+        Cardinality::Range(a, b) => {
+           info!(" cardinality");
+           for i in 0 .. b {
+               let sym = Symbol::Feature(state.ast.features.len());
+               let new_name = SymbolSpan {
+                name: Ustr::from(format!("{}[{}]", feature.name.name, i).as_str()),
+                span: feature.name.span.clone()
+               };
+               let new_feature = Feature {
+                   name: new_name,
+                   ty: feature.ty.clone(),
+                   cardinality: Some(Cardinality::Any),
+               };
+               state.ast.features.push(new_feature);
+               state.push_child(parent, sym);
+               loop {
+                   match state.kind() {
+                       "attributes" => {
+                           visit_children_arg(state, sym, visit_attributes);
+                       }
+                       "blk" => {
+                           visit_children_arg(state, sym, visit_blk_decl);
+                       }
+                       _ => {}
+                   }
+                   if !state.goto_next_sibling() {
+                       break;
+                   }
+               }
+           } 
+        }
+    }
+}
 fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty: Type) {
+    info!("visit feature");
     match parent {
         Symbol::Feature(..) => {
             state.push_error(40, "features have to be separated by groups");
@@ -929,23 +967,35 @@ fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty:
                 opt_cardinality(n, state)
             }),
     };
-    let sym = Symbol::Feature(state.ast.features.len());
-    state.ast.features.push(feature);
-    state.push_child(parent, sym);
-    loop {
-        match state.kind() {
-            "attributes" => {
-                visit_children_arg(state, sym, visit_attributes);
-            }
-            "blk" => {
-                visit_children_arg(state, sym, visit_blk_decl);
-            }
-            _ => {}
+
+    match feature.cardinality.clone() {
+        Some(cardinality) => {
+            visit_cardinality(state, parent, ty, feature);
+            
         }
-        if !state.goto_next_sibling() {
-            break;
+        None =>{
+            info!("no cardinality");
+            let sym = Symbol::Feature(state.ast.features.len());
+            state.ast.features.push(feature);
+            state.push_child(parent, sym);
+            loop {
+                match state.kind() {
+                    "attributes" => {
+                        visit_children_arg(state, sym, visit_attributes);
+                    }
+                    "blk" => {
+                        visit_children_arg(state, sym, visit_blk_decl);
+                    }
+                    _ => {}
+                }
+                if !state.goto_next_sibling() {
+                    break;
+                }
+            }  
         }
     }
+
+    
 }
 
 fn visit_ref(state: &mut VisitorState, parent: Symbol, path: Path) {
@@ -1102,6 +1152,7 @@ fn visit_constraints(state: &mut VisitorState) {
 }
 fn visit_top_lvl(state: &mut VisitorState) {
     let mut top_level_order: Vec<Node> = Vec::new();
+    info!("visit top level");
     loop {
         if state.kind() == "blk" {
             let header = state.header().unwrap();

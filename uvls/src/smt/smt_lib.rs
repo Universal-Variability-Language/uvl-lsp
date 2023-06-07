@@ -528,13 +528,6 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
                         }
                     }
                     GroupMode::Optional | GroupMode::Cardinality(Cardinality::Any) => {}
-                    GroupMode::Cardinality(Cardinality::Max(max)) => {
-                        builder.max_assert(max, &p_bind, m.sym(g));
-                    }
-
-                    GroupMode::Cardinality(Cardinality::From(min)) => {
-                        builder.min_assert(min, &p_bind, m.sym(g));
-                    }
                     GroupMode::Cardinality(Cardinality::Range(min, max)) => {
                         builder.min_assert(min, &p_bind, m.sym(g));
                         builder.max_assert(max, &p_bind, m.sym(g));
