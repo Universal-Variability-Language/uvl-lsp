@@ -150,7 +150,6 @@ struct DraftState {
     timestamp: Instant,
 }
 
-#[derive(Debug)]
 enum LinkMsg {
     Delete(Url, Instant),
     UpdateAst(Arc<ast::AstDocument>),
@@ -372,7 +371,6 @@ impl AsyncPipeline {
                 }
             }
         }
-
     }
     pub fn should_load(&self, uri: &Url, time: SystemTime) -> bool {
         self.drafts
