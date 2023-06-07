@@ -7,6 +7,7 @@ use get_port::Ops;
 use serde::Serialize;
 use tokio::{join, spawn};
 use log::info;
+use std::env;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -396,7 +397,11 @@ impl LanguageServer for Backend {
                 let path = re.replace(uri.path(), |caps: &regex::Captures| {format!("{}{}", &caps[1], diagram_file_extension)});
                 let mut file = std::fs::File::create(path.as_ref()).expect("Error encountered while creating dot file!");
 
-                let root_fileid = FileID::from_uri(&Url::parse(uri.as_str()).unwrap());
+                let formatted_uri = match env::consts::OS { // windows file system is just weird
+                    "windows" => format!("file://{}", uri.as_str()),
+                    _ => uri.as_str().to_string()
+                };
+                let root_fileid = FileID::from_uri(&Url::parse(formatted_uri.as_str()).unwrap());
                 let root_graph = self.pipeline.root().borrow_and_update().clone();
                 if !root_graph.contains_id(root_fileid){{}}
                 
