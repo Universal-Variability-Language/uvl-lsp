@@ -430,12 +430,6 @@ impl AstDocument {
             _ => None,
         }
     }
-    // pub fn get_cardinality(&self, sym: Symbol) -> Option<Cardinality> {
-    //     match sym {
-    //         Symbol::Feature(i) => Some(self.ast.features[i].cardinality),
-    //         _ => None,
-    //     }
-    // }
     pub fn find(&self, offset: usize) -> Option<Symbol> {
         self.ast.find(offset)
     }

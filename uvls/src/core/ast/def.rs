@@ -43,10 +43,6 @@ impl Path {
     }
 }
 
-
-type  Min  = f64;
-type Max = f64;
-
 //Type definitions for symbols
 #[bitflags]
 #[repr(u8)]
@@ -59,7 +55,6 @@ pub enum Type {
     Bool,
     Void,
     Namespace,
-    Range
 }
 
 #[derive(Clone, Debug)]

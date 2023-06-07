@@ -239,10 +239,7 @@ fn create_file_tree(
         Symbol::Feature(_) | Symbol::Attribute(_) => {
             let depth = depth + base_depth - 1;
             match file.type_of(sym).unwrap() {
-                Type::Real => {
-
-                }
-                Type::String  | Type::Bool | Type::Attributes => {}
+                Type::String | Type::Real | Type::Bool | Type::Attributes => {}
                 _ => {
                     return true;
                 }

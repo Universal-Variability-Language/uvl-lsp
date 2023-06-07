@@ -390,7 +390,6 @@ impl<'a> SMTBuilder<'a> {
             Type::String => {
                 Expr::Not(Expr::Equal(vec![self.var(ms), Expr::String("".into())]).into())
             }
-            Type::Range => Expr::Bool(true),//TODO 
             _ => unimplemented!(),
         }
     }
@@ -426,7 +425,6 @@ impl Into<Expr> for ConfigValue {
             Self::Bool(b) => Expr::Bool(b),
             Self::Number(n) => Expr::Real(n),
             Self::String(s) => Expr::String(s),
-            Self::Range(_,_ ,n ) => if n <=  0.0 { Expr::Bool(false)} else {Expr::Bool(true)},
         }
     }
 }
