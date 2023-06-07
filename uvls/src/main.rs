@@ -10,6 +10,7 @@ use log::info;
 use std::env;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use percent_encoding::percent_decode_str;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tower_lsp::jsonrpc::Result;
@@ -392,21 +393,20 @@ impl LanguageServer for Backend {
                 self.client.code_lens_refresh().await?;
             }
             "uvls/generate_diagram" => {
-                let diagram_file_extension = "dot";
-                let re = regex::Regex::new(r"(.*\.)(.*)").unwrap();
-                let path = re.replace(uri.path(), |caps: &regex::Captures| {format!("{}{}", &caps[1], diagram_file_extension)});
-                let mut file = std::fs::File::create(path.as_ref()).expect("Error encountered while creating dot file!");
-
-                let formatted_uri = match env::consts::OS { // windows file system is just weird
-                    "windows" => format!("file://{}", uri.as_str()),
-                    _ => uri.as_str().to_string()
-                };
-                let root_fileid = FileID::from_uri(&Url::parse(formatted_uri.as_str()).unwrap());
+                let root_fileid = FileID::from_uri(&Url::parse(uri.as_str()).unwrap());
                 let root_graph = self.pipeline.root().borrow_and_update().clone();
                 if !root_graph.contains_id(root_fileid){{}}
                 
                 let document = root_graph.files.get(&root_fileid).unwrap();
-                let g = ast::graph::Graph::new(document.source.clone(), document.tree.clone(), uri);
+                let g = ast::graph::Graph::new(document.source.clone(), document.tree.clone(), uri.clone());
+
+                // write graph script (dot) to file:
+                let diagram_file_extension = "dot";
+                let re = regex::Regex::new(r"(.*\.)(.*)").unwrap();
+                let path = re.replace(uri.path(), |caps: &regex::Captures| {format!("{}{}", &caps[1], diagram_file_extension)});
+                let mut file = std::fs::File::create(path.as_ref())
+                    .unwrap_or(std::fs::File::create(percent_decode_str(&path.replacen("/", "", 1)).decode_utf8().unwrap().into_owned()) // windows specific
+                    .expect("Error encountered while creating dot file!"));
                 file.write_all(g.dot.as_bytes()).expect("Error while writing to dot file");
             }
             _ => {}

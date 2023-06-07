@@ -269,7 +269,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
         await client.sendRequest(ExecuteCommandRequest.method, {
             command: "uvls/generate_diagram",
-            arguments: [os.platform() === 'win32' ? uri.fsPath : uri.toString()]
+            arguments: [uri.toString()]
         });
 
         const regex = /(.*\.)(.*)/gm;
