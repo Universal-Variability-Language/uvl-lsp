@@ -279,8 +279,17 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.workspace.openTextDocument(doturi).then(doc => {
             vscode.window.showTextDocument(doc);
         });*/
+
+        // Open with external extension
+        const graphvizExtension = vscode.extensions.getExtension("tintinweb.graphviz-interactive-preview");
+        if(graphvizExtension === undefined) {
+            window.showInformationMessage("You do not have the recommended [Graphviz Preview Extension](https://marketplace.visualstudio.com/items?itemName=tintinweb.graphviz-interactive-preview) installed.\nActivate it to have the best user experience and be able to see the generated graph!");
+            return;
+        }
+        graphvizExtension.activate();
         let options = { uri: doturi, title: "Feature Model", content};
         vscode.commands.executeCommand("graphviz-interactive-preview.preview.beside", options);
+        
 	});
 	await checkUpdateMaybe(context);
 	await startClient(context);
