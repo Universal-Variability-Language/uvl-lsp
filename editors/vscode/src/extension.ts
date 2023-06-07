@@ -267,7 +267,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const uri = window.activeTextEditor?.document.uri;
         if (uri === undefined || !uri.toString().endsWith('uvl')){return;}
 
-        await client.sendRequest(ExecuteCommandRequest.method, {
+        const content = await client.sendRequest(ExecuteCommandRequest.method, {
             command: "uvls/generate_diagram",
             arguments: [uri.toString()]
         });
@@ -279,7 +279,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.workspace.openTextDocument(doturi).then(doc => {
             vscode.window.showTextDocument(doc);
         });*/
-        let options = { uri: doturi, title: "Feature Model",};
+        let options = { uri: doturi, title: "Feature Model", content};
         vscode.commands.executeCommand("graphviz-interactive-preview.preview.beside", options);
 	});
 	await checkUpdateMaybe(context);

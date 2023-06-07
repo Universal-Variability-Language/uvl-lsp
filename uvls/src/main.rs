@@ -404,10 +404,14 @@ impl LanguageServer for Backend {
                 let diagram_file_extension = "dot";
                 let re = regex::Regex::new(r"(.*\.)(.*)").unwrap();
                 let path = re.replace(uri.path(), |caps: &regex::Captures| {format!("{}{}", &caps[1], diagram_file_extension)});
-                let mut file = std::fs::File::create(path.as_ref())
-                    .unwrap_or(std::fs::File::create(percent_decode_str(&path.replacen("/", "", 1)).decode_utf8().unwrap().into_owned()) // windows specific
-                    .expect("Error encountered while creating dot file!"));
-                file.write_all(g.dot.as_bytes()).expect("Error while writing to dot file");
+                let file = std::fs::File::create(path.as_ref())
+                    .or(std::fs::File::create(percent_decode_str(&path.replacen("/", "", 1)).decode_utf8().unwrap().into_owned())); // windows specific
+
+                if !file.is_err() {
+                    file.unwrap().write_all(g.dot.as_bytes()).expect("Error while writing to dot file");
+                } else {
+                    return Ok(Some(serde_json::to_value(g.dot).unwrap()))
+                }
             }
             _ => {}
         }
