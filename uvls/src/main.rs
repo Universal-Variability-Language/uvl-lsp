@@ -7,7 +7,6 @@ use get_port::Ops;
 use serde::Serialize;
 use tokio::{join, spawn};
 use log::info;
-use std::env;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use percent_encoding::percent_decode_str;
@@ -407,7 +406,7 @@ impl LanguageServer for Backend {
                 let file = std::fs::File::create(path.as_ref())
                     .or(std::fs::File::create(percent_decode_str(&path.replacen("/", "", 1)).decode_utf8().unwrap().into_owned())); // windows specific
 
-                if !file.is_err() {
+                if file.is_ok() {
                     file.unwrap().write_all(g.dot.as_bytes()).expect("Error while writing to dot file");
                 } else {
                     return Ok(Some(serde_json::to_value(g.dot).unwrap()))
