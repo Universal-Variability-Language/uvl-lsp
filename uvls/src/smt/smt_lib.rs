@@ -429,6 +429,7 @@ impl Into<Expr> for ConfigValue {
     }
 }
 
+//TODO check cardinality
 pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> SMTModule {
     assert!(module.ok);
     let mut builder = SMTBuilder {
@@ -436,6 +437,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
         sym2var: IndexSet::new(),
         assert: Vec::new(),
     };
+    let mut counter = 0;
     //encode features
     for (m, file) in module.instances() {
         for f in file.all_features() {
@@ -527,7 +529,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
                             ))
                         }
                     }
-                    GroupMode::Optional | GroupMode::Cardinality(Cardinality::Any) => {}
+                    GroupMode::Optional | GroupMode::Cardinality(Cardinality::Fixed) => {}
                     GroupMode::Cardinality(Cardinality::Range(min, max)) => {
                         builder.min_assert(min, &p_bind, m.sym(g));
                         builder.max_assert(max, &p_bind, m.sym(g));

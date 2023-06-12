@@ -68,7 +68,8 @@ pub enum GroupMode {
 #[derive(Clone, Debug)]
 pub enum Cardinality {
     Range(usize, usize),
-    Any,
+    Fixed,
+
 }
 #[derive(Clone, Debug)]
 pub enum LanguageLevelMajor {
