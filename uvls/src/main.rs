@@ -71,9 +71,9 @@ impl Backend {
         }
     }
 }
-//load a file this is tricky because the editor can also load it at the same time
+//load a file, this is tricky because the editor can also load it at the same time
 fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
-    if let Err(e) = std::fs::File::open(uri.path()).and_then(|mut f| {
+    if let Err(e) = std::fs::File::open(uri.to_file_path().unwrap()).and_then(|mut f| {
         let meta = f.metadata()?;
         let modified = meta.modified()?;
 

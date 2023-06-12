@@ -331,38 +331,40 @@ async function startClient(context: ExtensionContext) {
 			handleDiagnostics(uri, diagnostics, next) {
 				// handle anomilies
 				const textEditor = window.activeTextEditor;
-				if (textEditor !== undefined && textEditor.document.fileName === uri.path) {
-					if(!rangeOrOptions.has(textEditor.document.fileName)){
-						rangeOrOptions.set(textEditor.document.fileName,[[],[],[],[]]);
-					}
-					let range = rangeOrOptions.get(textEditor.document.fileName);
-					range![0] = [];
-					range![1] = [];
-					range![2] = [];
-					range![3] = [];
-					for (const ele of diagnostics) {
-						switch (ele.message) {
-							case "dead feature": {
-								range![0].push(ele.range);
-								break;
-							}
-							case "false-optional feature": {
-								range![1].push(ele.range);
-								break;
-							}
-							case "redundant constraint": {
-								range![2].push(ele.range);
-								break;
-							}
-							case "void feature model": {
-								range![3].push(ele.range);
-								break;
-							}
 
+				if (!rangeOrOptions.has(uri.path)) {
+					rangeOrOptions.set(uri.path, [[], [], [], []]);
+				}
+				let range = rangeOrOptions.get(uri.path);
+				range![0] = [];
+				range![1] = [];
+				range![2] = [];
+				range![3] = [];
+				for (const ele of diagnostics) {
+					switch (ele.message) {
+						case "dead feature": {
+							range![0].push(ele.range);
+							break;
 						}
+						case "false-optional feature": {
+							range![1].push(ele.range);
+							break;
+						}
+						case "redundant constraint": {
+							range![2].push(ele.range);
+							break;
+						}
+						case "void feature model": {
+							range![3].push(ele.range);
+							break;
+						}
+
 					}
+				}
+				if (textEditor !== undefined && textEditor.document.fileName === uri.path) {
 					decorators.forEach((decorator, index) => textEditor.setDecorations(decorator, range![index]));
 				}
+
 				next(uri, diagnostics);
 			},
 		}
