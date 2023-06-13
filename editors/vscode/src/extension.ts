@@ -13,6 +13,7 @@ import * as child_process from "child_process";
 import {
 
 	DiagnosticSeverity,
+	ExecuteCommandRequest,
 	LanguageClient,
 	LanguageClientOptions,
 	ServerOptions,
@@ -65,7 +66,7 @@ async function fetchInfo(): Promise<Metadata> {
 
 async function uvlsPath(context: ExtensionContext) {
 	const configuration = workspace.getConfiguration("uvls");
-	var uvlsPath = configuration.get<string | null>("path", null);
+	let uvlsPath = configuration.get<string | null>("path", null);
 
 	if (!uvlsPath) {
 		uvlsPath = which.sync('uvls', { nothrow: true });
@@ -75,7 +76,7 @@ async function uvlsPath(context: ExtensionContext) {
 		uvlsPath = which.sync(uvlsPath, { nothrow: true });
 	}
 	const uvlsPathExists = uvlsPath !== null && fs.existsSync(uvlsPath);
-	var message: string | null = null;
+	let message: string | null = null;
 	if (uvlsPath && uvlsPathExists) {
 		try {
 			fs.accessSync(uvlsPath, fs.constants.R_OK | fs.constants.X_OK);
@@ -258,8 +259,38 @@ export async function activate(context: vscode.ExtensionContext) {
 		<body>
 			<iframe src="${uri}" style="position:fixed; top:0; left:0; bottom:0; right:0; width:100%; height:100%; border:none; margin:0; padding:0; overflow:hidden; z-index:999999;"></iframe>
 		</body>
-		</html>`
-	})
+		</html>`;
+	});
+	vscode.commands.registerCommand('uvls.generate_diagram', async () => {
+		if(!client){return;}
+
+        const uri = window.activeTextEditor?.document.uri;
+        if (uri === undefined || !uri.toString().endsWith('uvl')){return;}
+
+        const content = await client.sendRequest(ExecuteCommandRequest.method, {
+            command: "uvls/generate_diagram",
+            arguments: [uri.toString()]
+        });
+
+        const regex = /(.*\.)(.*)/gm;
+        const subst = '$1dot';
+        let doturi = vscode.Uri.file(uri.fsPath.replace(regex, subst));
+        /* // open graphviz (dot) source file
+        vscode.workspace.openTextDocument(doturi).then(doc => {
+            vscode.window.showTextDocument(doc);
+        });*/
+
+        // Open with external extension
+        const graphvizExtension = vscode.extensions.getExtension("tintinweb.graphviz-interactive-preview");
+        if(graphvizExtension === undefined) {
+            window.showInformationMessage("You do not have the recommended [Graphviz Preview Extension](https://marketplace.visualstudio.com/items?itemName=tintinweb.graphviz-interactive-preview) installed.\nActivate it to have the best user experience and be able to see the generated graph!");
+            return;
+        }
+        graphvizExtension.activate();
+        let options = { uri: doturi, title: "Feature Model", content};
+        vscode.commands.executeCommand("graphviz-interactive-preview.preview.beside", options);
+        
+	});
 	await checkUpdateMaybe(context);
 	await startClient(context);
 
