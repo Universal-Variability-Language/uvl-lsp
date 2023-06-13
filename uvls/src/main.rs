@@ -5,9 +5,10 @@ use flexi_logger::FileSpec;
 use get_port::Ops;
 
 use log::info;
+use percent_encoding::percent_decode_str;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -72,9 +73,9 @@ impl Backend {
         }
     }
 }
-//load a file this is tricky because the editor can also load it at the same time
+//load a file, this is tricky because the editor can also load it at the same time
 fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
-    if let Err(e) = std::fs::File::open(uri.path()).and_then(|mut f| {
+    if let Err(e) = std::fs::File::open(uri.to_file_path().unwrap()).and_then(|mut f| {
         let meta = f.metadata()?;
         let modified = meta.modified()?;
 
@@ -185,6 +186,7 @@ impl LanguageServer for Backend {
                         "uvls/hide_config".into(),
                         "uvls/open_config".into(),
                         "uvls/load_config".into(),
+                        "uvls/generate_diagram".into(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,
@@ -391,6 +393,41 @@ impl LanguageServer for Backend {
                 self.pipeline.touch(&uri);
                 self.client.code_lens_refresh().await?;
             }
+            "uvls/generate_diagram" => {
+                let root_fileid = FileID::from_uri(&Url::parse(uri.as_str()).unwrap());
+                let root_graph = self.pipeline.root().borrow_and_update().clone();
+                if !root_graph.contains_id(root_fileid) {
+                    {}
+                }
+
+                let document = root_graph.files.get(&root_fileid).unwrap();
+                let g = ast::graph::Graph::new(
+                    document.source.clone(),
+                    document.tree.clone(),
+                    uri.clone(),
+                );
+
+                // write graph script (dot) to file:
+                let diagram_file_extension = "dot";
+                let re = regex::Regex::new(r"(.*\.)(.*)").unwrap();
+                let path = re.replace(uri.path(), |caps: &regex::Captures| {
+                    format!("{}{}", &caps[1], diagram_file_extension)
+                });
+                let file = std::fs::File::create(path.as_ref()).or(std::fs::File::create(
+                    percent_decode_str(&path.replacen("/", "", 1))
+                        .decode_utf8()
+                        .unwrap()
+                        .into_owned(),
+                )); // windows specific
+
+                if file.is_ok() {
+                    file.unwrap()
+                        .write_all(g.dot.as_bytes())
+                        .expect("Error while writing to dot file");
+                } else {
+                    return Ok(Some(serde_json::to_value(g.dot).unwrap()));
+                }
+            }
             _ => {}
         }
         Ok(None)
@@ -460,30 +497,68 @@ impl LanguageServer for Backend {
                     command: Some(Command {
                         title: "configure".into(),
                         command: "uvls/load_config".into(),
+                        arguments: Some(vec![uri_json.clone()]),
+                    }),
+                    data: None,
+                },
+                CodeLens {
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                    },
+                    command: Some(Command {
+                        title: "generate graph".into(),
+                        command: "uvls/generate_diagram".into(),
                         arguments: Some(vec![uri_json]),
                     }),
                     data: None,
                 },
             ]))
         } else {
-            Ok(Some(vec![CodeLens {
-                range: Range {
-                    start: Position {
-                        line: 0,
-                        character: 0,
+            Ok(Some(vec![
+                CodeLens {
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
                     },
-                    end: Position {
-                        line: 0,
-                        character: 0,
-                    },
+                    command: Some(Command {
+                        title: "configure".into(),
+                        command: "uvls/open_config".into(),
+                        arguments: Some(vec![uri_json.clone()]),
+                    }),
+                    data: None,
                 },
-                command: Some(Command {
-                    title: "configure".into(),
-                    command: "uvls/open_config".into(),
-                    arguments: Some(vec![uri_json]),
-                }),
-                data: None,
-            }]))
+                CodeLens {
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                    },
+                    command: Some(Command {
+                        title: "generate graph".into(),
+                        command: "uvls/generate_diagram".into(),
+                        arguments: Some(vec![uri_json]),
+                    }),
+                    data: None,
+                },
+            ]))
         }
     }
 
