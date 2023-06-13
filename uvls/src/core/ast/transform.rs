@@ -9,10 +9,6 @@ use ropey::Rope;
 use semantic::FileID;
 use std::borrow::{Borrow, Cow};
 use tokio::time::Instant;
-use tower_lsp::lsp_types::CodeAction;
-use tower_lsp::lsp_types::CodeActionDisabled;
-use tower_lsp::lsp_types::CodeActionKind;
-use tower_lsp::lsp_types::CodeActionParams;
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 use tree_sitter::{Node, Tree, TreeCursor};
 use util::node_range;
@@ -1116,27 +1112,9 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
             if state.kind() == "constraint" && state.name(state.cursor().node()).contains("-") {
                 // todo check if also for groups
                 state.push_error(40, "name contains a dash (-)");
-                let ca = CodeAction {
-                    title: "Code action title".to_owned(),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: None,
-                    edit: None,
-                    command: None,
-                    is_preferred: Some(true),
-                    disabled: None,
-                    data: None,
-                };
             } else {
                 state.push_error(40, "expected a feature or group declaration");
             }
-            info!("ERROR KIND: {:?}", state.kind());
-            info!("ERROR KIND name: {:?}", state.cursor().field_name());
-            info!("ERROR KIND Node: {:?}", state.cursor().node());
-            info!("ERROR KIND id: {:?}", state.cursor().field_id());
-            info!(
-                "ERROR KIND name node: {:?}",
-                state.name(state.cursor().node())
-            );
         }
     }
 }
