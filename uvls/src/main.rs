@@ -484,30 +484,68 @@ impl LanguageServer for Backend {
                     command: Some(Command {
                         title: "configure".into(),
                         command: "uvls/load_config".into(),
+                        arguments: Some(vec![uri_json.clone()]),
+                    }),
+                    data: None,
+                },
+                CodeLens {
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                    },
+                    command: Some(Command {
+                        title: "generate graph".into(),
+                        command: "uvls/generate_diagram".into(),
                         arguments: Some(vec![uri_json]),
                     }),
                     data: None,
                 },
             ]))
         } else {
-            Ok(Some(vec![CodeLens {
-                range: Range {
-                    start: Position {
-                        line: 0,
-                        character: 0,
+            Ok(Some(vec![
+                CodeLens {
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
                     },
-                    end: Position {
-                        line: 0,
-                        character: 0,
-                    },
+                    command: Some(Command {
+                        title: "configure".into(),
+                        command: "uvls/open_config".into(),
+                        arguments: Some(vec![uri_json.clone()]),
+                    }),
+                    data: None,
                 },
-                command: Some(Command {
-                    title: "configure".into(),
-                    command: "uvls/open_config".into(),
-                    arguments: Some(vec![uri_json]),
-                }),
-                data: None,
-            }]))
+                CodeLens {
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                    },
+                    command: Some(Command {
+                        title: "generate graph".into(),
+                        command: "uvls/generate_diagram".into(),
+                        arguments: Some(vec![uri_json]),
+                    }),
+                    data: None,
+                }
+            ]))
         }
     }
 
