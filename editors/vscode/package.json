@@ -36,6 +36,11 @@
         "command":"uvls/open_web",
         "title": "open a link",
         "category": "UVLS"
+      },
+      {
+        "command":"uvls.generate_diagram",
+        "title": "Generate a DOT file to visualize with Graphviz",
+        "category": "UVLS"
       }
     ],
     "languages": [
