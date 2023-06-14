@@ -112,6 +112,7 @@ pub struct Feature {
     pub cardinality: Option<Cardinality>,
     pub ty: Type,
     pub duplicate:  bool,
+    pub first_cardinality_child: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Import {

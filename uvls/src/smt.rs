@@ -347,7 +347,6 @@ async fn check_base_sat(
         async move {
             let smt_module = uvl2smt(&module, &HashMap::new());
             let source = smt_module.to_source(&module);
-            info!("da");
             info!("{}",source);
             let model = create_model(
                 &module,

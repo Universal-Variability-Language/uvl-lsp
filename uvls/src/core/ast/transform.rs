@@ -500,7 +500,7 @@ fn opt_cardinality(node: Node, state: &mut VisitorState) -> Option<Cardinality> 
             opt_int(begin, state)?,
             opt_int(end.unwrap(), state)?,
         )),
-        (None, Some("int")) => Some(Cardinality::Range(0, opt_int(end.unwrap(), state)?)),
+        (None, Some("int")) => Some(Cardinality::Range(opt_int(end.unwrap(), state)?, opt_int(end.unwrap(), state)?)),
         (_, _) => Some(Cardinality::Range(0, 1)),
     }
 }
@@ -1039,6 +1039,7 @@ fn visit_feature(
             })
             .or_else(|| Some(Cardinality::Fixed)),
         duplicate: duplicate.clone(),
+        first_cardinality_child: true,
     };
 
     let mut sym = vec![];
@@ -1055,6 +1056,7 @@ fn visit_feature(
                 sym.push(Symbol::Feature(state.ast.features.len()));
                 if i != 0 {
                     dup_feature.duplicate = true;
+                    dup_feature.first_cardinality_child = false;
                 }
                 state.ast.features.push(dup_feature);
                 state.push_child(parent, sym.get(i).unwrap().clone());
