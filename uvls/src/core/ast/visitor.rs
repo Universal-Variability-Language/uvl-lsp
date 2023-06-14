@@ -136,14 +136,14 @@ where
     }
 }
 
-pub fn visit_children_arg<'a, A, F, T, V>(state: &mut V, arg: A, cardinality: & Cardinality, mut f: F) -> T
+pub fn visit_children_arg<'a, A, F, T, V>(state: &mut V, arg: A,duplicate: &bool, mut f: F) -> T
 where
     V: Visitor<'a>,
-    F: FnMut(&mut V, A,&Cardinality) -> T,
+    F: FnMut(&mut V, A,&bool) -> T,
     T: Default,
 {
     if state.goto_first_child() {
-        let out = stacker::maybe_grow(32 * 1024, 1024 * 1024, || f(state, arg, cardinality));
+        let out = stacker::maybe_grow(32 * 1024, 1024 * 1024, || f(state, arg,duplicate));
         state.goto_parent();
         out
     } else {

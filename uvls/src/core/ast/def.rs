@@ -111,6 +111,7 @@ pub struct Feature {
     pub name: SymbolSpan,
     pub cardinality: Option<Cardinality>,
     pub ty: Type,
+    pub duplicate:  bool,
 }
 #[derive(Clone, Debug)]
 pub struct Import {
@@ -135,6 +136,7 @@ pub struct Attribute {
     pub name: SymbolSpan,
     pub value: ValueDecl,
     pub depth: u32,
+    pub duplicate: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Keyword {

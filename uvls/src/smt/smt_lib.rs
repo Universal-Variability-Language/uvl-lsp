@@ -437,12 +437,40 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
         sym2var: IndexSet::new(),
         assert: Vec::new(),
     };
-    let mut counter = 0;
     //encode features
     for (m, file) in module.instances() {
         for f in file.all_features() {
             builder.push_var(m.sym(f));
         }
+
+        for sym_feature in file.all_features() {
+            if let Symbol::Feature(id) = sym_feature {
+                let feature = file.get_feature(id).unwrap().clone();
+                if let Cardinality::Range(min,_) = feature.cardinality.unwrap_or_else(|| Cardinality::Fixed) {
+                    // Make AtLeast assertion for cardinality feature
+                    let mut list = vec![];
+                    let parent = file.parent(sym_feature, false).unwrap();
+    
+                    for child in file.direct_children(parent){
+                        if let Symbol::Feature(sibling_id) = child {
+    
+                            let sibling = file.get_feature(sibling_id);
+                            if sibling.unwrap().name.name.as_str() == feature.name.name.as_str() {
+                                list.push(builder.var(m.sym(Symbol::Feature(sibling_id))));
+                            }
+                        }
+                    }
+    
+                    builder.assert.push(
+                        Assert(Some(AssertInfo(m.sym(sym_feature), AssertName::GroupMin)), 
+                        Expr::AtLeast(min , list)
+                    ));
+                    
+                }
+            }
+        }
+
+
     }
     //set config features
     for (&ms, val) in config
@@ -454,6 +482,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
             Some(AssertInfo(ms, AssertName::Config)),
             Expr::Equal(vec![var, val.clone().into()]),
         ));
+
     }
     //encode attributes
     for (m, file) in module.instances() {

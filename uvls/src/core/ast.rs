@@ -175,6 +175,12 @@ impl Ast {
     fn all_features(&self) -> impl Iterator<Item = Symbol> {
         (0..self.features.len()).map(Symbol::Feature)
     }
+    fn get_feature(&self, index: usize) -> Option<&Feature>{
+        self.features.get(index)
+    }
+    fn get_attribute(&self, index: usize) -> Option<&Attribute>{
+        self.attributes.get(index)
+    }
     fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
         (0..self.attributes.len()).map(Symbol::Attribute)
     }
@@ -240,6 +246,9 @@ impl AstDocument {
     }
     pub fn all_features(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_features()
+    }
+    pub fn get_feature(&self,index: usize) -> Option<&Feature>{
+        self.ast.get_feature(index)
     }
     pub fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_attributes()
