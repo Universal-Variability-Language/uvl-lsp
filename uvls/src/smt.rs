@@ -153,6 +153,7 @@ pub enum SMTValueState {
     Any,
     On,
     Off,
+    Core,
 }
 #[derive(Debug, Clone)]
 pub enum SMTModel {
@@ -219,6 +220,14 @@ async fn find_fixed(
                     ))
                     .await?;
             }
+            SMTValueState::Core => {
+                solve
+                    .push(format!(
+                        "(push 1)(assert (not {}))",
+                        module.pseudo_bool(k, base_module)
+                    ))
+                    .await?;
+            }
         }
         //let time = Instant::now();
         if solve.check_sat().await? {
@@ -233,12 +242,15 @@ async fn find_fixed(
             //info!("model {:?}", time.elapsed());
             for (s, v) in module.parse_values(&values, base_module) {
                 if let Some(old) = state.get(&s) {
-                    match (v, old) {
+                    match (&v, old) {
                         (ConfigValue::Bool(true), SMTValueState::Off) => {
                             state.insert(s, SMTValueState::Any);
                         }
                         (ConfigValue::Bool(false), SMTValueState::On) => {
                             state.insert(s, SMTValueState::Any);
+                        }
+                        (ConfigValue::Bool(true), SMTValueState::On) => {
+                            state.insert(s, SMTValueState::Core);
                         }
                         _ => {}
                     }
@@ -377,12 +389,19 @@ async fn check_base_sat(
                                         }
                                         false
                                     }
+                                    SMTValueState::Core => {              
+                                        if visited.insert((sym, file.id)) {
+                                            e.sym_info(sym, file.id, 10, "Core feature");
+                                        }
+                                        true
+                                    }
                                     SMTValueState::On => {
                                         //Is this even a good idea?
                                         true
                                     }
                                     _ => true,
                                 }
+                                
                             } else {
                                 true
                             }
