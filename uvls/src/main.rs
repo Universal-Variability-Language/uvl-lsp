@@ -7,7 +7,6 @@ use get_port::Ops;
 use log::info;
 use percent_encoding::percent_decode_str;
 use serde::Serialize;
-use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -563,45 +562,15 @@ impl LanguageServer for Backend {
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-        for diagnostic in params.context.diagnostics {
+        for diagnostic in params.clone().context.diagnostics {
             // Checks if there is a quick fix for the current diagnostic message
             match diagnostic.message.as_str() {
                 "name contains a dash (-)" => {
-                    if let Ok(Some((Draft::UVL { source, .. }, ..))) =
-                        self.snapshot(&params.text_document.uri, false).await
-                    {
-                        let start_byte = byte_offset(&diagnostic.range.start, &source);
-                        let end_byte = byte_offset(&diagnostic.range.end, &source);
-                        let new_name = source
-                            .slice(start_byte..end_byte)
-                            .as_str()
-                            .unwrap()
-                            .replace("-", "_")
-                            .to_string();
-
-                        let workspace_edit = WorkspaceEdit {
-                            changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
-                                params.text_document.uri.clone(),
-                                vec![TextEdit {
-                                    range: diagnostic.range,
-                                    new_text: new_name.clone(),
-                                }],
-                            )])),
-                            document_changes: None,
-                            change_annotations: None,
-                        };
-                        let code_action = CodeAction {
-                            title: format!("Rename to: {}", new_name),
-                            kind: Some(CodeActionKind::QUICKFIX),
-                            diagnostics: None,
-                            edit: Some(workspace_edit),
-                            command: None,
-                            is_preferred: Some(true),
-                            disabled: None,
-                            data: None,
-                        };
-                        return Ok(Some(vec![CodeActionOrCommand::CodeAction(code_action)]));
-                    }
+                    return actions::rename_dash(
+                        params.clone(),
+                        diagnostic,
+                        self.snapshot(&params.text_document.uri, false).await,
+                    )
                 }
                 _ => {
                     info!("No Quickfix at this Position")
