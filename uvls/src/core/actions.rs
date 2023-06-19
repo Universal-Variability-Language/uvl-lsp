@@ -31,6 +31,7 @@ pub fn rename_dash(
                 change_annotations: None,
             }),
             is_preferred: Some(true),
+            diagnostics: Some(vec![diagnostic.clone()]),
             ..Default::default()
         };
         let code_action_quotes = CodeAction {
@@ -48,6 +49,7 @@ pub fn rename_dash(
                 change_annotations: None,
             }),
             is_preferred: Some(true),
+            diagnostics: Some(vec![diagnostic.clone()]),
             ..Default::default()
         };
         return Ok(Some(vec![

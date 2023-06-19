@@ -1,21 +1,19 @@
-use std::fmt::Display;
 use crate::core::*;
-
+use crate::ide::completion::*;
 use ast::*;
 use check::ErrorInfo;
-use crate::ide::completion::*;
-use parse::SymbolSlice;
-use semantic::{FileID, RootGraph};
-use util::*;
-
 use itertools::Itertools;
 use log::info;
+use parse::SymbolSlice;
 use ropey::Rope;
+use semantic::{FileID, RootGraph};
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tree_sitter::{Node, Tree, TreeCursor};
 use ustr::Ustr;
+use util::*;
 
 //Configuration is stored in json files like this
 //{
@@ -31,10 +29,9 @@ use ustr::Ustr;
 //
 //}
 //This representation is very compact since it avoids rewriting long import prefixes but slightly
-//more complex than just using the direct raw path to external symbols. 
+//more complex than just using the direct raw path to external symbols.
 //JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
 //crate for span information and partial parsing so error reporting becomes impossible.
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
@@ -85,7 +82,6 @@ impl Serialize for ConfigEntry {
         S: serde::Serializer,
     {
         use serde::ser::SerializeMap;
-
 
         match self {
             ConfigEntry::Value(..) => panic!(),
@@ -305,6 +301,7 @@ pub fn parse_json(tree: Tree, source: Rope, uri: Url, timestamp: Instant) -> Con
                 weight: 100,
                 severity: DiagnosticSeverity::ERROR,
                 msg: "JSON syntax errors".into(),
+                error_type: ErrorType::Any,
             });
             (None, state.err)
         } else {
@@ -327,7 +324,11 @@ fn json_path<'a>(mut node: Node, rope: &'a Rope) -> Vec<String> {
     while let Some(p) = node.parent() {
         if node.kind() == "object" && p.kind() == "pair" {
             if let Some(key) = p.child_by_field_name("key").and_then(|k| k.named_child(0)) {
-                ctx.push(rope.slice(key.byte_range()).to_string().replace(r#"\"""#,"") )
+                ctx.push(
+                    rope.slice(key.byte_range())
+                        .to_string()
+                        .replace(r#"\"""#, ""),
+                )
             }
         }
         node = p;
@@ -371,12 +372,9 @@ fn find_json_key<'a>(mut root: Node<'a>, source: &Rope, key: &[Ustr]) -> Option<
         if cursor.goto_first_child() {
             loop {
                 if let Some(name) = cursor.node().child_by_field_name("key") {
-                 
-
                     if source.slice_raw(name.named_child(0)?.byte_range()) == k.as_str() {
                         root = cursor.node().child_by_field_name("value")?;
 
-            
                         break;
                     }
                 }
@@ -426,40 +424,35 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
     let slice: std::borrow::Cow<'_, _> = source.line(line).into();
     let start_byte = source.line_to_byte(line);
     let pos_byte = byte_offset(pos, source) - start_byte;
-  
+
     RE.captures(&slice)
         .iter()
-        .find_map(|cap| {
-
-
-            match (cap.get(1), cap.get(2)) {
-                (Some(key), Some(val)) => {
-                    if key.range().overlaps(pos_byte) {
-                        Some(JSONItem::Key {
-                            key: offset(key.range(), start_byte),
-                            value: Some(offset(val.range(), start_byte)),
-                        })
-                    } else if val.range().overlaps(pos_byte) {
-                        Some(JSONItem::Value {
-                            key: offset(key.range(), start_byte),
-                            value: offset(val.range(), start_byte),
-                        })
-                    } else {
-                        None
-                    }
+        .find_map(|cap| match (cap.get(1), cap.get(2)) {
+            (Some(key), Some(val)) => {
+                if key.range().overlaps(pos_byte) {
+                    Some(JSONItem::Key {
+                        key: offset(key.range(), start_byte),
+                        value: Some(offset(val.range(), start_byte)),
+                    })
+                } else if val.range().overlaps(pos_byte) {
+                    Some(JSONItem::Value {
+                        key: offset(key.range(), start_byte),
+                        value: offset(val.range(), start_byte),
+                    })
+                } else {
+                    None
                 }
-                (Some(key), None) if key.range().overlaps(pos_byte) => Some(JSONItem::Key {
-                    key: offset(key.range(), start_byte),
-                    value: None,
-                }),
-                _ => None,
             }
+            (Some(key), None) if key.range().overlaps(pos_byte) => Some(JSONItem::Key {
+                key: offset(key.range(), start_byte),
+                value: None,
+            }),
+            _ => None,
         })
         .or_else(|| {
             lazy_static! {
                 static ref RE: Regex = Regex::new(r#""((?:[^"\\]|\\.)*)""#).unwrap();
             };
-
 
             RE.captures(&slice).iter().find_map(|cap| {
                 info!("Cap: {:#?} ", cap);
@@ -480,7 +473,6 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
                 .chars()
                 .all(|c| c.is_alphanumeric() || c.is_whitespace() || c == '.')
             {
-           
                 let start = slice
                     .char_indices()
                     .take_while(|(_, c)| c.is_whitespace())
@@ -495,7 +487,6 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
                     .unwrap_or_default()
                     .0
                     + start;
-   
 
                 if (start..last + 1).contains(&pos_byte) {
                     Some(JSONItem::FreeKey(offset(start..last + 1, start_byte)))
@@ -570,7 +561,7 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
                 .collect();
             info!("path:{path:#?}");
             info!("prefix:{prefix:#?}");
-            info!("char:{}",source.char(char));
+            info!("char:{}", source.char(char));
             if source.char(char) == '.' {
                 Some(CompletionQuery {
                     offset: CompletionOffset::Dot,
@@ -594,7 +585,7 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
                             source,
                         )?,
                     },
-                    prefix:prefix[0..prefix.len().saturating_sub(1)].to_vec(),
+                    prefix: prefix[0..prefix.len().saturating_sub(1)].to_vec(),
                     postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
                 })
             }
@@ -618,12 +609,15 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
                             start: src_pos.clone(),
                             end: src_pos.clone(),
                         },
-                        key_start:if path.len()>0{
-                            let start = lsp_position( path.spans[0].start,source).clone().unwrap();
-                            Some(Range{start:start.clone(),end:start})
-                        }else{
+                        key_start: if path.len() > 0 {
+                            let start = lsp_position(path.spans[0].start, source).clone().unwrap();
+                            Some(Range {
+                                start: start.clone(),
+                                end: start,
+                            })
+                        } else {
                             None
-                        }
+                        },
                     },
                     prefix,
                     postfix: CompactString::new_inline(""),
@@ -637,14 +631,17 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
                             path.spans.last().cloned().unwrap_or(key),
                             source,
                         )?,
-                        key_start:if path.len()>1{
-                            let start = lsp_position( path.spans[0].start,source).clone().unwrap();
-                            Some(Range{start:start.clone(),end:start})
-                        }else{
+                        key_start: if path.len() > 1 {
+                            let start = lsp_position(path.spans[0].start, source).clone().unwrap();
+                            Some(Range {
+                                start: start.clone(),
+                                end: start,
+                            })
+                        } else {
                             None
-                        }
+                        },
                     },
-                    prefix:prefix[0..prefix.len().saturating_sub(1)].to_vec(),
+                    prefix: prefix[0..prefix.len().saturating_sub(1)].to_vec(),
                     postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
                 })
             }

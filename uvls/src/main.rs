@@ -564,17 +564,20 @@ impl LanguageServer for Backend {
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         for diagnostic in params.clone().context.diagnostics {
             // Checks if there is a quick fix for the current diagnostic message
-            match diagnostic.message.as_str() {
-                "name contains a dash (-)" => {
-                    return actions::rename_dash(
-                        params.clone(),
-                        diagnostic,
-                        self.snapshot(&params.text_document.uri, false).await,
-                    )
+            match diagnostic.clone().data {
+                Some(serde_json::value::Value::Number(number)) => {
+                    match ErrorType::from_u32(number.as_u64().unwrap_or(0) as u32) {
+                        ErrorType::Any => info!("No Quickfix for this Error"),
+                        ErrorType::FeatureNameContainsDashes => {
+                            return actions::rename_dash(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
+                    }
                 }
-                _ => {
-                    info!("No Quickfix at this Position")
-                }
+                _ => (),
             }
         }
         return Ok(None);

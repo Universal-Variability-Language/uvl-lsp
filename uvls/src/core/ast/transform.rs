@@ -90,6 +90,7 @@ impl<'a> VisitorState<'a> {
                         "duplicate import already defined in line {}",
                         self.ast.lsp_range(old, self.source).unwrap().start.line
                     ),
+                    error_type: ErrorType::Any,
                 });
             }
         }
@@ -109,12 +110,14 @@ impl<'a> VisitorState<'a> {
                                 severity: DiagnosticSeverity::ERROR,
                                 weight: 20,
                                 msg: "duplicate feature".to_string(),
+                                error_type: ErrorType::Any,
                             });
                             self.errors.push(ErrorInfo {
                                 location: self.ast.lsp_range(old, self.source).unwrap(),
                                 severity: DiagnosticSeverity::ERROR,
                                 weight: 20,
                                 msg: "duplicate feature".to_string(),
+                                error_type: ErrorType::Any,
                             })
                         }
                         node
@@ -130,12 +133,14 @@ impl<'a> VisitorState<'a> {
                                 severity: DiagnosticSeverity::ERROR,
                                 weight: 20,
                                 msg: "duplicate attribute".to_string(),
+                                error_type: ErrorType::Any,
                             });
                             self.errors.push(ErrorInfo {
                                 location: self.ast.lsp_range(old, self.source).unwrap(),
                                 severity: DiagnosticSeverity::ERROR,
                                 weight: 20,
                                 msg: "duplicate attribute".to_string(),
+                                error_type: ErrorType::Any,
                             });
                         };
                         self.ast.attributes[i].depth = depth;
@@ -164,6 +169,7 @@ impl<'a> VisitorState<'a> {
                         severity: DiagnosticSeverity::ERROR,
                         weight: 20,
                         msg: "name already defined as import directory".to_string(),
+                        error_type: ErrorType::Any,
                     });
                 }
                 if self
@@ -177,6 +183,7 @@ impl<'a> VisitorState<'a> {
                         severity: DiagnosticSeverity::ERROR,
                         weight: 20,
                         msg: "name already defined as import".to_string(),
+                        error_type: ErrorType::Any,
                     });
                 }
             }
@@ -197,6 +204,7 @@ impl<'a> VisitorState<'a> {
             severity: DiagnosticSeverity::ERROR,
             weight: w,
             msg: error.into(),
+            error_type: ErrorType::Any,
         });
     }
 }
@@ -562,7 +570,6 @@ fn opt_function_args(state: &mut VisitorState) -> Option<Vec<Path>> {
 }
 
 fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
-
     if state.ast.includes.is_empty() {
         // no includes means, that implicitly everything is included
         return ();
@@ -1110,7 +1117,11 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
         _ => {
             if state.kind() == "constraint" && state.name(state.cursor().node()).contains("-") {
                 // todo check if also for groups
-                state.push_error(40, "name contains a dash (-)");
+                state.push_error_with_type(
+                    40,
+                    "name contains a dash (-)",
+                    ErrorType::FeatureNameContainsDashes,
+                )
             } else {
                 state.push_error(40, "expected a feature or group declaration");
             }
