@@ -9,7 +9,7 @@ use lazy_static::lazy_static;
 use log::info;
 use serde::Serialize;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::{join, spawn};

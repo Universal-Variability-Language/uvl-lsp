@@ -992,7 +992,7 @@ fn compute_completions_impl(
                 ))
             }
              // complete all files and dic which are not loaded 
-            for (path, name, node) in snapshot.fs().all_sub_files(origin, &ctx.prefix) {
+            for (path, name, node) in snapshot.fs().all_sub_files(origin, & ctx.prefix,ctx.postfix.clone()) {
                 let len = path.as_str().chars().filter(|c| c == &'.').count();
                 top.push(CompletionOpt::new(
                     match node {
