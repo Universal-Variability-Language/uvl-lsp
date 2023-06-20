@@ -9,13 +9,11 @@ use lazy_static::lazy_static;
 use log::info;
 use serde::Serialize;
 use tokio::{join, spawn};
-use log::info;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use percent_encoding::percent_decode_str;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::{join, spawn};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -337,10 +335,14 @@ impl LanguageServer for Backend {
     }
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         info!("file change {:?}", params);
+        let mut created_flag =  true;
         for i in params.changes {
             match i.typ {
                 FileChangeType::CREATED => {
-                    self.load(i.uri);
+                    if created_flag {
+                        self.load(i.uri);
+                        created_flag = false;
+                    }
                 }
                 FileChangeType::CHANGED => {
                     self.load(i.uri);
