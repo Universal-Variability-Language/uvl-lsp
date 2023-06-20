@@ -40,7 +40,8 @@
       {
         "command":"uvls.generate_diagram",
         "title": "Generate a DOT file to visualize with Graphviz",
-        "category": "UVLS"
+        "category": "UVLS",
+        "icon": "$(repo-forked)"
       }
     ],
     "languages": [
@@ -93,7 +94,22 @@
 					"light": "#ffef93d2"
         }
       }
-    ]
+    ],
+    "keybindings": [
+        {
+          "command": "uvls.generate_diagram",
+          "key": "ctrl+G",
+          "mac": "cmd+G",
+          "when": "editorLangId == uvl"
+        }
+    ],
+    "menus": {
+        "editor/title": [{
+            "command": "uvls.generate_diagram",
+            "group": "navigation",
+            "when": "editorLangId == uvl"
+        }]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
