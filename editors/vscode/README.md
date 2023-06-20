@@ -19,7 +19,9 @@ Currently supports
 On most common platforms installing this extension should just work, without any dependencies.
 When the automatic install fails you will need to build the server you're self.
 Build instructions can be found [here](https://codeberg.org/caradhras/uvls).
-To use a custom build server specify its location via `uvls.path` or add it to `PATH`
+To use a custom build server specify its location via `uvls.path` or add it to `PATH`  
+To use the Visualization of Feature Models please install the [Graphviz Interactive Preview Extension](https://marketplace.visualstudio.com/items?itemName=tintinweb.graphviz-interactive-preview) (tintinweb.graphviz-interactive-preview).
+You may use any other Graphviz Preview Extension, but this is highly compatible with the UVLS.
 ## Extension Settings
 
 * `uvls.path`: Path to the server executable eg. `uvls`t

@@ -151,6 +151,7 @@ struct DraftState {
     state: DocumentState,
     timestamp: Instant,
 }
+
 enum LinkMsg {
     Delete(Url, Instant),
     UpdateAst(Arc<ast::AstDocument>),

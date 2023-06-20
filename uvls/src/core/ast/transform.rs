@@ -557,7 +557,6 @@ fn opt_function_args(state: &mut VisitorState) -> Option<Vec<Path>> {
 }
 
 fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
-    //info!("[check_langlvls] Search for: {:?}", searched_lang_lvl);
 
     if state.ast.includes.is_empty() { // no includes means, that implicitly everything is included
         return ();
