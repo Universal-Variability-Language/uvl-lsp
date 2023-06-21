@@ -425,6 +425,7 @@ impl Into<Expr> for ConfigValue {
             Self::Bool(b) => Expr::Bool(b),
             Self::Number(n) => Expr::Real(n),
             Self::String(s) => Expr::String(s),
+            _ => unimplemented!()
         }
     }
 }

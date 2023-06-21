@@ -55,6 +55,7 @@ pub enum Type {
     Bool,
     Void,
     Namespace,
+    Object,
 }
 
 #[derive(Clone, Debug)]

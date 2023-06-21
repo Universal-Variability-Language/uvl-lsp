@@ -42,10 +42,13 @@ pub enum ConfigValue {
     Bool(bool),
     Number(f64),
     String(String),
+    Cardinality(Vec<Vec<ConfigEntry>>)
+
 }
 impl ConfigValue {
     pub fn ty(&self) -> Type {
         match self {
+            Self::Cardinality(..) => Type::Object,
             Self::Bool(..) => Type::Bool,
             Self::Number(..) => Type::Real,
             Self::String(..) => Type::String,
@@ -69,6 +72,7 @@ impl Display for ConfigValue {
             Self::Bool(x) => write!(f, "{x}"),
             Self::Number(x) => write!(f, "{x}"),
             Self::String(x) => write!(f, "{x}"),
+            Self::Cardinality(x) => write!(f, "testWrite"),
         }
     }
 }
@@ -88,7 +92,10 @@ impl Serialize for ConfigEntry {
 
 
         match self {
-            ConfigEntry::Value(..) => panic!(),
+            ConfigEntry::Value(p,k) => {
+                info!("Here I dould normally panic");
+                serializer.serialize_bool(true)
+            }
             ConfigEntry::Import(_, v) => {
                 let mut s = serializer.serialize_map(Some(v.len()))?;
                 for i in v.iter() {
@@ -104,6 +111,15 @@ impl Serialize for ConfigEntry {
                 s.end()
             }
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for ConfigEntry {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de> 
+    {
+        Ok(ConfigEntry::Value(Path { names: vec![], spans: vec![] }, ConfigValue::Bool(true)))
     }
 }
 

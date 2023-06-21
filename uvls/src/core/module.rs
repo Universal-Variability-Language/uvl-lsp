@@ -270,21 +270,24 @@ impl ConfigModule {
                 entries.push(entry);
             }
         }
-        file.visit_named_children(Symbol::Root, false, |sym, prefix| match sym {
-            Symbol::Feature(_) | Symbol::Attribute(_) => {
-                if let Some(config) = self.values.get(&i.sym(sym)) {
-                    entries.push(ConfigEntry::Value(
-                        Path {
-                            names: prefix.to_vec(),
-                            spans: Vec::new(),
-                        },
-                        config.clone(),
-                    ))
-                }
-                true
-            }
-            _ => false,
-        });
+
+        entries.append(&mut self.serialize_rec_file(Symbol::Root, file, i));
+        // file.visit_named_children(Symbol::Root, false, |sym, prefix| match sym {
+        //     Symbol::Feature(_) | Symbol::Attribute(_) => {
+        //         if let Some(config) = self.values.get(&i.sym(sym)) {
+        //             entries.push(ConfigEntry::Value(
+        //                 Path {
+        //                     names: prefix.to_vec(),
+        //                     spans: Vec::new(),
+        //                 },
+        //                 config.clone(),
+        //             ))
+        //         }
+        //         true
+        //     }
+        //     _ => false,
+        // });
+        
         ConfigEntry::Import(
             Path {
                 names: path.to_vec(),
@@ -293,6 +296,94 @@ impl ConfigModule {
             entries,
         )
     }
+
+    fn serialize_rec_file(&self, sym: Symbol, file: &AstDocument,i: InstanceID) -> Vec<ConfigEntry>{
+        let mut entries: Vec<ConfigEntry> = Vec::new();
+        let mut child_map: HashMap<Ustr, Vec<Vec<ConfigEntry>>>= hashbrown::HashMap::new();
+
+        for child in file.direct_children(sym){
+            info!("VISIT: {:?}", file.name(child).unwrap_or(Ustr::from("Error")));
+            info!("CHILD: {:?}", child);
+            match child {
+                Symbol::Feature(id) => {
+                    let feature = file.get_feature(id).unwrap();
+                    match  feature.cardinality {
+                        Some(Cardinality::Fixed) => {
+                            if let Some(config) = self.values.get(&i.sym(child)) {
+                                entries.push(ConfigEntry::Value(
+                                    Path {
+                                        names: vec![file.name(child).unwrap()],
+                                        spans: Vec::new(),
+                                    },
+                                    config.clone(),
+                                ))
+                            }
+                            entries.append(& mut self.serialize_rec_file(child, file,i));
+                        }
+                        Some(Cardinality::Range(_, _)) =>{ 
+                            let mut child_entries:Vec<ConfigEntry>  = vec![];
+                            if let Some(config) = self.values.get(&i.sym(child)) {
+                                child_entries.push(ConfigEntry::Value(
+                                    Path {
+                                        names: vec![file.name(child).unwrap()],
+                                        spans: Vec::new(),
+                                    },
+                                    config.clone(),
+                                ));
+                                child_entries.append(&mut self.serialize_rec_file(child, file, i));
+                            }
+                            child_map.get_mut(&file.name(child).unwrap()).and_then(|x| {
+                                x.push(child_entries.clone());
+                                Some(())
+                                }  
+                            ).or_else(|| {
+                                child_map.insert(file.name(child).unwrap(), vec![child_entries]);
+                                Some(())
+                            });
+                            // entries.push(ConfigEntry::Value(                                    
+                            //     Path {
+                            //         names: vec![file.name(child).unwrap()],
+                            //         spans: Vec::new(),
+                            //     }, 
+                            //     ConfigValue::Cardinality(child_entries)
+                            // ));
+                        }
+                        None => ()
+                    }
+                    
+                }
+                Symbol::Attribute(_) =>{
+                    if let Some(config) = self.values.get(&i.sym(child)) {
+                        entries.push(ConfigEntry::Value(
+                            Path {
+                                names: vec![file.name(child).unwrap()],
+                                spans: Vec::new(),
+                            },
+                            config.clone(),
+                        ))
+                    }
+                    entries.append(& mut self.serialize_rec_file(child, file,i));
+                
+                }
+                _ => {
+                    entries.append(& mut self.serialize_rec_file(child, file, i));
+                },
+            }
+
+        }
+        for (cardinality_name, cardinality_childs) in child_map.iter() {
+            entries.push(ConfigEntry::Value(                                    
+                Path {
+                    names: vec![cardinality_name.clone()],
+                    spans: Vec::new(),
+                }, 
+                ConfigValue::Cardinality(cardinality_childs.clone())
+            ))
+        }
+        info!("entries: {:?}",entries);
+        return entries;
+    }
+
     //Turns a the set of linear configuration values of this module into theire recusive from
     //used in json
     pub fn serialize(&self) -> Vec<ConfigEntry> {
