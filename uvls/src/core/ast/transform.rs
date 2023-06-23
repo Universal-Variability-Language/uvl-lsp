@@ -1174,12 +1174,13 @@ pub fn visit_root(source: Rope, tree: Tree, uri: Url, timestamp: Instant) -> Ast
         state.connect();
         (state.ast, state.errors)
     };
-    let mut path = uri_to_path(&uri).unwrap();
-    if let Some(ns) = ast.namespace.as_ref() {
-        let len = path.len().saturating_sub(ns.names.len());
-        path.truncate(len);
-        path.extend_from_slice(&ns.names);
-    }
+    let path = uri_to_path(&uri).unwrap();
+    // without this Code namespaces are ignored for imports and the normal path is used 
+    // if let Some(ns) = ast.namespace.as_ref() {
+    //     let len = path.len().saturating_sub(ns.names.len());
+    //     path.truncate(len);
+    //     path.extend_from_slice(&ns.names);
+    // }
     AstDocument {
         id: FileID::from_uri(&uri),
         path,

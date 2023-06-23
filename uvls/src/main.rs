@@ -335,14 +335,11 @@ impl LanguageServer for Backend {
     }
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         info!("file change {:?}", params);
-        let mut created_flag =  true;
         for i in params.changes {
             match i.typ {
                 FileChangeType::CREATED => {
-                    if created_flag {
                         self.load(i.uri);
-                        created_flag = false;
-                    }
+                        break;
                 }
                 FileChangeType::CHANGED => {
                     self.load(i.uri);
