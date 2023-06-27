@@ -196,7 +196,7 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
                 }
             },
             _ => rsx!{ div {
-                "something"
+                config.to_string()
             }
                 
             },

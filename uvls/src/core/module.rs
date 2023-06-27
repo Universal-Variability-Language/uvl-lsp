@@ -1,10 +1,10 @@
-use tokio::time::Instant;
 use crate::core::*;
-use resolve;
 use config::*;
 use hashbrown::HashMap;
 use indexmap::IndexSet;
 use log::info;
+use resolve;
+use tokio::time::Instant;
 use ustr::Ustr;
 
 use std::sync::Arc;
@@ -195,14 +195,32 @@ impl Module {
                                 out.insert(ModuleSymbol { instance, sym }, val.clone());
                                 out_span.insert(ModuleSymbol { instance, sym }, path.range());
                             } else {
-                                err(
-                                    path.range(),
-                                    format!(
-                                        "expected {} got {}",
-                                        file.type_of(sym).unwrap(),
-                                        val.ty()
-                                    ),
-                                );
+                                if let Symbol::Feature(i) = sym {
+                                    let feature = file.get_feature(i).unwrap().clone();
+                                    if let Cardinality::Range(_, _) = feature.cardinality.unwrap() {
+                                        out.insert(ModuleSymbol { instance, sym }, val.clone());
+                                        out_span
+                                            .insert(ModuleSymbol { instance, sym }, path.range());
+                                    } else {
+                                        err(
+                                            path.range(),
+                                            format!(
+                                                "expected {} got {}",
+                                                file.type_of(sym).unwrap(),
+                                                val.ty()
+                                            ),
+                                        );
+                                    }
+                                } else {
+                                    err(
+                                        path.range(),
+                                        format!(
+                                            "expected {} got {}",
+                                            file.type_of(sym).unwrap(),
+                                            val.ty()
+                                        ),
+                                    );
+                                }
                             }
                         } else {
                             err(path.range(), format!("unresolved value",));
@@ -287,7 +305,7 @@ impl ConfigModule {
         //     }
         //     _ => false,
         // });
-        
+
         ConfigEntry::Import(
             Path {
                 names: path.to_vec(),
@@ -297,17 +315,25 @@ impl ConfigModule {
         )
     }
 
-    fn serialize_rec_file(&self, sym: Symbol, file: &AstDocument,i: InstanceID) -> Vec<ConfigEntry>{
+    fn serialize_rec_file(
+        &self,
+        sym: Symbol,
+        file: &AstDocument,
+        i: InstanceID,
+    ) -> Vec<ConfigEntry> {
         let mut entries: Vec<ConfigEntry> = Vec::new();
-        let mut child_map: HashMap<Ustr, Vec<Vec<ConfigEntry>>>= hashbrown::HashMap::new();
+        let mut child_map: HashMap<Ustr, Vec<Vec<ConfigEntry>>> = hashbrown::HashMap::new();
 
-        for child in file.direct_children(sym){
-            info!("VISIT: {:?}", file.name(child).unwrap_or(Ustr::from("Error")));
+        for child in file.direct_children(sym) {
+            info!(
+                "VISIT: {:?}",
+                file.name(child).unwrap_or(Ustr::from("Error"))
+            );
             info!("CHILD: {:?}", child);
             match child {
                 Symbol::Feature(id) => {
                     let feature = file.get_feature(id).unwrap();
-                    match  feature.cardinality {
+                    match feature.cardinality {
                         Some(Cardinality::Fixed) => {
                             if let Some(config) = self.values.get(&i.sym(child)) {
                                 entries.push(ConfigEntry::Value(
@@ -318,10 +344,10 @@ impl ConfigModule {
                                     config.clone(),
                                 ))
                             }
-                            entries.append(& mut self.serialize_rec_file(child, file,i));
+                            entries.append(&mut self.serialize_rec_file(child, file, i));
                         }
-                        Some(Cardinality::Range(_, _)) =>{ 
-                            let mut child_entries:Vec<ConfigEntry>  = vec![];
+                        Some(Cardinality::Range(_, _)) => {
+                            let mut child_entries: Vec<ConfigEntry> = vec![];
                             if let Some(config) = self.values.get(&i.sym(child)) {
                                 child_entries.push(ConfigEntry::Value(
                                     Path {
@@ -332,27 +358,29 @@ impl ConfigModule {
                                 ));
                                 child_entries.append(&mut self.serialize_rec_file(child, file, i));
                             }
-                            child_map.get_mut(&file.name(child).unwrap()).and_then(|x| {
-                                x.push(child_entries.clone());
-                                Some(())
-                                }  
-                            ).or_else(|| {
-                                child_map.insert(file.name(child).unwrap(), vec![child_entries]);
-                                Some(())
-                            });
-                            // entries.push(ConfigEntry::Value(                                    
+                            child_map
+                                .get_mut(&file.name(child).unwrap())
+                                .and_then(|x| {
+                                    x.push(child_entries.clone());
+                                    Some(())
+                                })
+                                .or_else(|| {
+                                    child_map
+                                        .insert(file.name(child).unwrap(), vec![child_entries]);
+                                    Some(())
+                                });
+                            // entries.push(ConfigEntry::Value(
                             //     Path {
                             //         names: vec![file.name(child).unwrap()],
                             //         spans: Vec::new(),
-                            //     }, 
+                            //     },
                             //     ConfigValue::Cardinality(child_entries)
                             // ));
                         }
-                        None => ()
+                        None => (),
                     }
-                    
                 }
-                Symbol::Attribute(_) =>{
+                Symbol::Attribute(_) => {
                     if let Some(config) = self.values.get(&i.sym(child)) {
                         entries.push(ConfigEntry::Value(
                             Path {
@@ -362,25 +390,25 @@ impl ConfigModule {
                             config.clone(),
                         ))
                     }
-                    entries.append(& mut self.serialize_rec_file(child, file,i));
-                
+                    entries.append(&mut self.serialize_rec_file(child, file, i));
                 }
                 _ => {
-                    entries.append(& mut self.serialize_rec_file(child, file, i));
-                },
+                    entries.append(&mut self.serialize_rec_file(child, file, i));
+                }
             }
-
         }
         for (cardinality_name, cardinality_childs) in child_map.iter() {
-            entries.push(ConfigEntry::Value(                                    
+            entries.push(ConfigEntry::Value(
                 Path {
                     names: vec![cardinality_name.clone()],
                     spans: Vec::new(),
-                }, 
-                ConfigValue::Cardinality(cardinality_childs.clone())
+                },
+                ConfigValue::Cardinality(CardinalityEntry::CardinalityLvl(
+                    cardinality_childs.clone(),
+                )),
             ))
         }
-        info!("entries: {:?}",entries);
+        info!("entries: {:?}", entries);
         return entries;
     }
 

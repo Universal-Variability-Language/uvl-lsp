@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, path};
 use crate::core::*;
 
 use ast::*;
@@ -35,6 +35,11 @@ use ustr::Ustr;
 //JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
 //crate for span information and partial parsing so error reporting becomes impossible.
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub enum CardinalityEntry {
+    CardinalityLvl(Vec<Vec<ConfigEntry>>),
+    EntitiyLvl(Vec<ConfigEntry>),
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
@@ -42,9 +47,31 @@ pub enum ConfigValue {
     Bool(bool),
     Number(f64),
     String(String),
-    Cardinality(Vec<Vec<ConfigEntry>>)
-
+    Cardinality(CardinalityEntry)
 }
+
+impl Serialize for CardinalityEntry {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer {
+
+        use serde::ser::SerializeSeq;
+        match self {
+            CardinalityEntry::CardinalityLvl(childs) => {
+                let mut s = serializer.serialize_seq(Some(childs.len()))?;
+                for child in childs {
+                    s.serialize_element(&CardinalityEntry::EntitiyLvl(child.to_owned()));
+                }
+                s.end()
+
+            }
+            CardinalityEntry::EntitiyLvl(childs) => {
+                ConfigEntry::Import(Path { names: vec![], spans: vec![] }, childs.to_owned()).serialize(serializer)
+            }
+        }
+    }
+}
+
 impl ConfigValue {
     pub fn ty(&self) -> Type {
         match self {
@@ -88,7 +115,7 @@ impl Serialize for ConfigEntry {
     where
         S: serde::Serializer,
     {
-        use serde::ser::SerializeMap;
+        use serde::ser::{SerializeMap,SerializeSeq, SerializeStruct};
 
 
         match self {
@@ -221,8 +248,18 @@ fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
                         });
                         acc.push(ConfigEntry::Import(key, children));
                     }
+                    "array" =>{
+                        let children = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
+                            visit_children(state, |state| {
+                                state.goto_field("value");
+                                visit_children(state, opt_configs)
+                            })
+                        });
+                        info!("{:?}",children);
+                        acc.push(ConfigEntry::Value(key, ConfigValue::Cardinality(CardinalityEntry::CardinalityLvl(vec![children]))))
+                    }
                     _ => {
-                        state.push_error_node(val, 30, "expected a number or bool");
+                        state.push_error_node(val, 30, format!("Explect Number or Bool {:?}", val.kind()));
                     }
                 }
             }
