@@ -165,7 +165,6 @@ impl SMTModule {
         (define-fun floor ((x Real)) Int (to_int x))
         (define-fun ceil ((x Real)) Int (ite (= (to_int x) x) (to_int x) (to_int (+ x 1)) ))
         (set-option :smt.core.minimize true)\n"
-
             .to_string();
         out
     }
@@ -304,13 +303,10 @@ impl SMTModule {
                                 stack.push(CExpr::Expr(i));
                             }
                         }
-                        Expr::Strlen(e)
-                            | Expr::Ceil(e)
-                            | Expr::Floor(e)
-                            | Expr::Not(e) => {
-                                stack.push(CExpr::End);
-                                stack.push(CExpr::Expr(e));
-                            }
+                        Expr::Strlen(e) | Expr::Ceil(e) | Expr::Floor(e) | Expr::Not(e) => {
+                            stack.push(CExpr::End);
+                            stack.push(CExpr::Expr(e));
+                        }
                         Expr::StrConcat(rhs, lhs) => {
                             stack.push(CExpr::End);
                             stack.push(CExpr::Expr(rhs));
@@ -593,7 +589,7 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
                     return true;
                 }
                 let ms = m.sym(a);
-                 builder.push_var(ms);
+                builder.push_var(ms);
                 true
             });
         }
@@ -721,14 +717,12 @@ fn translate_expr(decl: &ast::ExprDecl, m: InstanceID, builder: &mut SMTBuilder)
                 )
             }
         }
-        ast::Expr::Integer { op, n} => {
-           (
-                match op {
-                    ast::IntegerOP::Ceil => Expr::Ceil(translate_expr(n, m, builder).0.into()),
-                    ast::IntegerOP::Floor => Expr::Floor(translate_expr(n, m, builder).0.into())
-                },
-                Type::Real,
-            )
-        }
+        ast::Expr::Integer { op, n } => (
+            match op {
+                ast::IntegerOP::Ceil => Expr::Ceil(translate_expr(n, m, builder).0.into()),
+                ast::IntegerOP::Floor => Expr::Floor(translate_expr(n, m, builder).0.into()),
+            },
+            Type::Real,
+        ),
     }
 }

@@ -732,7 +732,7 @@ pub async fn ui_main(
     spawn(ui_sync(pipeline.clone(), tx_sync, root));
     //Run the event loop
     ui_event_loop(
-        id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline, tgt_path
+        id, tx_config, ui_rx, rx_sync, &ui_config, &ui_state, &pipeline, tgt_path,
     )
     .await?;
 

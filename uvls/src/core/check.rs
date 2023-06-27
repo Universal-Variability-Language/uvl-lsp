@@ -9,7 +9,6 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::Client;
 use tree_sitter::{Node, QueryCursor, Tree};
 
-
 #[derive(Clone, Debug)]
 pub struct ErrorInfo {
     pub location: Range,

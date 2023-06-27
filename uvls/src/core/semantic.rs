@@ -2,13 +2,13 @@ use crate::core::*;
 
 use hashbrown::{HashMap, HashSet};
 use log::info;
+use percent_encoding::percent_decode_str;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::*;
 use ustr::Ustr;
-use percent_encoding::percent_decode_str;
 
 pub type Snapshot = Arc<RootGraph>;
 #[derive(Hash, PartialEq, Eq, Clone, Copy)]

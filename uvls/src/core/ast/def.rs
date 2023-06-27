@@ -1,7 +1,7 @@
 //Basic Ast components
-use ustr::Ustr;
-use itertools::Itertools;
 use enumflags2::bitflags;
+use itertools::Itertools;
+use ustr::Ustr;
 pub type Span = std::ops::Range<usize>;
 #[derive(Clone, Debug)]
 pub struct SymbolSpan {
@@ -170,7 +170,7 @@ impl Default for Value {
     }
 }
 
-#[derive(Clone, Debug,PartialEq,Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NumericOP {
     Add,
     Sub,
@@ -215,7 +215,6 @@ pub enum EquationOP {
     Smaller,
     Equal,
 }
-
 
 #[derive(Clone, Debug)]
 pub enum Constraint {

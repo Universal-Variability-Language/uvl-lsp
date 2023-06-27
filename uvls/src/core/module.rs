@@ -1,10 +1,10 @@
-use tokio::time::Instant;
 use crate::core::*;
-use resolve;
 use config::*;
 use hashbrown::HashMap;
 use indexmap::IndexSet;
 use log::info;
+use resolve;
+use tokio::time::Instant;
 use ustr::Ustr;
 
 use std::sync::Arc;

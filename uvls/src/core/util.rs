@@ -1,9 +1,9 @@
-use std::fmt::Display;
 use crate::core::query::Queries;
 use futures::Future;
 use lazy_static::lazy_static;
 use ropey::Rope;
 use std::error;
+use std::fmt::Display;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::{Position, Range, Url};

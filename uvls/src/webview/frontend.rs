@@ -57,7 +57,6 @@ fn Icon(cx: Scope, icon: Icon, class: Option<&'static str>) -> Element {
             &[
                 "M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
             ]
-            
         }
     };
     let paths = paths.iter().map(|p| {
@@ -119,9 +118,9 @@ fn to_number(input: &str) -> String {
     }
 }
 #[inline_props]
-fn RealInput(cx: Scope,init_val:f64,sym: ModuleSymbol,tag: u8)->Element{
+fn RealInput(cx: Scope, init_val: f64, sym: ModuleSymbol, tag: u8) -> Element {
     let tx = use_coroutine_handle::<UIAction>(cx).unwrap();
-    let val = use_state(cx,||init_val.to_string());
+    let val = use_state(cx, || init_val.to_string());
     cx.render(rsx! {
         input{
             class:"input-value",
@@ -135,7 +134,6 @@ fn RealInput(cx: Scope,init_val:f64,sym: ModuleSymbol,tag: u8)->Element{
             }
         }
     })
-
 }
 
 fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
@@ -148,7 +146,7 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
         tag,
     } = &cx.props;
     let tx = use_coroutine_handle::<UIAction>(cx).unwrap();
-    
+
     if let Some(config) = config {
         let rest = rsx! {
             rsx!{button{
@@ -250,7 +248,7 @@ fn Value(cx: Scope, value: UIEntryValue, sym: ModuleSymbol, tag: u8) -> Element 
             }
         }),
 
-        UIEntryValue::Link{
+        UIEntryValue::Link {
             config,
             smt_value,
             ty,
@@ -289,7 +287,7 @@ fn icon(value: &UIEntryValue) -> Icon {
         UIEntryValue::File { .. } => Icon::File,
         UIEntryValue::Feature { .. } => Icon::Feature,
         UIEntryValue::Attribute { .. } => Icon::Attribute,
-        UIEntryValue::Link { ..}=>Icon::Link,
+        UIEntryValue::Link { .. } => Icon::Link,
     }
 }
 #[inline_props]
@@ -297,23 +295,25 @@ fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: ModuleSymbol, tag: u8) -
     let pad = node.depth * 30;
     let ui_task = use_coroutine_handle::<UIAction>(cx).unwrap();
     let val = rsx! {Value{value:node.value.clone(),sym:*sym,tag:*tag}};
-    let name = match &node.value{
+    let name = match &node.value {
         UIEntryValue::File { alias, name } => {
             if let Some(alias) = alias {
                 format!("{}", alias)
             } else {
                 format!("{}", name)
             }
-        },
-        UIEntryValue::Link { name,.. }=>name.clone(),
+        }
+        UIEntryValue::Link { name, .. } => name.clone(),
         UIEntryValue::Attribute { name, .. }
         | UIEntryValue::Feature { name, .. }
         | UIEntryValue::Attributes(name) => format!("{}", name),
     };
 
     let icon = icon(&node.value);
-    let name = match &node.value{
-        UIEntryValue::Attribute { ..}|UIEntryValue::Feature { .. }  |UIEntryValue::File { ..}=>rsx!{
+    let name = match &node.value {
+        UIEntryValue::Attribute { .. }
+        | UIEntryValue::Feature { .. }
+        | UIEntryValue::File { .. } => rsx! {
             span{
                 class:"name-sel",
                 onclick: move |_|{
@@ -323,7 +323,7 @@ fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: ModuleSymbol, tag: u8) -
                 Icon{icon:icon}
             }
         },
-        UIEntryValue::Link { tgt,.. }=>rsx!{
+        UIEntryValue::Link { tgt, .. } => rsx! {
             span{
                 class:"name-sel",
                 onclick: move |_|{
@@ -332,16 +332,15 @@ fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: ModuleSymbol, tag: u8) -
                 name
                 Icon{icon:icon}
             }
-            
+
         },
-        _=>rsx!{
+        _ => rsx! {
             span{
                 class:"name",
                 name
                 Icon{icon:icon}
             }
-        }
-        
+        },
     };
 
     if *leaf {
@@ -436,19 +435,14 @@ where
                             smt_value:smt_value.clone(),
                             ty:*ty,
                             unsat:*unsat
-
-                            
                         }
-                        
                     },leaf:leaf,sym:*tgt,key:"{k:?}",tag:tag}
                 }
-            } 
+            }
             else{
-
                 rsx! {
                     FileEntry{node:v.clone(),leaf:leaf,sym:*k,key:"{k:?}",tag:tag}
                 }
-            
             }
         })
 }
@@ -456,7 +450,7 @@ where
 pub fn App(cx: Scope<AppProps>) -> Element {
     let config = use_ref(cx, UIConfigState::default);
     let state = use_ref(cx, || UIState {
-        solver_active:false,
+        solver_active: false,
         sat: SatState::UNKNOWN,
         sync: UISyncState::Dirty,
         dir: "".into(),
@@ -494,9 +488,9 @@ pub fn App(cx: Scope<AppProps>) -> Element {
         }),
         UISyncState::Valid => {
             let values = file_values_iter(&lock);
-            let solver_state = if state_lock.solver_active{
+            let solver_state = if state_lock.solver_active {
                 "active"
-            }else{
+            } else {
                 "idle"
             };
             cx.render(rsx! {
@@ -577,4 +571,3 @@ pub fn App(cx: Scope<AppProps>) -> Element {
         }
     }
 }
-
