@@ -193,7 +193,6 @@ impl RootGraph {
             let mut file_paths = HashSet::new();
             for file in files.values() {
                 if !file_paths.insert(file.path.as_slice()) {
-                    //info!("{:?}", file.namespace());
                     if let Some(ns) = file.namespace() {
                         if err.errors.contains_key(&file.id) {
                             err.span(ns.range(), file.id, 100, "namespace already defined");
@@ -202,7 +201,6 @@ impl RootGraph {
                 }
             }
         }
-        //info!("dirty {:?}",dirty);
         Self {
             cancel: CancellationToken::new(),
             cache: Cache::new(old, files, configs, &dirty, revision, err),

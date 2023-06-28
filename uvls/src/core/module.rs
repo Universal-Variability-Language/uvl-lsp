@@ -185,22 +185,51 @@ impl Module {
             for c in config.iter() {
                 match c {
                     ConfigEntry::Value(path, val) => {
-                        if let Some(sym) = file
-                            .lookup(Symbol::Root, &path.names, |sym| {
-                                matches!(sym, Symbol::Feature(..) | Symbol::Attribute(..))
-                            })
-                            .next()
-                        {
-                            if file.type_of(sym).unwrap() == val.ty() {
-                                out.insert(ModuleSymbol { instance, sym }, val.clone());
-                                out_span.insert(ModuleSymbol { instance, sym }, path.range());
-                            } else {
-                                if let Symbol::Feature(i) = sym {
-                                    let feature = file.get_feature(i).unwrap().clone();
-                                    if let Cardinality::Range(_, _) = feature.cardinality.unwrap() {
-                                        out.insert(ModuleSymbol { instance, sym }, val.clone());
-                                        out_span
-                                            .insert(ModuleSymbol { instance, sym }, path.range());
+                        match val {
+                            ConfigValue::Cardinality(entry) => {
+                                match entry {
+                                    CardinalityEntry::CardinalityLvl(val_entry) => {
+                                            let entries = file.get_all_entities( &path.names);
+                                            for siebzig in val_entry {
+                                                for achtzig in siebzig{
+                                                    
+                                                }
+                                            }
+
+                                            for e in entries {
+                                                info!("Symbol Iterator {:?}, {:?}", e, path);
+                                            }
+                                    },
+                                    CardinalityEntry::EntitiyLvl(_) => panic!("Unexpected Cardinality Level"),
+                                }
+                            }
+                            _ => {
+                                if let Some(sym) = file
+                                .lookup(Symbol::Root, &path.names, |sym| {
+                                    matches!(sym, Symbol::Feature(..) | Symbol::Attribute(..))
+                                })
+                                .next()
+                            {
+                                if file.type_of(sym).unwrap() == val.ty() {
+                                    out.insert(ModuleSymbol { instance, sym }, val.clone());
+                                    out_span.insert(ModuleSymbol { instance, sym }, path.range());
+                                } else {
+                                    if let Symbol::Feature(i) = sym {
+                                        let feature = file.get_feature(i).unwrap().clone();
+                                        if let Cardinality::Range(_, _) = feature.cardinality.unwrap() {
+                                            out.insert(ModuleSymbol { instance, sym }, val.clone());
+                                            out_span
+                                                .insert(ModuleSymbol { instance, sym }, path.range());
+                                        } else {
+                                            err(
+                                                path.range(),
+                                                format!(
+                                                    "expected {} got {}",
+                                                    file.type_of(sym).unwrap(),
+                                                    val.ty()
+                                                ),
+                                            );
+                                        }
                                     } else {
                                         err(
                                             path.range(),
@@ -211,20 +240,13 @@ impl Module {
                                             ),
                                         );
                                     }
-                                } else {
-                                    err(
-                                        path.range(),
-                                        format!(
-                                            "expected {} got {}",
-                                            file.type_of(sym).unwrap(),
-                                            val.ty()
-                                        ),
-                                    );
                                 }
+                            } else {
+                                err(path.range(), format!("unresolved value",));
                             }
-                        } else {
-                            err(path.range(), format!("unresolved value",));
-                        }
+                            }
+                        } 
+                      
                     }
                     ConfigEntry::Import(path, val) => {
                         if let Some(sym) = file

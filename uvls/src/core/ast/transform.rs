@@ -971,43 +971,6 @@ fn visit_attributes(state: &mut VisitorState, parent: Symbol, duplicate: &bool) 
     }
 }
 
-// fn visit_cardinality(state: &mut VisitorState, parent: Symbol, ty: Type, feature: Feature) {
-//     let cardinality = feature.cardinality.unwrap();
-//     match cardinality {
-//         Cardinality::Fixed => info!("FUUUUUUUCK Cardinality Any detected!!!!!!!!!"),
-//         Cardinality::Range(a, b) => {
-//             info!(" cardinality");
-//             for i in 0..b {
-//                 let sym = Symbol::Feature(state.ast.features.len());
-//                 let new_name = SymbolSpan {
-//                     name: Ustr::from(format!("{}[{}]", feature.name.name, i).as_str()),
-//                     span: feature.name.span.clone(),
-//                 };
-//                 let new_feature = Feature {
-//                     name: new_name,
-//                     ty: feature.ty.clone(),
-//                     cardinality: Some(Cardinality::Fixed),
-//                 };
-//                 state.ast.features.push(new_feature);
-//                 state.push_child(parent, sym);
-//                 loop {
-//                     match state.kind() {
-//                         "attributes" => {
-//                             visit_children_arg(state, sym, visit_attributes);
-//                         }
-//                         "blk" => {
-//                             visit_children_arg(state, sym, visit_blk_decl);
-//                         }
-//                         _ => {}
-//                     }
-//                     if !state.goto_next_sibling() {
-//                         break;
-//                     }
-//                 }
-//             }
-//         }
-//     }
-// }
 fn visit_feature(
     state: &mut VisitorState,
     parent: Symbol,
@@ -1015,7 +978,6 @@ fn visit_feature(
     ty: Type,
     duplicate: bool,
 ) {
-    info!("visit feature");
     match parent {
         Symbol::Feature(..) => {
             state.push_error(40, "features have to be separated by groups");
@@ -1255,7 +1217,6 @@ fn visit_constraints(state: &mut VisitorState) {
 }
 fn visit_top_lvl(state: &mut VisitorState) {
     let mut top_level_order: Vec<Node> = Vec::new();
-    info!("visit top level");
     loop {
         if state.kind() == "blk" {
             let header = state.header().unwrap();

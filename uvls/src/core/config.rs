@@ -1,8 +1,9 @@
-use std::{fmt::Display, path};
+use std::{fmt::Display, path, error::Error};
 use crate::core::*;
 
 use ast::*;
 use check::ErrorInfo;
+use serde_json::Deserializer;
 use crate::ide::completion::*;
 use parse::SymbolSlice;
 use semantic::{FileID, RootGraph};
@@ -60,7 +61,7 @@ impl Serialize for CardinalityEntry {
             CardinalityEntry::CardinalityLvl(childs) => {
                 let mut s = serializer.serialize_seq(Some(childs.len()))?;
                 for child in childs {
-                    s.serialize_element(&CardinalityEntry::EntitiyLvl(child.to_owned()));
+                    let _ = s.serialize_element(&CardinalityEntry::EntitiyLvl(child.to_owned()));
                 }
                 s.end()
 
@@ -99,7 +100,7 @@ impl Display for ConfigValue {
             Self::Bool(x) => write!(f, "{x}"),
             Self::Number(x) => write!(f, "{x}"),
             Self::String(x) => write!(f, "{x}"),
-            Self::Cardinality(x) => write!(f, "testWrite"),
+            Self::Cardinality(_) => Ok(()),
         }
     }
 }
@@ -146,7 +147,15 @@ impl<'de> Deserialize<'de> for ConfigEntry {
         where
             D: serde::Deserializer<'de> 
     {
-        Ok(ConfigEntry::Value(Path { names: vec![], spans: vec![] }, ConfigValue::Bool(true)))
+        let s = Deserialize::deserialize(deserializer)?;
+        info!("deserialize {:?}", s);
+
+        Ok(ConfigEntry::Value(Path { names: vec![Ustr::from("importZZZ")], spans: vec![] }, ConfigValue::Bool(true)))
+
+        // match deserializer {
+        //     ConfigEntry::Import(_, _ ) => Ok(ConfigEntry::Value(Path { names: vec![Ustr::from("importZZZ")], spans: vec![] }, ConfigValue::Bool(true))),
+        //     ConfigEntry::Value(path, value) => Ok(ConfigEntry::Value(Path { names: vec![Ustr::from("valueZZZ")], spans: vec![] }, ConfigValue::Bool(true)))
+        // }
     }
 }
 
@@ -256,10 +265,10 @@ fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
                             })
                         });
                         info!("{:?}",children);
-                        acc.push(ConfigEntry::Value(key, ConfigValue::Cardinality(CardinalityEntry::CardinalityLvl(vec![children]))))
+                        acc.push(ConfigEntry::Value(key, ConfigValue::Bool(true)));
                     }
                     _ => {
-                        state.push_error_node(val, 30, format!("Explect Number or Bool {:?}", val.kind()));
+                        state.push_error_node(val, 30, format!("Expect Number or Bool {:?}", val.kind()));
                     }
                 }
             }
@@ -297,6 +306,7 @@ fn visit_file(state: &mut State) -> Option<FileConfig> {
                         state.goto_field("value");
                         if state.kind() == "object" {
                             config = Some(visit_children(state, opt_configs));
+                            info!("config: {:?}", config);
                         } else {
                             state.push_error(30, "expected object");
                         }

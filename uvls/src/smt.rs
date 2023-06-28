@@ -222,7 +222,6 @@ async fn find_fixed(
         }
         //let time = Instant::now();
         if solve.check_sat().await? {
-            //info!("check sat {:?}", time.elapsed());
             let unknown = state
                 .iter()
                 .filter(|(_, v)| !matches!(*v, SMTValueState::Any))
@@ -230,7 +229,6 @@ async fn find_fixed(
                     format!("{acc} v{}", module.var(*k))
                 });
             let values = solve.values(unknown).await?;
-            //info!("model {:?}", time.elapsed());
             for (s, v) in module.parse_values(&values, base_module) {
                 if let Some(old) = state.get(&s) {
                     match (v, old) {
@@ -347,7 +345,6 @@ async fn check_base_sat(
         async move {
             let smt_module = uvl2smt(&module, &HashMap::new());
             let source = smt_module.to_source(&module);
-            info!("{}",source);
             let model = create_model(
                 &module,
                 root.cancellation_token(),
@@ -562,7 +559,6 @@ pub async fn check_handler(
     loop {
         info!("Check SMT");
         let root = rx_root.borrow_and_update().clone();
-        info!("test");
         latest_versions = check_base_sat(&root, &tx_err, latest_versions).await;
         latest_versions_config =
             check_config(&root, &tx_err, &inlay_state, latest_versions_config).await;
@@ -598,13 +594,12 @@ pub async fn web_view_handler(
                             })
                         })
                         .await;
-                    //info!("model: {model:?}");
                     tx_ui
                         .send(webview::UIAction::UpdateSMTModel(model, tag))
                         .await?;
                 }
                 Err(e) => {
-                    //info!("err {e}");
+                    
                     inlay_state.maybe_reset(inlay_source).await;
                     tx_ui
                         .send(webview::UIAction::UpdateSMTInvalid(format!("{e}"), tag))

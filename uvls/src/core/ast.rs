@@ -4,6 +4,7 @@ use hashbrown::HashMap;
 use ropey::Rope;
 use semantic::FileID;
 use std::hash::Hash;
+use std::ops::Index;
 use std::path::Component;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::Url;
@@ -73,6 +74,7 @@ struct Ast {
     structure: TreeMap,
     //The index is stored as a typed radix tree
     index: HashMap<(Symbol, Ustr, SymbolKind), Symbol>,
+
 }
 impl Ast {
     pub fn import_prefix(&self, sym: Symbol) -> &[Ustr] {
@@ -90,6 +92,7 @@ impl Ast {
     }
     //call f for each child under sym and prefix
     fn lookup<F: FnMut(Symbol)>(&self, sym: Symbol, prefix: Ustr, mut f: F) {
+        info!("AST index: {:?}", self.index);
         match sym {
             Symbol::Root => {
                 if let Some(&dst) = self.index.get(&(sym, prefix, SymbolKind::Import)) {
@@ -401,6 +404,15 @@ impl AstDocument {
                 }
             })
         })
+    }
+    pub fn get_all_entities(&self,path: &[Ustr]) -> Vec<Symbol>{
+        let res = vec![];
+        for i in 0..self.ast.features.len() {
+            if  path.last().unwrap_or(&Ustr::from("")) == self.get_feature(i).name.name{
+                res.push(Symbol::Feature(i));
+            }
+        }
+        res
     }
     //prefix of sym from root
     pub fn prefix(&self, mut sym: Symbol) -> Vec<Ustr> {

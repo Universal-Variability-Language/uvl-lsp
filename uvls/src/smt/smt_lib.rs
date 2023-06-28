@@ -425,12 +425,12 @@ impl Into<Expr> for ConfigValue {
             Self::Bool(b) => Expr::Bool(b),
             Self::Number(n) => Expr::Real(n),
             Self::String(s) => Expr::String(s),
+            Self::Cardinality(_) => Expr::Bool(true),
             _ => unimplemented!()
         }
     }
 }
 
-//TODO check cardinality
 pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> SMTModule {
     assert!(module.ok);
     let mut builder = SMTBuilder {
