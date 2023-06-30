@@ -487,13 +487,28 @@ impl Cache {
         for (k, v) in configs.iter() {
             if let Some(content) = v.config.as_ref() {
                 info!("uri {}", content.file.as_str());
-                if files.contains_key(&content.file) {
-                    let dirty = trans_dirty.contains(&content.file)
+                let fileid = if files.contains_key(&content.file) {
+                    content.file
+                } else {
+                    // Windows inconvenience (we now select the files-key which equals out uri):
+                    *files
+                        .keys()
+                        .find(|key| {
+                            key.as_str().strip_prefix("file:///").unwrap_or("")
+                                == content.file.as_str().strip_prefix("file://").unwrap_or("").replace("\\", "/")
+                        })
+                        .unwrap_or(&FileID::new("X"))
+                };
+                if files.contains_key(&fileid) {
+                    let dirty = trans_dirty.contains(&fileid)
+                        || trans_dirty.contains(&FileID::from_uri(
+                            &tower_lsp::lsp_types::Url::parse(fileid.as_str()).unwrap(),
+                        ))
                         || dirty.contains(k)
                         || !old.config_modules.contains_key(k);
                     if dirty {
                         //recreate
-                        let mut module = Module::new(content.file, &fs, &linked_ast);
+                        let mut module = Module::new(fileid, &fs, &linked_ast);
                         if !module.ok {
                             config_modules.insert(
                                 *k,
@@ -523,7 +538,12 @@ impl Cache {
                         config_modules.insert(*k, old.config_modules[k].clone());
                     }
                 } else {
-                    errors.span(content.file_span.clone(), *k, 100, "file no found");
+                    errors.span(
+                        content.file_span.clone(),
+                        *k,
+                        100,
+                        "File not found, please open it explicitly in your editor",
+                    );
                 }
             }
         }
