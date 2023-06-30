@@ -283,9 +283,17 @@ impl FileSystem {
             Some(origin) => {
                 let mut suffix_helper: Vec<&str> = origin.split("/").collect();
                 let suffix = suffix_helper.pop().unwrap();
-                let root_dir = origin.strip_suffix(suffix).unwrap();
+                let mut root_dir = origin.strip_suffix(suffix).unwrap();
+                // Handling for Windows systems
+                if std::env::consts::OS == "windows"
+                    && !path::Path::new(root_dir).is_dir()
+                    && root_dir.starts_with("/")
+                {
+                    root_dir = root_dir.strip_prefix("/").unwrap();
+                }
+                let path = path::Path::new(root_dir);
                 //Retrieve all uvl files and subfiles from the current directory
-                for entry in walkdir::WalkDir::new(path::Path::new(root_dir))
+                for entry in walkdir::WalkDir::new(path)
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_file())
@@ -313,12 +321,15 @@ impl FileSystem {
                                     Some(name) => {
                                         // checks if already written text is prefix of the path
                                         let mut valid_path = true;
-                                        let mut check_path:  Vec<&str> = name.clone().split("/").collect();
+                                        let mut check_path: Vec<&str> = name.clone().split("/").collect();
                                         for i in prefix.iter() {
-                                            let  check_prefix = i.as_str();
+                                            let check_prefix = i.as_str();
 
-                                            match check_path.iter().position(|&ele| ele ==  check_prefix) {
-                                                Some(0) =>{
+                                            match check_path
+                                                .iter()
+                                                .position(|&ele| ele == check_prefix)
+                                            {
+                                                Some(0) => {
                                                     let _ = check_path.remove(0);
                                                 }
                                                 _ => {
@@ -327,12 +338,15 @@ impl FileSystem {
                                                 }
                                             }
                                         }
-                                        match  check_path.iter().position(|&ele| ele.starts_with(postfix.as_str()))  {
+                                        match check_path
+                                            .iter()
+                                            .position(|&ele| ele.starts_with(postfix.as_str()))
+                                        {
                                             Some(0) => {}
-                                            _  => valid_path = false,
+                                            _ => valid_path = false,
                                         }
                                         let name_up = check_path.join("/");
-                                        if valid_path  {
+                                        if valid_path {
                                             let new_name =
                                                 name_up.replace("/", ".").replace(".uvl", "");
                                             // safe file for autoCompletion
