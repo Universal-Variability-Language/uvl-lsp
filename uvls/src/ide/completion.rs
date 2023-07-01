@@ -620,9 +620,9 @@ fn add_group_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     );
 }
 fn add_lang_lvl_major_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["SMT-level".into(), "SAT-level".into(), "TYPE-level".into()]);
+    add_keywords(query, top, w, ["Boolean".into(), "Arithmetic".into(), "Type".into()]);
 }
-fn add_lang_lvl_smt(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+fn add_lang_lvl_arithmetic(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(
         query,
         top,
@@ -647,7 +647,7 @@ fn add_lang_lvl_type(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     );
 }
 
-fn add_lang_lvl_sat(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+fn add_lang_lvl_boolean(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(query, top, w, ["group-cardinality".into(), "*".into()]);
 }
 
@@ -995,9 +995,9 @@ fn compute_completions_impl(
         CompletionEnv::Include => {
             if !ctx.prefix.is_empty() {
                 match ctx.prefix[0].as_str() {
-                    "SAT-level" => add_lang_lvl_sat(&ctx.postfix, &mut top, 2.0),
-                    "SMT-level" => add_lang_lvl_smt(&ctx.postfix, &mut top, 2.0),
-                    "TYPE-level" => add_lang_lvl_type(&ctx.postfix, &mut top, 2.0),
+                    "Boolean" => add_lang_lvl_boolean(&ctx.postfix, &mut top, 2.0),
+                    "Arithmetic" => add_lang_lvl_arithmetic(&ctx.postfix, &mut top, 2.0),
+                    "Type" => add_lang_lvl_type(&ctx.postfix, &mut top, 2.0),
                     _ => {}
                 }
             } else {
