@@ -519,7 +519,7 @@ impl From<Type> for CompletionKind {
     fn from(s: Type) -> Self {
         match s {
             Type::Bool => Self::Feature,
-            Type::String => Self::AttributeNumber,
+            Type::String => Self::Feature,
             Type::Namespace => Self::Import,
             Type::Real => Self::AttributeNumber,
             Type::Attributes => Self::AttributeAttributes,
@@ -941,18 +941,19 @@ fn compute_completions_impl(
                 //heuristic to provide nearly correct predictions, to
                 //make it more accurate we need to respect
                 //parenthesis
-                (CompletionEnv::Feature, CompletionOffset::SameLine) => {
-                    add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
-                }
-
-                (CompletionEnv::Feature, CompletionOffset::Cut) => {
-                    add_keywords(
-                        &ctx.postfix,
-                        &mut top,
-                        2.0,
-                        ["Integer".into(), "String".into(), "Real".into()],
-                    );
-                    completion_symbol(&snapshot, origin, &ctx, &mut top);
+                (CompletionEnv::Feature, offset) => {
+                    if matches!(offset, CompletionOffset::SameLine | CompletionOffset::Continuous) {
+                        add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
+                    }
+                    if matches!(offset, CompletionOffset::Continuous | CompletionOffset::Cut) {
+                        add_keywords(
+                            &ctx.postfix,
+                            &mut top,
+                            2.0,
+                            ["Integer".into(), "String".into(), "Real".into()],
+                        );
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    }
                 }
                 (
                     CompletionEnv::Constraint | CompletionEnv::Numeric,
