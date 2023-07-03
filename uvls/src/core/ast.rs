@@ -406,9 +406,9 @@ impl AstDocument {
         })
     }
     pub fn get_all_entities(&self,path: &[Ustr]) -> Vec<Symbol>{
-        let res = vec![];
+        let mut res = vec![];
         for i in 0..self.ast.features.len() {
-            if  path.last().unwrap_or(&Ustr::from("")) == self.get_feature(i).name.name{
+            if  path.last().unwrap_or(&Ustr::from("")).clone() == self.get_feature(i).unwrap().name.name{
                 res.push(Symbol::Feature(i));
             }
         }

@@ -240,7 +240,7 @@ fn create_file_tree(
         Symbol::Feature(_) | Symbol::Attribute(_) => {
             let depth = depth + base_depth - 1;
             match file.type_of(sym).unwrap() {
-                Type::String | Type::Real | Type::Bool | Type::Attributes => {}
+                Type::String | Type::Real | Type::Bool | Type::Attributes| Type::Object => {}
                 _ => {
                     return true;
                 }
@@ -265,7 +265,7 @@ fn create_file_tree(
 
             let ms = instance.sym(sym);
             let config = config.get(&ms).cloned();
-
+            info!("Config Check. MS:{:?}, config: :{:?}", ms, config);
             entries.insert(
                 ms,
                 UIEntry {
@@ -305,6 +305,7 @@ fn create_file_tree(
                     },
                 },
             );
+            info!("entries: {:?}:", entries);
             last = sym;
             true
         }

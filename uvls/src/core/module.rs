@@ -179,47 +179,65 @@ impl Module {
         assert!(self.ok);
         let mut out = HashMap::new();
         let mut out_span = HashMap::new();
-        let mut stack = vec![(InstanceID(0), doc.as_slice())];
-        while let Some((instance, config)) = stack.pop() {
+        let mut stack = vec![(InstanceID(0), doc.as_slice(), 0 as usize)];
+        while let Some((instance, config, offset)) = stack.pop() {
+            info!("instance: {:?}, config:{:?}",instance, config);
             let file = self.file(instance);
             for c in config.iter() {
                 match c {
-                    ConfigEntry::Value(path, val) => {
-                        match val {
-                            ConfigValue::Cardinality(entry) => {
-                                match entry {
-                                    CardinalityEntry::CardinalityLvl(val_entry) => {
-                                            let entries = file.get_all_entities( &path.names);
-                                            for siebzig in val_entry {
-                                                for achtzig in siebzig{
-                                                    
+                    ConfigEntry::Value(path, val) => match val {
+                        ConfigValue::Cardinality(entry) => match entry {
+                            CardinalityEntry::CardinalityLvl(val_entry) => {
+                                info!("resolve - Cardinality");
+                                let vec_entries =  file.get_all_entities(&path.names.clone());
+                                let entries = vec_entries.iter().nth(offset);
+                                info!("Cardinality entries: {:?}", entries);
+                                match entries {
+                                    Some(Symbol::Feature(i)) => {
+                                        let feature = file.get_feature(i.clone()).unwrap();
+                                        match feature.cardinality {
+                                            Some(Cardinality::Range(_, max)) => {
+                                                for j in 0..val_entry.len() {
+                                                    info!("PUSH Stack: {:?}", val_entry.iter().nth(j).unwrap());
+                                                    stack.push((
+                                                        instance,
+                                                        val_entry.iter().nth(j).unwrap(),
+                                                        offset * max + j,
+                                                    ));
                                                 }
                                             }
+                                            _ => (),
+                                        }
+                                    }
+                                    _ => panic!("unexpected feature"),
+                                }
 
-                                            for e in entries {
-                                                info!("Symbol Iterator {:?}, {:?}", e, path);
-                                            }
-                                    },
-                                    CardinalityEntry::EntitiyLvl(_) => panic!("Unexpected Cardinality Level"),
+                                for e in entries {
+                                    info!("Symbol Iterator {:?}, {:?}", e, path);
                                 }
                             }
-                            _ => {
-                                if let Some(sym) = file
-                                .lookup(Symbol::Root, &path.names, |sym| {
-                                    matches!(sym, Symbol::Feature(..) | Symbol::Attribute(..))
-                                })
-                                .next()
-                            {
+                            CardinalityEntry::EntitiyLvl(_) => {
+                                panic!("Unexpected Cardinality Level")
+                            }
+                        },
+                        _ => {
+                            info!("resolve - Value");
+                            if let Some(sym_ref) = file.get_all_entities(&path.names).iter().nth(offset) {
+                                let sym = sym_ref.clone();
                                 if file.type_of(sym).unwrap() == val.ty() {
                                     out.insert(ModuleSymbol { instance, sym }, val.clone());
                                     out_span.insert(ModuleSymbol { instance, sym }, path.range());
                                 } else {
                                     if let Symbol::Feature(i) = sym {
                                         let feature = file.get_feature(i).unwrap().clone();
-                                        if let Cardinality::Range(_, _) = feature.cardinality.unwrap() {
+                                        if let Cardinality::Range(_, _) =
+                                            feature.cardinality.unwrap()
+                                        {
                                             out.insert(ModuleSymbol { instance, sym }, val.clone());
-                                            out_span
-                                                .insert(ModuleSymbol { instance, sym }, path.range());
+                                            out_span.insert(
+                                                ModuleSymbol { instance, sym },
+                                                path.range(),
+                                            );
                                         } else {
                                             err(
                                                 path.range(),
@@ -244,10 +262,8 @@ impl Module {
                             } else {
                                 err(path.range(), format!("unresolved value",));
                             }
-                            }
-                        } 
-                      
-                    }
+                        }
+                    },
                     ConfigEntry::Import(path, val) => {
                         if let Some(sym) = file
                             .lookup(Symbol::Root, &path.names, |sym| {
@@ -255,7 +271,7 @@ impl Module {
                             })
                             .find(|sym| matches!(sym, Symbol::Import(..)))
                         {
-                            stack.push((self.get_instance(instance, sym), &val));
+                            stack.push((self.get_instance(instance, sym), &val, offset));
                         } else {
                             err(path.range(), format!("unresolved import",));
                         }
@@ -263,6 +279,7 @@ impl Module {
                 }
             }
         }
+        info!("resolve config {:?}", out);
         (out, out_span)
     }
 
@@ -351,7 +368,6 @@ impl ConfigModule {
                 "VISIT: {:?}",
                 file.name(child).unwrap_or(Ustr::from("Error"))
             );
-            info!("CHILD: {:?}", child);
             match child {
                 Symbol::Feature(id) => {
                     let feature = file.get_feature(id).unwrap();

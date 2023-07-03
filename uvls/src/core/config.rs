@@ -260,11 +260,17 @@ fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
                     "array" =>{
                         let children = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
                             visit_children(state, |state| {
-                                state.goto_field("value");
-                                visit_children(state, opt_configs)
+                                state.goto_field("array");
+                                opt_configs(state)
+                               
                             })
                         });
-                        info!("{:?}",children);
+                        info!("JSON Children: {:?}",children);
+                        info!("JSON Children len: {:?}",val.child_count());
+                        info!("JSON Children zero: {:?}",val.child(0));
+                        // for i in 0..val.child_count() {
+                        //     info!("Child {}: {:?}", i, opt_configs(val.child(i)))
+                        // }
                         acc.push(ConfigEntry::Value(key, ConfigValue::Bool(true)));
                     }
                     _ => {
@@ -272,6 +278,8 @@ fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
                     }
                 }
             }
+        }else{
+            info!("state {}", state.kind());
         }
     });
     acc
