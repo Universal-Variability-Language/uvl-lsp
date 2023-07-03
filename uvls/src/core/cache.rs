@@ -348,7 +348,7 @@ impl FileSystem {
                                         let name_up = check_path.join("/");
                                         if valid_path {
                                             let new_name =
-                                                name_up.replace("/", ".").replace(".uvl", "");
+                                                name_up.replace("/", ".").replace("\\", ".").replace(".uvl", "");
                                             // safe file for autoCompletion
                                             stack.push((
                                                 new_name.as_str().into(),
