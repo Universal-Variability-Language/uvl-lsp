@@ -930,6 +930,10 @@
     "named": false
   },
   {
+    "type": "Arithmetic",
+    "named": false
+  },
+  {
     "type": "Boolean",
     "named": false
   },
@@ -942,19 +946,11 @@
     "named": false
   },
   {
-    "type": "SAT-level",
-    "named": false
-  },
-  {
-    "type": "SMT-level",
-    "named": false
-  },
-  {
     "type": "String",
     "named": false
   },
   {
-    "type": "TYPE-level",
+    "type": "Type",
     "named": false
   },
   {
