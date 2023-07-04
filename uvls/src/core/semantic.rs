@@ -2,13 +2,13 @@ use crate::core::*;
 
 use hashbrown::{HashMap, HashSet};
 use log::info;
+use percent_encoding::percent_decode_str;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tower_lsp::lsp_types::*;
 use ustr::Ustr;
-use percent_encoding::percent_decode_str;
 
 pub type Snapshot = Arc<RootGraph>;
 #[derive(Hash, PartialEq, Eq, Clone, Copy)]
@@ -192,9 +192,15 @@ impl RootGraph {
         {
             let mut file_paths = HashSet::new();
             for file in files.values() {
-                if !file_paths.insert(file.path.as_slice()) {
-                    //info!("{:?}", file.namespace());
-                    if let Some(ns) = file.namespace() {
+                if let Some(ns) = file.namespace() {
+                    //create path with namespace if namespace exists and check if it is already defined                    
+                    let mut path : Vec<String> = file.path.clone().iter().map(|s| s.to_string()).collect();
+                    let ns_path : Vec<String> = ns.names.iter().map(|s| s.to_string()).collect();
+                    let len = file.path.len().saturating_sub(ns.names.len());
+                    path.truncate(len);
+                    path.extend_from_slice(&ns_path);
+                    let path_str = path.join(".");
+                    if !file_paths.insert(path_str) {
                         if err.errors.contains_key(&file.id) {
                             err.span(ns.range(), file.id, 100, "namespace already defined");
                         }
