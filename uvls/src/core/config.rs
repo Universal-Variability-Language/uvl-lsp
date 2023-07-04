@@ -1,10 +1,9 @@
-use std::{fmt::Display, path, error::Error};
 use crate::core::*;
+use std::fmt::Display;
 
+use crate::ide::completion::*;
 use ast::*;
 use check::ErrorInfo;
-use serde_json::Deserializer;
-use crate::ide::completion::*;
 use parse::SymbolSlice;
 use semantic::{FileID, RootGraph};
 use util::*;
@@ -32,7 +31,7 @@ use ustr::Ustr;
 //
 //}
 //This representation is very compact since it avoids rewriting long import prefixes but slightly
-//more complex than just using the direct raw path to external symbols. 
+//more complex than just using the direct raw path to external symbols.
 //JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
 //crate for span information and partial parsing so error reporting becomes impossible.
 
@@ -48,14 +47,14 @@ pub enum ConfigValue {
     Bool(bool),
     Number(f64),
     String(String),
-    Cardinality(CardinalityEntry)
+    Cardinality(CardinalityEntry),
 }
 
 impl Serialize for CardinalityEntry {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer {
-
+    where
+        S: serde::Serializer,
+    {
         use serde::ser::SerializeSeq;
         match self {
             CardinalityEntry::CardinalityLvl(childs) => {
@@ -64,11 +63,15 @@ impl Serialize for CardinalityEntry {
                     let _ = s.serialize_element(&CardinalityEntry::EntitiyLvl(child.to_owned()));
                 }
                 s.end()
-
             }
-            CardinalityEntry::EntitiyLvl(childs) => {
-                ConfigEntry::Import(Path { names: vec![], spans: vec![] }, childs.to_owned()).serialize(serializer)
-            }
+            CardinalityEntry::EntitiyLvl(childs) => ConfigEntry::Import(
+                Path {
+                    names: vec![],
+                    spans: vec![],
+                },
+                childs.to_owned(),
+            )
+            .serialize(serializer),
         }
     }
 }
@@ -116,13 +119,11 @@ impl Serialize for ConfigEntry {
     where
         S: serde::Serializer,
     {
-        use serde::ser::{SerializeMap,SerializeSeq, SerializeStruct};
-
+        use serde::ser::SerializeMap;
 
         match self {
-            ConfigEntry::Value(p,k) => {
-                info!("Here I dould normally panic");
-                serializer.serialize_bool(true)
+            ConfigEntry::Value(_p, _k) => {
+                panic!("Unexpected Value");
             }
             ConfigEntry::Import(_, v) => {
                 let mut s = serializer.serialize_map(Some(v.len()))?;
@@ -144,13 +145,19 @@ impl Serialize for ConfigEntry {
 
 impl<'de> Deserialize<'de> for ConfigEntry {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de> 
+    where
+        D: serde::Deserializer<'de>,
     {
         let s = Deserialize::deserialize(deserializer)?;
         info!("deserialize {:?}", s);
 
-        Ok(ConfigEntry::Value(Path { names: vec![Ustr::from("importZZZ")], spans: vec![] }, ConfigValue::Bool(true)))
+        Ok(ConfigEntry::Value(
+            Path {
+                names: vec![Ustr::from("importZZZ")],
+                spans: vec![],
+            },
+            ConfigValue::Bool(true),
+        ))
 
         // match deserializer {
         //     ConfigEntry::Import(_, _ ) => Ok(ConfigEntry::Value(Path { names: vec![Ustr::from("importZZZ")], spans: vec![] }, ConfigValue::Bool(true))),
@@ -219,6 +226,7 @@ impl<'a> Visitor<'a> for State<'a> {
 fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
     let mut acc = Vec::new();
     visit_siblings(state, |state| {
+        info!("KIND: {:?}", state.kind());
         if state.kind() == "pair" {
             if let Some(key) = state
                 .child_by_name("key")
@@ -257,29 +265,39 @@ fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
                         });
                         acc.push(ConfigEntry::Import(key, children));
                     }
-                    "array" =>{
-                        let children = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
-                            visit_children(state, |state| {
-                                state.goto_field("array");
-                                opt_configs(state)
-                               
-                            })
+                    "array" => {
+                        let mut children: Vec<Vec<ConfigEntry>> = vec![];
+
+                        state.goto_first_child();
+                        state.goto_field("value");
+                        state.goto_first_child();
+
+                        visit_siblings(state, |state: &mut State<'_>| {
+                            if state.kind() == "object" {
+                                let children_object =
+                                    stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
+                                        visit_children(state, |state| opt_configs(state))
+                                    });
+                                children.push(children_object);
+                            }
                         });
-                        info!("JSON Children: {:?}",children);
-                        info!("JSON Children len: {:?}",val.child_count());
-                        info!("JSON Children zero: {:?}",val.child(0));
-                        // for i in 0..val.child_count() {
-                        //     info!("Child {}: {:?}", i, opt_configs(val.child(i)))
-                        // }
-                        acc.push(ConfigEntry::Value(key, ConfigValue::Bool(true)));
+                        state.goto_parent();
+                        state.goto_parent();
+
+                        acc.push(ConfigEntry::Value(
+                            key,
+                            ConfigValue::Cardinality(CardinalityEntry::CardinalityLvl(children)),
+                        ));
                     }
                     _ => {
-                        state.push_error_node(val, 30, format!("Expect Number or Bool {:?}", val.kind()));
+                        state.push_error_node(
+                            val,
+                            30,
+                            format!("Expect Number or Bool {:?}", val.kind()),
+                        );
                     }
                 }
             }
-        }else{
-            info!("state {}", state.kind());
         }
     });
     acc
@@ -398,7 +416,11 @@ fn json_path<'a>(mut node: Node, rope: &'a Rope) -> Vec<String> {
     while let Some(p) = node.parent() {
         if node.kind() == "object" && p.kind() == "pair" {
             if let Some(key) = p.child_by_field_name("key").and_then(|k| k.named_child(0)) {
-                ctx.push(rope.slice(key.byte_range()).to_string().replace(r#"\"""#,"") )
+                ctx.push(
+                    rope.slice(key.byte_range())
+                        .to_string()
+                        .replace(r#"\"""#, ""),
+                )
             }
         }
         node = p;
@@ -442,12 +464,9 @@ fn find_json_key<'a>(mut root: Node<'a>, source: &Rope, key: &[Ustr]) -> Option<
         if cursor.goto_first_child() {
             loop {
                 if let Some(name) = cursor.node().child_by_field_name("key") {
-                 
-
                     if source.slice_raw(name.named_child(0)?.byte_range()) == k.as_str() {
                         root = cursor.node().child_by_field_name("value")?;
 
-            
                         break;
                     }
                 }
@@ -497,40 +516,35 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
     let slice: std::borrow::Cow<'_, _> = source.line(line).into();
     let start_byte = source.line_to_byte(line);
     let pos_byte = byte_offset(pos, source) - start_byte;
-  
+
     RE.captures(&slice)
         .iter()
-        .find_map(|cap| {
-
-
-            match (cap.get(1), cap.get(2)) {
-                (Some(key), Some(val)) => {
-                    if key.range().overlaps(pos_byte) {
-                        Some(JSONItem::Key {
-                            key: offset(key.range(), start_byte),
-                            value: Some(offset(val.range(), start_byte)),
-                        })
-                    } else if val.range().overlaps(pos_byte) {
-                        Some(JSONItem::Value {
-                            key: offset(key.range(), start_byte),
-                            value: offset(val.range(), start_byte),
-                        })
-                    } else {
-                        None
-                    }
+        .find_map(|cap| match (cap.get(1), cap.get(2)) {
+            (Some(key), Some(val)) => {
+                if key.range().overlaps(pos_byte) {
+                    Some(JSONItem::Key {
+                        key: offset(key.range(), start_byte),
+                        value: Some(offset(val.range(), start_byte)),
+                    })
+                } else if val.range().overlaps(pos_byte) {
+                    Some(JSONItem::Value {
+                        key: offset(key.range(), start_byte),
+                        value: offset(val.range(), start_byte),
+                    })
+                } else {
+                    None
                 }
-                (Some(key), None) if key.range().overlaps(pos_byte) => Some(JSONItem::Key {
-                    key: offset(key.range(), start_byte),
-                    value: None,
-                }),
-                _ => None,
             }
+            (Some(key), None) if key.range().overlaps(pos_byte) => Some(JSONItem::Key {
+                key: offset(key.range(), start_byte),
+                value: None,
+            }),
+            _ => None,
         })
         .or_else(|| {
             lazy_static! {
                 static ref RE: Regex = Regex::new(r#""((?:[^"\\]|\\.)*)""#).unwrap();
             };
-
 
             RE.captures(&slice).iter().find_map(|cap| {
                 info!("Cap: {:#?} ", cap);
@@ -551,7 +565,6 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
                 .chars()
                 .all(|c| c.is_alphanumeric() || c.is_whitespace() || c == '.')
             {
-           
                 let start = slice
                     .char_indices()
                     .take_while(|(_, c)| c.is_whitespace())
@@ -566,7 +579,6 @@ fn estimate_json_item(pos: &Position, source: &Rope) -> Option<JSONItem> {
                     .unwrap_or_default()
                     .0
                     + start;
-   
 
                 if (start..last + 1).contains(&pos_byte) {
                     Some(JSONItem::FreeKey(offset(start..last + 1, start_byte)))
@@ -641,7 +653,7 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
                 .collect();
             info!("path:{path:#?}");
             info!("prefix:{prefix:#?}");
-            info!("char:{}",source.char(char));
+            info!("char:{}", source.char(char));
             if source.char(char) == '.' {
                 Some(CompletionQuery {
                     offset: CompletionOffset::Dot,
@@ -665,7 +677,7 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
                             source,
                         )?,
                     },
-                    prefix:prefix[0..prefix.len().saturating_sub(1)].to_vec(),
+                    prefix: prefix[0..prefix.len().saturating_sub(1)].to_vec(),
                     postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
                 })
             }
@@ -689,12 +701,15 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
                             start: src_pos.clone(),
                             end: src_pos.clone(),
                         },
-                        key_start:if path.len()>0{
-                            let start = lsp_position( path.spans[0].start,source).clone().unwrap();
-                            Some(Range{start:start.clone(),end:start})
-                        }else{
+                        key_start: if path.len() > 0 {
+                            let start = lsp_position(path.spans[0].start, source).clone().unwrap();
+                            Some(Range {
+                                start: start.clone(),
+                                end: start,
+                            })
+                        } else {
                             None
-                        }
+                        },
                     },
                     prefix,
                     postfix: CompactString::new_inline(""),
@@ -708,14 +723,17 @@ pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Optio
                             path.spans.last().cloned().unwrap_or(key),
                             source,
                         )?,
-                        key_start:if path.len()>1{
-                            let start = lsp_position( path.spans[0].start,source).clone().unwrap();
-                            Some(Range{start:start.clone(),end:start})
-                        }else{
+                        key_start: if path.len() > 1 {
+                            let start = lsp_position(path.spans[0].start, source).clone().unwrap();
+                            Some(Range {
+                                start: start.clone(),
+                                end: start,
+                            })
+                        } else {
                             None
-                        }
+                        },
                     },
-                    prefix:prefix[0..prefix.len().saturating_sub(1)].to_vec(),
+                    prefix: prefix[0..prefix.len().saturating_sub(1)].to_vec(),
                     postfix: path.names.last().map(|s| s.as_str()).unwrap_or("").into(),
                 })
             }
