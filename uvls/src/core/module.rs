@@ -1,10 +1,10 @@
+use tokio::time::Instant;
 use crate::core::*;
+use resolve;
 use config::*;
 use hashbrown::HashMap;
 use indexmap::IndexSet;
 use log::info;
-use resolve;
-use tokio::time::Instant;
 use ustr::Ustr;
 
 use std::sync::Arc;
@@ -167,7 +167,8 @@ impl Module {
             _ => panic!("{src_sym:?} not a value"),
         }
     }
-    //Bind a recursive configuration doc to a linear set of symbols
+    // Bind a recursive configuration doc to a linear set of symbols
+    // Add layer for cardinality
     pub fn resolve_config<E: FnMut(Span, String)>(
         &self,
         doc: &Vec<ConfigEntry>,
@@ -179,30 +180,27 @@ impl Module {
         assert!(self.ok);
         let mut out = HashMap::new();
         let mut out_span = HashMap::new();
+        // offset is used for mapping to different entities of a cardinality and its children
         let mut stack = vec![(InstanceID(0), doc.as_slice(), 0 as usize)];
         while let Some((instance, config, offset)) = stack.pop() {
-            info!("instance: {:?}, config:{:?}",instance, config);
             let file = self.file(instance);
             for c in config.iter() {
                 match c {
                     ConfigEntry::Value(path, val) => match val {
-                        ConfigValue::Cardinality(entry) => match entry {
-                            CardinalityEntry::CardinalityLvl(val_entry) => {
-                                info!("resolve - Cardinality");
-                                let vec_entries =  file.get_all_entities(&path.names.clone());
-                                let entries = vec_entries.iter().nth(offset);
-                                info!("Cardinality entries: {:?}", entries);
+                        ConfigValue::Cardinality(cardinality) => match cardinality {
+                            CardinalityEntry::CardinalityLvl(cardinality_lvl) => {
+                                let entries =  file.get_all_entities(&path.names.clone());
+                                let entries = entries.iter().nth(offset);
                                 match entries {
-                                    Some(Symbol::Feature(i)) => {
-                                        let feature = file.get_feature(i.clone()).unwrap();
+                                    Some(Symbol::Feature(id)) => {
+                                        let feature = file.get_feature(id.clone()).unwrap();
                                         match feature.cardinality {
                                             Some(Cardinality::Range(_, max)) => {
-                                                for j in 0..val_entry.len() {
-                                                    info!("PUSH Stack: {:?}", val_entry.iter().nth(j).unwrap());
+                                                for i in 0..cardinality_lvl.len() {
                                                     stack.push((
                                                         instance,
-                                                        val_entry.iter().nth(j).unwrap(),
-                                                        offset * max + j,
+                                                        cardinality_lvl.iter().nth(i).unwrap(),
+                                                        offset * max + i,
                                                     ));
                                                 }
                                             }
@@ -211,17 +209,12 @@ impl Module {
                                     }
                                     _ => panic!("unexpected feature"),
                                 }
-
-                                for e in entries {
-                                    info!("Symbol Iterator {:?}, {:?}", e, path);
-                                }
                             }
                             CardinalityEntry::EntitiyLvl(_) => {
-                                panic!("Unexpected Cardinality Level")
+                                panic!("unexpected cardinality level")
                             }
                         },
                         _ => {
-                            info!("resolve - Value");
                             if let Some(sym_ref) = file.get_all_entities(&path.names).iter().nth(offset) {
                                 let sym = sym_ref.clone();
                                 if file.type_of(sym).unwrap() == val.ty() {
@@ -279,7 +272,6 @@ impl Module {
                 }
             }
         }
-        info!("resolve config {:?}", out);
         (out, out_span)
     }
 
@@ -329,22 +321,6 @@ impl ConfigModule {
         }
 
         entries.append(&mut self.serialize_rec_file(Symbol::Root, file, i));
-        // file.visit_named_children(Symbol::Root, false, |sym, prefix| match sym {
-        //     Symbol::Feature(_) | Symbol::Attribute(_) => {
-        //         if let Some(config) = self.values.get(&i.sym(sym)) {
-        //             entries.push(ConfigEntry::Value(
-        //                 Path {
-        //                     names: prefix.to_vec(),
-        //                     spans: Vec::new(),
-        //                 },
-        //                 config.clone(),
-        //             ))
-        //         }
-        //         true
-        //     }
-        //     _ => false,
-        // });
-
         ConfigEntry::Import(
             Path {
                 names: path.to_vec(),
@@ -354,6 +330,7 @@ impl ConfigModule {
         )
     }
 
+    // serialize file recursive while accommodate for cardinality
     fn serialize_rec_file(
         &self,
         sym: Symbol,
@@ -361,6 +338,7 @@ impl ConfigModule {
         i: InstanceID,
     ) -> Vec<ConfigEntry> {
         let mut entries: Vec<ConfigEntry> = Vec::new();
+        // used for different entities of cardinality
         let mut child_map: HashMap<Ustr, Vec<Vec<ConfigEntry>>> = hashbrown::HashMap::new();
 
         for child in file.direct_children(sym) {
@@ -381,9 +359,10 @@ impl ConfigModule {
                             entries.append(&mut self.serialize_rec_file(child, file, i));
                         }
                         Some(Cardinality::Range(_, _)) => {
-                            let mut child_entries: Vec<ConfigEntry> = vec![];
+                            let mut cardinal_entry: Vec<ConfigEntry> = vec![];
+                            // add self to cardinality definition
                             if let Some(config) = self.values.get(&i.sym(child)) {
-                                child_entries.push(ConfigEntry::Value(
+                                cardinal_entry.push(ConfigEntry::Value(
                                     Path {
                                         names: vec![file.name(child).unwrap()],
                                         spans: Vec::new(),
@@ -391,28 +370,20 @@ impl ConfigModule {
                                     config.clone(),
                                 ));
                             }
-                            child_entries.append(&mut self.serialize_rec_file(child, file, i));
-                            if child_entries.len() > 0 {
+                            cardinal_entry.append(&mut self.serialize_rec_file(child, file, i));
+                            if cardinal_entry.len() > 0 {
                                 child_map
                                     .get_mut(&file.name(child).unwrap())
                                     .and_then(|x| {
-                                        x.push(child_entries.clone());
+                                        x.push(cardinal_entry.clone());
                                         Some(())
                                     })
                                     .or_else(|| {
                                         child_map
-                                            .insert(file.name(child).unwrap(), vec![child_entries]);
+                                            .insert(file.name(child).unwrap(), vec![cardinal_entry]);
                                         Some(())
                                     });
                             }
-                            
-                            // entries.push(ConfigEntry::Value(
-                            //     Path {
-                            //         names: vec![file.name(child).unwrap()],
-                            //         spans: Vec::new(),
-                            //     },
-                            //     ConfigValue::Cardinality(child_entries)
-                            // ));
                         }
                         None => (),
                     }
@@ -445,7 +416,6 @@ impl ConfigModule {
                 )),
             ))
         }
-        info!("entries: {:?}", entries);
         return entries;
     }
 

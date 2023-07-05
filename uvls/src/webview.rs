@@ -212,7 +212,6 @@ fn create_file_tree(
     config: &HashMap<ModuleSymbol, ConfigValue>,
     entries: &mut IndexMap<ModuleSymbol, UIEntry>,
 ) {
-    info!("config_web{:?}", config);
     let mut last = Symbol::Root;
     let mut vdir = 0;
     file.visit_children_depth(Symbol::Root, true, |sym, depth| match sym {
@@ -265,7 +264,7 @@ fn create_file_tree(
 
             let ms = instance.sym(sym);
             let config = config.get(&ms).cloned();
-            // info!("Config Check. MS:{:?}, config: :{:?}", ms, config);
+
             entries.insert(
                 ms,
                 UIEntry {
@@ -305,7 +304,6 @@ fn create_file_tree(
                     },
                 },
             );
-            // info!("entries: {:?}:", entries);
             last = sym;
             true
         }

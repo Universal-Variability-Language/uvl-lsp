@@ -598,8 +598,7 @@ pub async fn web_view_handler(
                         .send(webview::UIAction::UpdateSMTModel(model, tag))
                         .await?;
                 }
-                Err(e) => {
-                    
+                Err(e) => {         
                     inlay_state.maybe_reset(inlay_source).await;
                     tx_ui
                         .send(webview::UIAction::UpdateSMTInvalid(format!("{e}"), tag))

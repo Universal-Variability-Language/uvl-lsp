@@ -289,6 +289,7 @@ fn opt_int(node: Node, state: &mut VisitorGraph) -> Option<usize> {
         None
     }
 }
+// returns cardinality for Node
 fn opt_cardinality(node: Node, state: &mut VisitorGraph) -> Option<Cardinality> {
     let begin = node.child_by_field_name("begin");
     let end = node.child_by_field_name("end");

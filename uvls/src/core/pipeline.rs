@@ -91,7 +91,6 @@ async fn draft_handler(
         }
     };
     info!("started draft handler {uri}");
-    info!("draft: {:?}" , draft);
     spawn(make_red_tree(draft.clone(), uri.clone(), tx_link.clone()));
     while let Some(msg) = rx.recv().await {
         match msg {

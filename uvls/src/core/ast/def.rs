@@ -70,7 +70,6 @@ pub enum GroupMode {
 pub enum Cardinality {
     Range(usize, usize),
     Fixed,
-
 }
 #[derive(Clone, Debug)]
 pub enum LanguageLevelMajor {
@@ -113,7 +112,7 @@ pub struct Feature {
     pub cardinality: Option<Cardinality>,
     pub ty: Type,
     pub duplicate:  bool,
-    pub first_cardinality_child: bool,
+    pub first_cardinality_child: bool, // used to fix same name problem
 }
 #[derive(Clone, Debug)]
 pub struct Import {

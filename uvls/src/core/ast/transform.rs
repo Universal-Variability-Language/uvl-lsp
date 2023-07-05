@@ -99,6 +99,7 @@ impl<'a> VisitorState<'a> {
             let new_scope = if let Some(name) = self.ast.name(node) {
                 match node {
                     Symbol::Feature(i) => {
+                        // removes duplicate feature error for cardinality
                         if !self.ast.get_feature(i).unwrap().duplicate {
                             if let Some(old) = self
                                 .ast
@@ -1004,6 +1005,7 @@ fn visit_feature(
         first_cardinality_child: true,
     };
 
+    // remaps feature to different entities of the cardinality
     let mut sym = vec![];
 
     match feature.clone().cardinality.unwrap() {
@@ -1022,7 +1024,6 @@ fn visit_feature(
                 }
                 state.ast.features.push(dup_feature);
                 state.push_child(parent, sym.get(i).unwrap().clone());
-                // TODO parent remapping
             }
         }
     }
@@ -1287,8 +1288,6 @@ pub fn visit_root(source: Rope, tree: Tree, uri: Url, timestamp: Instant) -> Ast
             source: &source,
         };
         visit_children(&mut state, visit_top_lvl);
-        info!("{:?}", state.ast.structure);
-        info!("{:?}", state.ast.features);
         state.connect();
         (state.ast, state.errors)
     };

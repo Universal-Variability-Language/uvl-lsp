@@ -35,6 +35,7 @@ impl ErrorInfo {
     }
 }
 pub async fn publish(client: &Client, uri: &Url, err: &[ErrorInfo]) {
+    // reduces cardinality error to one error
     let mut reduced_err = vec![];
     err.iter().for_each(|ele| if !reduced_err.contains(ele) {reduced_err.push(ele.clone())});
     if let Some(max) = reduced_err.clone().into_iter().max_by_key(|e| e.weight) {

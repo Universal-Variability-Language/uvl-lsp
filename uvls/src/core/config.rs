@@ -1,13 +1,11 @@
 use crate::core::*;
 use std::fmt::Display;
-
 use crate::ide::completion::*;
 use ast::*;
 use check::ErrorInfo;
 use parse::SymbolSlice;
 use semantic::{FileID, RootGraph};
 use util::*;
-
 use itertools::Itertools;
 use log::info;
 use ropey::Rope;
@@ -35,6 +33,9 @@ use ustr::Ustr;
 //JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
 //crate for span information and partial parsing so error reporting becomes impossible.
 
+
+// This enum is used for storing a cardinality inside of ConfigEntry
+// EntitiyLvl is only used to serialize cardinality.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub enum CardinalityEntry {
     CardinalityLvl(Vec<Vec<ConfigEntry>>),
@@ -75,7 +76,6 @@ impl Serialize for CardinalityEntry {
         }
     }
 }
-
 impl ConfigValue {
     pub fn ty(&self) -> Type {
         match self {
@@ -122,9 +122,7 @@ impl Serialize for ConfigEntry {
         use serde::ser::SerializeMap;
 
         match self {
-            ConfigEntry::Value(_p, _k) => {
-                panic!("Unexpected Value");
-            }
+            ConfigEntry::Value(..) => panic!(),
             ConfigEntry::Import(_, v) => {
                 let mut s = serializer.serialize_map(Some(v.len()))?;
                 for i in v.iter() {
@@ -143,26 +141,19 @@ impl Serialize for ConfigEntry {
     }
 }
 
+// This is necesarry for rust compiler
 impl<'de> Deserialize<'de> for ConfigEntry {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    fn deserialize<D>(_deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let s = Deserialize::deserialize(deserializer)?;
-        info!("deserialize {:?}", s);
-
         Ok(ConfigEntry::Value(
             Path {
-                names: vec![Ustr::from("importZZZ")],
+                names: vec![],
                 spans: vec![],
             },
             ConfigValue::Bool(true),
         ))
-
-        // match deserializer {
-        //     ConfigEntry::Import(_, _ ) => Ok(ConfigEntry::Value(Path { names: vec![Ustr::from("importZZZ")], spans: vec![] }, ConfigValue::Bool(true))),
-        //     ConfigEntry::Value(path, value) => Ok(ConfigEntry::Value(Path { names: vec![Ustr::from("valueZZZ")], spans: vec![] }, ConfigValue::Bool(true)))
-        // }
     }
 }
 
@@ -226,7 +217,6 @@ impl<'a> Visitor<'a> for State<'a> {
 fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
     let mut acc = Vec::new();
     visit_siblings(state, |state| {
-        info!("KIND: {:?}", state.kind());
         if state.kind() == "pair" {
             if let Some(key) = state
                 .child_by_name("key")
@@ -332,7 +322,6 @@ fn visit_file(state: &mut State) -> Option<FileConfig> {
                         state.goto_field("value");
                         if state.kind() == "object" {
                             config = Some(visit_children(state, opt_configs));
-                            info!("config: {:?}", config);
                         } else {
                             state.push_error(30, "expected object");
                         }
