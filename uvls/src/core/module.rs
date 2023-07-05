@@ -390,21 +390,22 @@ impl ConfigModule {
                                     },
                                     config.clone(),
                                 ));
-                                child_entries.append(&mut self.serialize_rec_file(child, file, i));
-                            }else{
-                                child_entries.append(&mut self.serialize_rec_file(child, file, i));
                             }
-                            child_map
-                                .get_mut(&file.name(child).unwrap())
-                                .and_then(|x| {
-                                    x.push(child_entries.clone());
-                                    Some(())
-                                })
-                                .or_else(|| {
-                                    child_map
-                                        .insert(file.name(child).unwrap(), vec![child_entries]);
-                                    Some(())
-                                });
+                            child_entries.append(&mut self.serialize_rec_file(child, file, i));
+                            if child_entries.len() > 0 {
+                                child_map
+                                    .get_mut(&file.name(child).unwrap())
+                                    .and_then(|x| {
+                                        x.push(child_entries.clone());
+                                        Some(())
+                                    })
+                                    .or_else(|| {
+                                        child_map
+                                            .insert(file.name(child).unwrap(), vec![child_entries]);
+                                        Some(())
+                                    });
+                            }
+                            
                             // entries.push(ConfigEntry::Value(
                             //     Path {
                             //         names: vec![file.name(child).unwrap()],
