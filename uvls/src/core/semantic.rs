@@ -81,6 +81,7 @@ impl RootGraph {
             .or(self.file_by_uri(uri).map(|i| i.timestamp))
     }
     pub fn contains_id(&self, id: FileID) -> bool {
+        info!("file id: {:?}", id);
         self.files.contains_key(&id) || self.configs.contains_key(&id)
     }
     pub fn type_of(&self, sym: RootSymbol) -> Option<Type> {

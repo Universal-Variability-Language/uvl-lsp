@@ -2,15 +2,11 @@
 #![forbid(unsafe_code)]
 
 use flexi_logger::FileSpec;
-use futures_util::lock::Mutex;
 use get_port::Ops;
-use lazy_static::lazy_static;
-
 use log::info;
 use serde::Serialize;
 use tokio::{join, spawn};
 use std::io::{Read, Write};
-use std::path::{PathBuf};
 use percent_encoding::percent_decode_str;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -33,9 +29,6 @@ impl Default for Settings {
     }
 }
 
-lazy_static! {
-    pub static ref ROOT_FILE: Mutex<String> = Mutex::new("".to_string());
-}
 
 //The LSP
 struct Backend {
@@ -86,6 +79,7 @@ fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
         let modified = meta.modified()?;
 
         if !pipeline.should_load(&uri, modified) {
+            info!("load problem");
             return Ok(());
         }
         let mut data = String::new();
@@ -109,14 +103,6 @@ fn shutdown_error() -> tower_lsp::jsonrpc::Error {
 impl LanguageServer for Backend {
     async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
         #[allow(deprecated)]
-        let root_folder = init_params
-            .root_path
-            .as_deref()
-            .or_else(|| init_params.root_uri.as_ref().map(|p| p.path()))
-            .map(PathBuf::from);
-        if let Some(root_folder) = root_folder {
-            *ROOT_FILE.lock().await = root_folder.to_str().unwrap().to_string();
-        }
         if init_params
             .client_info
             .map(|info| matches!(info.name.as_str(), "Visual Studio Code"))

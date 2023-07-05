@@ -1,8 +1,8 @@
-use crate::ROOT_FILE;
 use crate::{core::*, ide::inlays::InlayHandler, load_blocking, smt};
 use check::*;
 use dashmap::DashMap;
 use document::*;
+use filetime::{set_file_mtime, FileTime};
 use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
@@ -13,7 +13,6 @@ use std::{
     },
     time::SystemTime,
 };
-use filetime::{set_file_mtime, FileTime};
 use tokio::{
     select, spawn,
     sync::{broadcast, mpsc, oneshot, watch},
@@ -503,48 +502,48 @@ impl AsyncPipeline {
     }
     //load import  if not already loaded and if the file is a uvl.json then load the corresponding uvl file
     // this method is called after the complete red tree of the uri is created
-    fn load_imports(&self, uri: &Url) {
-        let root_binding = self.rx_root.borrow();
-        let doc = root_binding.file_by_uri(&uri);
-        match doc {
-            // it is a uvl
-            Some(ast) => {
-                // get all imports
-                let imports = ast.imports();
-                for import in imports {
-                    let relative_path_string = import
-                        .path
-                        .to_file(ROOT_FILE.try_lock().unwrap().as_mut().to_string());
-                    let url_import = Url::from_file_path(&relative_path_string).unwrap();
-                    //check if import is already loaded, if not, load
-                    if !root_binding.contains(&url_import) {
-                        let pipeline = self.clone();
-                        tokio::task::spawn_blocking(move || {
-                            load_blocking(url_import, &pipeline);
-                        });
-                    }
-                }
-            }
-            // it is a uvl.json
-            None => {
-                let config = root_binding.config_by_uri(&uri);
-                match config {
-                    Some(config_doc) => {
-                        let url_file = config_doc.config.as_ref().unwrap().file.url();
-                        if !root_binding.contains(&url_file) {
+    pub fn load_imports(&self, uri: &Url) {
+            let root_binding = self.rx_root.borrow();
+            let doc = root_binding.file_by_uri(&uri);
+            match doc {
+                // it is a uvl
+                Some(ast) => {
+                    // get all imports
+                    let imports = ast.imports();
+                    for import in imports {
+                        let relative_path_string = import.path.to_file(uri.path());
+                        let url_import = Url::from_file_path(&relative_path_string).unwrap();
+                        //check if import is already loaded, if not, load
+                        if !root_binding.contains(&url_import) {
+                            info!("update");
                             let pipeline = self.clone();
-                            let open_url = uri.clone();
                             tokio::task::spawn_blocking(move || {
-                                load_blocking(url_file, &pipeline);
-                                //update modified so uvl.json can be loaded
-                                let _ = set_file_mtime(open_url.path(), FileTime::now());
-                                load_blocking(open_url, &pipeline);
+                                load_blocking(url_import, &pipeline);
                             });
                         }
                     }
-                    None => {}
+                }
+                // it is a uvl.json
+                None => {
+                    let config = root_binding.config_by_uri(&uri);
+                    match config {
+                        Some(config_doc) => {
+                            let url_file = config_doc.config.as_ref().unwrap().file.url();
+                            if !root_binding.contains(&url_file) {
+                                let pipeline = self.clone();
+                                let open_url = uri.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    load_blocking(url_file, &pipeline);
+                                    //update modified so uvl.json can be loaded
+                                    let _ = set_file_mtime(open_url.path(), FileTime::now());
+                                    load_blocking(open_url, &pipeline);
+                                });
+                            }
+                        }
+                        None => {}
+                    }
                 }
             }
         }
     }
-}
+
