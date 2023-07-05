@@ -221,17 +221,36 @@ impl Module {
                                     out.insert(ModuleSymbol { instance, sym }, val.clone());
                                     out_span.insert(ModuleSymbol { instance, sym }, path.range());
                                 } else {
-                                    if let Symbol::Feature(i) = sym {
-                                        let feature = file.get_feature(i).unwrap().clone();
-                                        if let Cardinality::Range(_, _) =
-                                            feature.cardinality.unwrap()
-                                        {
+                                    match sym {
+                                        Symbol::Feature(i) => {
+                                            let feature = file.get_feature(i).unwrap().clone();
+                                            if let Cardinality::Range(_, _) =
+                                                feature.cardinality.unwrap()
+                                            {
+                                                out.insert(ModuleSymbol { instance, sym }, val.clone());
+                                                out_span.insert(
+                                                    ModuleSymbol { instance, sym },
+                                                    path.range(),
+                                                );
+                                            } else {
+                                                err(
+                                                    path.range(),
+                                                    format!(
+                                                        "expected {} got {}",
+                                                        file.type_of(sym).unwrap(),
+                                                        val.ty()
+                                                    ),
+                                                );
+                                            }
+                                        } 
+                                        Symbol::Attribute(i) => {
                                             out.insert(ModuleSymbol { instance, sym }, val.clone());
-                                            out_span.insert(
-                                                ModuleSymbol { instance, sym },
-                                                path.range(),
-                                            );
-                                        } else {
+                                                out_span.insert(
+                                                    ModuleSymbol { instance, sym },
+                                                    path.range(),
+                                                );
+                                        }
+                                        _ => {
                                             err(
                                                 path.range(),
                                                 format!(
@@ -241,16 +260,8 @@ impl Module {
                                                 ),
                                             );
                                         }
-                                    } else {
-                                        err(
-                                            path.range(),
-                                            format!(
-                                                "expected {} got {}",
-                                                file.type_of(sym).unwrap(),
-                                                val.ty()
-                                            ),
-                                        );
-                                    }
+                                    } 
+                                        
                                 }
                             } else {
                                 err(path.range(), format!("unresolved value",));
@@ -392,7 +403,7 @@ impl ConfigModule {
                     if let Some(config) = self.values.get(&i.sym(child)) {
                         entries.push(ConfigEntry::Value(
                             Path {
-                                names: vec![file.name(child).unwrap()],
+                                names: vec![file.name(sym).unwrap(),file.name(child).unwrap()],
                                 spans: Vec::new(),
                             },
                             config.clone(),

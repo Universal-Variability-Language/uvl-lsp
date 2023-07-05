@@ -1,6 +1,7 @@
 use crate::core::*;
 use check::ErrorInfo;
 use hashbrown::HashMap;
+use itertools::Itertools;
 use ropey::Rope;
 use semantic::FileID;
 use std::hash::Hash;
@@ -11,9 +12,9 @@ use tree_sitter::Tree;
 use ustr::Ustr;
 use util::lsp_range;
 mod def;
+pub mod graph;
 mod transform;
 mod visitor;
-pub mod graph;
 pub use def::*;
 pub use visitor::*;
 //Easy to work with AST parsing and util.
@@ -176,10 +177,10 @@ impl Ast {
     fn all_features(&self) -> impl Iterator<Item = Symbol> {
         (0..self.features.len()).map(Symbol::Feature)
     }
-    fn get_feature(&self, index: usize) -> Option<&Feature>{
+    fn get_feature(&self, index: usize) -> Option<&Feature> {
         self.features.get(index)
     }
-    fn get_attribute(&self, index: usize) -> Option<&Attribute>{
+    fn get_attribute(&self, index: usize) -> Option<&Attribute> {
         self.attributes.get(index)
     }
     fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
@@ -248,8 +249,11 @@ impl AstDocument {
     pub fn all_features(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_features()
     }
-    pub fn get_feature(&self,index: usize) -> Option<&Feature>{
+    pub fn get_feature(&self, index: usize) -> Option<&Feature> {
         self.ast.get_feature(index)
+    }
+    pub fn get_attribute(&self, index: usize) -> Option<&Attribute> {
+        self.ast.get_attribute(index)
     }
     pub fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_attributes()
@@ -403,11 +407,21 @@ impl AstDocument {
         })
     }
     // returns all Symbols with same name, used for cardinality resolving
-    pub fn get_all_entities(&self,path: &[Ustr]) -> Vec<Symbol>{
+    pub fn get_all_entities(&self, path: &[Ustr]) -> Vec<Symbol> {
+        let ustr_path = Ustr::from(path.iter().map(|s| s.to_string()).join(".").as_str());
         let mut res = vec![];
         for i in 0..self.ast.features.len() {
-            if  path.last().unwrap_or(&Ustr::from("")).clone() == self.get_feature(i).unwrap().name.name{
+            if ustr_path == self.get_feature(i).unwrap().name.name {
                 res.push(Symbol::Feature(i));
+            }
+        }
+        let mut path: Vec<Ustr> = path.iter().cloned().collect();
+        if let Some(name) = path.pop() {
+            let features = self.get_all_entities(&path);
+            for i in features {
+                if let Some(sym) = self.ast.index.get(&(i, name, SymbolKind::Attribute)) {
+                    res.push(*sym);
+                }
             }
         }
         res

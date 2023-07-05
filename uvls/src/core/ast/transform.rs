@@ -102,9 +102,9 @@ impl<'a> VisitorState<'a> {
                         // removes duplicate feature error for cardinality
                         if !self.ast.get_feature(i).unwrap().duplicate {
                             if let Some(old) = self
-                                .ast
-                                .index
-                                .insert((Symbol::Root, name, SymbolKind::Feature), node)
+                            .ast
+                            .index
+                            .insert((Symbol::Root, name, SymbolKind::Feature), node)
                             {
                                 self.errors.push(ErrorInfo {
                                     location: self.ast.lsp_range(node, self.source).unwrap(),
@@ -123,12 +123,11 @@ impl<'a> VisitorState<'a> {
                         node
                     }
                     Symbol::Attribute(i) => {
-                        if !self.ast.get_attribute(i).unwrap().duplicate {
-                            if let Some(old) = self
-                                .ast
-                                .index
-                                .insert((scope, name, SymbolKind::Attribute), node)
-                            {
+                        if let Some(old) = self
+                        .ast
+                        .index
+                        .insert((scope, name, SymbolKind::Attribute), node)
+                        {
                                 self.errors.push(ErrorInfo {
                                     location: self.ast.lsp_range(node, self.source).unwrap(),
                                     severity: DiagnosticSeverity::ERROR,
@@ -141,7 +140,7 @@ impl<'a> VisitorState<'a> {
                                     weight: 20,
                                     msg: "duplicate attribute".to_string(),
                                 });
-                            };
+                            
                         }
                         self.ast.attributes[i].depth = depth;
                         node
