@@ -364,10 +364,6 @@ impl ConfigModule {
         let mut child_map: HashMap<Ustr, Vec<Vec<ConfigEntry>>> = hashbrown::HashMap::new();
 
         for child in file.direct_children(sym) {
-            info!(
-                "VISIT: {:?}",
-                file.name(child).unwrap_or(Ustr::from("Error"))
-            );
             match child {
                 Symbol::Feature(id) => {
                     let feature = file.get_feature(id).unwrap();
@@ -394,6 +390,8 @@ impl ConfigModule {
                                     },
                                     config.clone(),
                                 ));
+                                child_entries.append(&mut self.serialize_rec_file(child, file, i));
+                            }else{
                                 child_entries.append(&mut self.serialize_rec_file(child, file, i));
                             }
                             child_map
