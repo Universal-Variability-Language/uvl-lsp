@@ -14,6 +14,7 @@ mod def;
 mod transform;
 mod visitor;
 pub mod graph;
+pub mod collapse;
 pub use def::*;
 pub use visitor::*;
 //Easy to work with AST parsing and util.
