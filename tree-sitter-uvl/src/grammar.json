@@ -1415,15 +1415,15 @@
       "members": [
         {
           "type": "STRING",
-          "value": "SMT-level"
+          "value": "Boolean"
         },
         {
           "type": "STRING",
-          "value": "SAT-level"
+          "value": "Arithmetic"
         },
         {
           "type": "STRING",
-          "value": "TYPE-level"
+          "value": "Type"
         }
       ]
     },

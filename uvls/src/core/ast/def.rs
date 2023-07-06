@@ -74,32 +74,32 @@ pub enum Cardinality {
 }
 #[derive(Clone, Debug)]
 pub enum LanguageLevelMajor {
-    SAT,
-    SMT,
-    TYPE,
+    Boolean,
+    Arithmetic,
+    Type,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub enum LanguageLevelSMT {
+pub enum LanguageLevelArithmetic {
     Any,
     FeatureCardinality,
     Aggregate,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub enum LanguageLevelSAT {
+pub enum LanguageLevelBoolean {
     Any,
     GroupCardinality,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub enum LanguageLevelTYPE {
+pub enum LanguageLevelType {
     Any,
     NumericConstraints,
     StringConstraints,
 }
 #[derive(Clone, Debug)]
 pub enum LanguageLevel {
-    SAT(Vec<LanguageLevelSAT>),
-    SMT(Vec<LanguageLevelSMT>),
-    TYPE(Vec<LanguageLevelTYPE>),
+    Boolean(Vec<LanguageLevelBoolean>),
+    Arithmetic(Vec<LanguageLevelArithmetic>),
+    Type(Vec<LanguageLevelType>),
 }
 
 #[derive(Clone, Debug)]
