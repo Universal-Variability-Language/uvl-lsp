@@ -8,16 +8,13 @@ use util::*;
 
 use itertools::Itertools;
 use log::info;
-use parse::SymbolSlice;
 use ropey::Rope;
-use semantic::{FileID, RootGraph};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tree_sitter::{Node, Tree, TreeCursor};
 use ustr::Ustr;
-use util::*;
 
 //Configuration is stored in json files like this
 //{

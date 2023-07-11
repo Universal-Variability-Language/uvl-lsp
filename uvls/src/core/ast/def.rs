@@ -111,7 +111,7 @@ pub struct Feature {
     pub name: SymbolSpan,
     pub cardinality: Option<Cardinality>,
     pub ty: Type,
-    pub duplicate:  bool,
+    pub duplicate: bool,
     pub first_cardinality_child: bool, // used to fix same name problem
 }
 #[derive(Clone, Debug)]

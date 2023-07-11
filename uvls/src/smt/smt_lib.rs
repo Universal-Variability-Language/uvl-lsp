@@ -442,7 +442,9 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
         for sym_feature in file.all_features() {
             if let Symbol::Feature(id) = sym_feature {
                 let feature = file.get_feature(id).unwrap().clone();
-                if let Cardinality::Range(min,_) = feature.cardinality.unwrap_or_else(|| Cardinality::Fixed) {
+                if let Cardinality::Range(min, _) =
+                    feature.cardinality.unwrap_or_else(|| Cardinality::Fixed)
+                {
                     // Make AtLeast assertion for cardinality feature
                     if feature.first_cardinality_child {
                         let mut list = vec![];

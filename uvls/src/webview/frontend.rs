@@ -193,7 +193,7 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
                     }
                 }
             },
-            _ => rsx!{ div {
+            _ => rsx! { div {
                 config.to_string()
             }},
         };
