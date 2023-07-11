@@ -1,7 +1,7 @@
-use crate::{core::*,smt,ide::inlays::InlayHandler};
-use document::*;
+use crate::{core::*, ide::inlays::InlayHandler, smt};
 use check::*;
 use dashmap::DashMap;
+use document::*;
 use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
@@ -38,7 +38,7 @@ enum DraftMsg {
     Delete(Instant),
     Update(DidChangeTextDocumentParams, Instant),
     Snapshot(oneshot::Sender<Draft>),
-    Shutdown,//Not really needed, TODO remove this
+    Shutdown, //Not really needed, TODO remove this
 }
 //Turn a tree-sitter trees into a usable rust structure and send it to the linker
 async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
@@ -49,7 +49,8 @@ async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
             source,
             tree,
         } => {
-            let mut ast = ast::AstDocument::new(source.clone(), tree.clone(), uri.clone(), timestamp);
+            let mut ast =
+                ast::AstDocument::new(source.clone(), tree.clone(), uri.clone(), timestamp);
             ast.errors.append(&mut check::check_sanity(&tree, &source));
             ast.errors.append(&mut check::check_errors(&tree, &source));
             let _ = tx_link.send(LinkMsg::UpdateAst(Arc::new(ast))).await;
@@ -167,7 +168,7 @@ async fn link_handler(
     let mut timestamps: HashMap<Url, Instant> = HashMap::new();
     let (tx_execute, rx_execute) = watch::channel((latest_ast.clone(), latest_configs.clone(), 0));
     let mut dirty = false;
-    let mut revision = 0;//Each change is one revision
+    let mut revision = 0; //Each change is one revision
     info!("started link handler");
     spawn(link_executor(rx_execute, tx_cache, tx_err));
     let mut timer = tokio::time::interval(tokio::time::Duration::from_millis(100));
@@ -273,7 +274,7 @@ pub struct AsyncPipeline {
     tx_link: mpsc::Sender<LinkMsg>,
     //error publisher
     tx_err: mpsc::Sender<DiagnosticUpdate>,
-    //latest version of the linked files 
+    //latest version of the linked files
     rx_root: watch::Receiver<Arc<RootGraph>>,
     //fires when a file changed
     tx_dirty_tree: broadcast::Sender<()>,
@@ -284,7 +285,6 @@ pub struct AsyncPipeline {
 }
 impl AsyncPipeline {
     pub fn new(client: tower_lsp::Client) -> Self {
-
         let (tx_link, rx_link) = mpsc::channel(1024);
         let (tx_root, rx_root) = watch::channel(Arc::new(RootGraph::default()));
         let (tx_err, rx_err) = mpsc::channel(1024);

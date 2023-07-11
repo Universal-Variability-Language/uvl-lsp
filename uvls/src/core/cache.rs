@@ -370,8 +370,8 @@ impl Cache {
                                 *k,
                                 Arc::new(ConfigModule {
                                     module: Arc::new(module),
-                                    values:Default::default(),
-                                    source_map:Default::default(),
+                                    values: Default::default(),
+                                    source_map: Default::default(),
                                 }),
                             );
                         } else {

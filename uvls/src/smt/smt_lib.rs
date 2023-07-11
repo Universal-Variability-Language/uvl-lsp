@@ -165,7 +165,6 @@ impl SMTModule {
         (define-fun floor ((x Real)) Int (to_int x))
         (define-fun ceil ((x Real)) Int (ite (= (to_int x) x) (to_int x) (to_int (+ x 1)) ))
         (set-option :smt.core.minimize true)\n"
-
             .to_string();
         out
     }
@@ -304,13 +303,10 @@ impl SMTModule {
                                 stack.push(CExpr::Expr(i));
                             }
                         }
-                        Expr::Strlen(e)
-                            | Expr::Ceil(e)
-                            | Expr::Floor(e)
-                            | Expr::Not(e) => {
-                                stack.push(CExpr::End);
-                                stack.push(CExpr::Expr(e));
-                            }
+                        Expr::Strlen(e) | Expr::Ceil(e) | Expr::Floor(e) | Expr::Not(e) => {
+                            stack.push(CExpr::End);
+                            stack.push(CExpr::Expr(e));
+                        }
                         Expr::StrConcat(rhs, lhs) => {
                             stack.push(CExpr::End);
                             stack.push(CExpr::Expr(rhs));
@@ -446,7 +442,9 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
         for sym_feature in file.all_features() {
             if let Symbol::Feature(id) = sym_feature {
                 let feature = file.get_feature(id).unwrap().clone();
-                if let Cardinality::Range(min,_) = feature.cardinality.unwrap_or_else(|| Cardinality::Fixed) {
+                if let Cardinality::Range(min, _) =
+                    feature.cardinality.unwrap_or_else(|| Cardinality::Fixed)
+                {
                     // Make AtLeast assertion for cardinality feature
                     if feature.first_cardinality_child {
                         let mut list = vec![];
@@ -615,7 +613,7 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
                     return true;
                 }
                 let ms = m.sym(a);
-                 builder.push_var(ms);
+                builder.push_var(ms);
                 true
             });
         }

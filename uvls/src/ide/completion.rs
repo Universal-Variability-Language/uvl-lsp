@@ -620,7 +620,12 @@ fn add_group_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     );
 }
 fn add_lang_lvl_major_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["Boolean".into(), "Arithmetic".into(), "Type".into()]);
+    add_keywords(
+        query,
+        top,
+        w,
+        ["Boolean".into(), "Arithmetic".into(), "Type".into()],
+    );
 }
 fn add_lang_lvl_arithmetic(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(
@@ -668,7 +673,18 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     );
 }
 fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["sum".into(), "avg".into(), "len".into(), "floor".into(), "ceil".into()]);
+    add_keywords(
+        query,
+        top,
+        w,
+        [
+            "sum".into(),
+            "avg".into(),
+            "len".into(),
+            "floor".into(),
+            "ceil".into(),
+        ],
+    );
 }
 fn make_relativ_path(path: &[CompactString], origin: &[CompactString]) -> Option<CompactString> {
     if path.len() > origin.len() {
@@ -942,7 +958,10 @@ fn compute_completions_impl(
                 //make it more accurate we need to respect
                 //parenthesis
                 (CompletionEnv::Feature, offset) => {
-                    if matches!(offset, CompletionOffset::SameLine | CompletionOffset::Continuous) {
+                    if matches!(
+                        offset,
+                        CompletionOffset::SameLine | CompletionOffset::Continuous
+                    ) {
                         add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
                     }
                     if matches!(offset, CompletionOffset::Continuous | CompletionOffset::Cut) {

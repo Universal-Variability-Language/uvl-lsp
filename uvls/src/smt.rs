@@ -411,7 +411,7 @@ async fn check_base_sat(
                 for r in reasons {
                     let file = module.file(r.0.instance).id;
                     if !void_is_marked {
-                        // works only if keyword feature is the only keyword stored in the Keyword vector in the AST, but since I see no reason 
+                        // works only if keyword feature is the only keyword stored in the Keyword vector in the AST, but since I see no reason
                         // why another keyword is needed in the green tree, so the features keyword would always have id 0.
                         e.sym(Symbol::Keyword(0), file, 12, "void feature model");
                         void_is_marked = true;
@@ -598,7 +598,7 @@ pub async fn web_view_handler(
                         .send(webview::UIAction::UpdateSMTModel(model, tag))
                         .await?;
                 }
-                Err(e) => {         
+                Err(e) => {
                     inlay_state.maybe_reset(inlay_source).await;
                     tx_ui
                         .send(webview::UIAction::UpdateSMTInvalid(format!("{e}"), tag))
