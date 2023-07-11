@@ -104,6 +104,16 @@ pub trait Visitor<'a> {
             severity: DiagnosticSeverity::ERROR,
             weight: w,
             msg: error.into(),
+            error_type: ErrorType::Any,
+        });
+    }
+    fn push_error_with_type<T: Into<String>>(&mut self, w: u32, error: T, error_type: ErrorType) {
+        self.push_err_raw(ErrorInfo {
+            location: node_range(self.node(), self.source()),
+            severity: DiagnosticSeverity::ERROR,
+            weight: w,
+            msg: error.into(),
+            error_type,
         });
     }
     fn push_error_node<T: Into<String>>(&mut self, node: Node, w: u32, error: T) {
@@ -112,6 +122,7 @@ pub trait Visitor<'a> {
             severity: DiagnosticSeverity::ERROR,
             weight: w,
             msg: error.into(),
+            error_type: ErrorType::Any,
         });
     }
 }

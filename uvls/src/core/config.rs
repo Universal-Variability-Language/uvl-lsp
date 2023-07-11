@@ -1,19 +1,19 @@
 use crate::core::*;
-use std::fmt::Display;
 use crate::ide::completion::*;
 use ast::*;
 use check::ErrorInfo;
-use parse::SymbolSlice;
-use semantic::{FileID, RootGraph};
-use util::*;
 use itertools::Itertools;
 use log::info;
+use parse::SymbolSlice;
 use ropey::Rope;
+use semantic::{FileID, RootGraph};
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tree_sitter::{Node, Tree, TreeCursor};
 use ustr::Ustr;
+use util::*;
 
 //Configuration is stored in json files like this
 //{
@@ -32,7 +32,6 @@ use ustr::Ustr;
 //more complex than just using the direct raw path to external symbols.
 //JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
 //crate for span information and partial parsing so error reporting becomes impossible.
-
 
 // This enum is used for storing a cardinality inside of ConfigEntry
 // EntitiyLvl is only used to serialize cardinality.
@@ -383,6 +382,7 @@ pub fn parse_json(tree: Tree, source: Rope, uri: Url, timestamp: Instant) -> Con
                 weight: 100,
                 severity: DiagnosticSeverity::ERROR,
                 msg: "JSON syntax errors".into(),
+                error_type: ErrorType::Any,
             });
             (None, state.err)
         } else {

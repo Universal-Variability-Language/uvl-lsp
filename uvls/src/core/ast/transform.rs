@@ -90,6 +90,7 @@ impl<'a> VisitorState<'a> {
                         "duplicate import already defined in line {}",
                         self.ast.lsp_range(old, self.source).unwrap().start.line
                     ),
+                    error_type: ErrorType::Any,
                 });
             }
         }
@@ -102,21 +103,23 @@ impl<'a> VisitorState<'a> {
                         // removes duplicate feature error for cardinality
                         if !self.ast.get_feature(i).unwrap().duplicate {
                             if let Some(old) = self
-                            .ast
-                            .index
-                            .insert((Symbol::Root, name, SymbolKind::Feature), node)
+                                .ast
+                                .index
+                                .insert((Symbol::Root, name, SymbolKind::Feature), node)
                             {
                                 self.errors.push(ErrorInfo {
                                     location: self.ast.lsp_range(node, self.source).unwrap(),
                                     severity: DiagnosticSeverity::ERROR,
                                     weight: 20,
                                     msg: "duplicate feature".to_string(),
+                                    error_type: ErrorType::Any,
                                 });
                                 self.errors.push(ErrorInfo {
                                     location: self.ast.lsp_range(old, self.source).unwrap(),
                                     severity: DiagnosticSeverity::ERROR,
                                     weight: 20,
                                     msg: "duplicate feature".to_string(),
+                                    error_type: ErrorType::Any,
                                 })
                             }
                         }
@@ -124,23 +127,24 @@ impl<'a> VisitorState<'a> {
                     }
                     Symbol::Attribute(i) => {
                         if let Some(old) = self
-                        .ast
-                        .index
-                        .insert((scope, name, SymbolKind::Attribute), node)
+                            .ast
+                            .index
+                            .insert((scope, name, SymbolKind::Attribute), node)
                         {
-                                self.errors.push(ErrorInfo {
-                                    location: self.ast.lsp_range(node, self.source).unwrap(),
-                                    severity: DiagnosticSeverity::ERROR,
-                                    weight: 20,
-                                    msg: "duplicate attribute".to_string(),
-                                });
-                                self.errors.push(ErrorInfo {
-                                    location: self.ast.lsp_range(old, self.source).unwrap(),
-                                    severity: DiagnosticSeverity::ERROR,
-                                    weight: 20,
-                                    msg: "duplicate attribute".to_string(),
-                                });
-                            
+                            self.errors.push(ErrorInfo {
+                                location: self.ast.lsp_range(node, self.source).unwrap(),
+                                severity: DiagnosticSeverity::ERROR,
+                                weight: 20,
+                                msg: "duplicate attribute".to_string(),
+                                error_type: ErrorType::Any,
+                            });
+                            self.errors.push(ErrorInfo {
+                                location: self.ast.lsp_range(old, self.source).unwrap(),
+                                severity: DiagnosticSeverity::ERROR,
+                                weight: 20,
+                                msg: "duplicate attribute".to_string(),
+                                error_type: ErrorType::Any,
+                            });
                         }
                         self.ast.attributes[i].depth = depth;
                         node
@@ -168,6 +172,7 @@ impl<'a> VisitorState<'a> {
                         severity: DiagnosticSeverity::ERROR,
                         weight: 20,
                         msg: "name already defined as import directory".to_string(),
+                        error_type: ErrorType::Any,
                     });
                 }
                 if self
@@ -181,6 +186,7 @@ impl<'a> VisitorState<'a> {
                         severity: DiagnosticSeverity::ERROR,
                         weight: 20,
                         msg: "name already defined as import".to_string(),
+                        error_type: ErrorType::Any,
                     });
                 }
             }
@@ -201,6 +207,7 @@ impl<'a> VisitorState<'a> {
             severity: DiagnosticSeverity::ERROR,
             weight: w,
             msg: error.into(),
+            error_type: ErrorType::Any,
         });
     }
 }
@@ -308,7 +315,10 @@ fn opt_boolean_minor(state: &mut VisitorState) -> Option<LanguageLevelBoolean> {
     match state.kind() {
         "*" => Some(LanguageLevelBoolean::Any),
         "group-cardinality" => Some(LanguageLevelBoolean::GroupCardinality),
-        "feature-cardinality" | "aggregate-function" | "string-constraints" | "numeric-constraints" => {
+        "feature-cardinality"
+        | "aggregate-function"
+        | "string-constraints"
+        | "numeric-constraints" => {
             state.push_error(30, "not allowed under Boolean");
             None
         }
@@ -364,14 +374,14 @@ fn opt_lang_lvl(state: &mut VisitorState) -> Option<LanguageLevel> {
                         } else {
                             return None;
                         }
-                    },
+                    }
                     LanguageLevel::Boolean(v) => {
                         if let Some(lvl) = visit_children(state, opt_boolean_minor) {
                             v.push(lvl);
                         } else {
                             return None;
                         }
-                    },
+                    }
                     LanguageLevel::Type(v) => {
                         if let Some(lvl) = visit_children(state, opt_type_minor) {
                             v.push(lvl);
@@ -381,7 +391,10 @@ fn opt_lang_lvl(state: &mut VisitorState) -> Option<LanguageLevel> {
                     }
                 }
             } else {
-                state.push_error(30, "missing major level, please specify Arithmetic, Boolean or Type level");
+                state.push_error(
+                    30,
+                    "missing major level, please specify Arithmetic, Boolean or Type level",
+                );
                 return None;
             }
         }
@@ -494,7 +507,10 @@ fn opt_cardinality(node: Node, state: &mut VisitorState) -> Option<Cardinality> 
             opt_int(begin, state)?,
             opt_int(end.unwrap(), state)?,
         )),
-        (None, Some("int")) => Some(Cardinality::Range(opt_int(end.unwrap(), state)?, opt_int(end.unwrap(), state)?)),
+        (None, Some("int")) => Some(Cardinality::Range(
+            opt_int(end.unwrap(), state)?,
+            opt_int(end.unwrap(), state)?,
+        )),
         (_, _) => Some(Cardinality::Range(0, 1)),
     }
 }
@@ -601,16 +617,40 @@ fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
     if !match searched_lang_lvl.borrow() {
         LanguageLevel::Arithmetic(s) => check_sub_lang_lvls(
             |x| matches!(x, LanguageLevel::Arithmetic(_)),
-            |x| -> Option<Vec<LanguageLevelArithmetic>> {match x { LanguageLevel::Arithmetic(l) => Some(l.to_vec()), _ => None}},
-            s.clone(), includes, LanguageLevelArithmetic::Any),
+            |x| -> Option<Vec<LanguageLevelArithmetic>> {
+                match x {
+                    LanguageLevel::Arithmetic(l) => Some(l.to_vec()),
+                    _ => None,
+                }
+            },
+            s.clone(),
+            includes,
+            LanguageLevelArithmetic::Any,
+        ),
         LanguageLevel::Boolean(s) => check_sub_lang_lvls(
             |x| matches!(x, LanguageLevel::Boolean(_)),
-            |x| -> Option<Vec<LanguageLevelBoolean>> {match x { LanguageLevel::Boolean(l) => Some(l.to_vec()), _ => None}},
-            s.clone(), includes, LanguageLevelBoolean::Any),
+            |x| -> Option<Vec<LanguageLevelBoolean>> {
+                match x {
+                    LanguageLevel::Boolean(l) => Some(l.to_vec()),
+                    _ => None,
+                }
+            },
+            s.clone(),
+            includes,
+            LanguageLevelBoolean::Any,
+        ),
         LanguageLevel::Type(s) => check_sub_lang_lvls(
             |x| matches!(x, LanguageLevel::Type(_)),
-            |x| -> Option<Vec<LanguageLevelType>> {match x { LanguageLevel::Type(l) => Some(l.to_vec()), _ => None}},
-            s.clone(), includes, LanguageLevelType::Any)
+            |x| -> Option<Vec<LanguageLevelType>> {
+                match x {
+                    LanguageLevel::Type(l) => Some(l.to_vec()),
+                    _ => None,
+                }
+            },
+            s.clone(),
+            includes,
+            LanguageLevelType::Any,
+        ),
     } {
         state.push_error(
             10,
@@ -679,7 +719,8 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
 
         "number" => Some(Expr::Number(opt_number(state)?)),
         "string" => Some(Expr::String(opt_string(state)?)),
-        "binary_expr" => { check_langlvls(state, LanguageLevel::Arithmetic(vec![]));
+        "binary_expr" => {
+            check_langlvls(state, LanguageLevel::Arithmetic(vec![]));
             let op = state.child_by_name("op").unwrap();
             visit_children(state, |state| {
                 if let Some(op) = opt_numeric_op(op) {
@@ -705,11 +746,17 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
         "nested_expr" => visit_children(state, opt_numeric).map(|c| c.content),
         "function" => match state.slice(state.child_by_name("op")?).borrow() {
             "sum" | "avg" => {
-                check_langlvls(state, LanguageLevel::Arithmetic(vec![LanguageLevelArithmetic::Aggregate]));
+                check_langlvls(
+                    state,
+                    LanguageLevel::Arithmetic(vec![LanguageLevelArithmetic::Aggregate]),
+                );
                 opt_aggregate(state)
             }
             "len" => {
-                check_langlvls(state, LanguageLevel::Type(vec![LanguageLevelType::StringConstraints]));
+                check_langlvls(
+                    state,
+                    LanguageLevel::Type(vec![LanguageLevelType::StringConstraints]),
+                );
                 if state.child_by_name("tail").is_some() {
                     state.push_error(10, "tailing comma not allowed");
                 }
@@ -729,7 +776,10 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
                 })
             }
             "floor" | "ceil" => {
-                check_langlvls(state, LanguageLevel::Type(vec![LanguageLevelType::NumericConstraints]));
+                check_langlvls(
+                    state,
+                    LanguageLevel::Type(vec![LanguageLevelType::NumericConstraints]),
+                );
                 opt_integer(state)
             }
             _ => {
@@ -956,7 +1006,10 @@ fn visit_feature(
             .unwrap()
             .child_by_field_name("cardinality")
             .and_then(|n| {
-                check_langlvls(state, LanguageLevel::Arithmetic(vec![LanguageLevelArithmetic::FeatureCardinality]));
+                check_langlvls(
+                    state,
+                    LanguageLevel::Arithmetic(vec![LanguageLevelArithmetic::FeatureCardinality]),
+                );
                 opt_cardinality(n, state)
             })
             .or_else(|| Some(Cardinality::Fixed)),
@@ -1116,7 +1169,16 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
             visit_group(state, parent, GroupMode::Cardinality(card), duplicate);
         }
         _ => {
-            state.push_error(40, "expected a feature or group declaration");
+            if state.kind() == "constraint" && state.name(state.cursor().node()).contains("-") {
+                // todo check if also for groups
+                state.push_error_with_type(
+                    40,
+                    "name contains a dash (-)",
+                    ErrorType::FeatureNameContainsDashes,
+                )
+            } else {
+                state.push_error(40, "expected a feature or group declaration");
+            }
         }
     }
 }

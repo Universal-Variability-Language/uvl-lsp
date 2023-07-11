@@ -9,6 +9,21 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::Client;
 use tree_sitter::{Node, QueryCursor, Tree};
 
+// This type is used to provide quickactions for a error
+#[derive(Clone, Debug, PartialEq)]
+pub enum ErrorType {
+    Any = 0,
+    FeatureNameContainsDashes,
+}
+
+impl ErrorType {
+    pub fn from_u32(value: u32) -> ErrorType {
+        match value {
+            1 => ErrorType::FeatureNameContainsDashes,
+            _ => ErrorType::Any,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ErrorInfo {
@@ -16,6 +31,7 @@ pub struct ErrorInfo {
     pub severity: DiagnosticSeverity,
     pub weight: u32,
     pub msg: String,
+    pub error_type: ErrorType,
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +46,9 @@ impl ErrorInfo {
             range: self.location,
             severity: Some(self.severity),
             message: self.msg,
+            data: Some(serde_json::value::Value::Number(
+                serde_json::value::Number::from(self.error_type.clone() as i32),
+            )),
             ..Default::default()
         }
     }
@@ -37,12 +56,17 @@ impl ErrorInfo {
 pub async fn publish(client: &Client, uri: &Url, err: &[ErrorInfo]) {
     // reduces cardinality error to one error
     let mut reduced_err = vec![];
-    err.iter().for_each(|ele| if !reduced_err.contains(ele) {reduced_err.push(ele.clone())});
+    err.iter().for_each(|ele| {
+        if !reduced_err.contains(ele) {
+            reduced_err.push(ele.clone())
+        }
+    });
     if let Some(max) = reduced_err.clone().into_iter().max_by_key(|e| e.weight) {
         client
             .publish_diagnostics(
                 uri.clone(),
-                reduced_err[..].iter()
+                reduced_err[..]
+                    .iter()
                     .rev()
                     .filter(|e| e.weight == max.weight)
                     .map(|i| i.clone().diagnostic())
@@ -120,6 +144,7 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
                             location: node_range(node, source),
                             severity: DiagnosticSeverity::ERROR,
                             msg: "line breaks are only allowed inside parenthesis".to_string(),
+                            error_type: ErrorType::Any,
                         });
                     }
                 }
@@ -132,6 +157,7 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
                     location: node_range(node, source),
                     severity: DiagnosticSeverity::ERROR,
                     msg: "line breaks are only allowed inside parenthesis".to_string(),
+                    error_type: ErrorType::Any,
                 });
             }
             if lines.insert(node.start_position().row, node).is_some() {
@@ -140,6 +166,7 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
                     location: node_range(node, source),
                     severity: DiagnosticSeverity::ERROR,
                     msg: "features have to be in diffrent lines".to_string(),
+                    error_type: ErrorType::Any,
                 });
             }
         } else {
@@ -150,6 +177,7 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
                     location: node_range(node, source),
                     severity: DiagnosticSeverity::ERROR,
                     msg: "multiline strings are not supported".to_string(),
+                    error_type: ErrorType::Any,
                 });
             }
         }
@@ -179,6 +207,7 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
                 severity: DiagnosticSeverity::ERROR,
                 weight: 80,
                 msg: "missing lhs or rhs expression".into(),
+                error_type: ErrorType::Any,
             };
         }
     }
@@ -187,6 +216,7 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
         severity: DiagnosticSeverity::ERROR,
         weight: 80,
         msg: "unknown syntax error".into(),
+        error_type: ErrorType::Any,
     }
 }
 pub fn check_errors(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
@@ -198,6 +228,7 @@ pub fn check_errors(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
                 severity: DiagnosticSeverity::ERROR,
                 weight: 80,
                 msg: format!("missing {}", i.kind()),
+                error_type: ErrorType::Any,
             });
             false
         } else if i.is_error() {
@@ -291,6 +322,7 @@ impl<'a> ErrorsAcc<'a> {
                 severity: DiagnosticSeverity::ERROR,
                 weight,
                 msg: s.into(),
+                error_type: ErrorType::Any,
             },
         );
     }
@@ -304,6 +336,7 @@ impl<'a> ErrorsAcc<'a> {
                 severity: DiagnosticSeverity::INFORMATION,
                 weight,
                 msg: s.into(),
+                error_type: ErrorType::Any,
             },
         );
     }
@@ -322,6 +355,7 @@ impl<'a> ErrorsAcc<'a> {
                 severity: DiagnosticSeverity::ERROR,
                 weight,
                 msg: s.into(),
+                error_type: ErrorType::Any,
             },
         );
     }
@@ -341,6 +375,7 @@ impl<'a> ErrorsAcc<'a> {
                 severity: DiagnosticSeverity::INFORMATION,
                 weight,
                 msg: s.into(),
+                error_type: ErrorType::Any,
             },
         );
     }
