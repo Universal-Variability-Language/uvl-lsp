@@ -1,10 +1,10 @@
-use tokio::time::Instant;
 use crate::core::*;
-use resolve;
 use config::*;
 use hashbrown::HashMap;
 use indexmap::IndexSet;
 use log::info;
+use resolve;
+use tokio::time::Instant;
 use ustr::Ustr;
 
 use std::sync::Arc;
@@ -189,7 +189,7 @@ impl Module {
                     ConfigEntry::Value(path, val) => match val {
                         ConfigValue::Cardinality(cardinality) => match cardinality {
                             CardinalityEntry::CardinalityLvl(cardinality_lvl) => {
-                                let entries =  file.get_all_entities(&path.names.clone());
+                                let entries = file.get_all_entities(&path.names.clone());
                                 let entries = entries.iter().nth(offset);
                                 match entries {
                                     Some(Symbol::Feature(id)) => {
@@ -215,7 +215,9 @@ impl Module {
                             }
                         },
                         _ => {
-                            if let Some(sym_ref) = file.get_all_entities(&path.names).iter().nth(offset) {
+                            if let Some(sym_ref) =
+                                file.get_all_entities(&path.names).iter().nth(offset)
+                            {
                                 let sym = sym_ref.clone();
                                 if file.type_of(sym).unwrap() == val.ty() {
                                     out.insert(ModuleSymbol { instance, sym }, val.clone());
@@ -227,7 +229,10 @@ impl Module {
                                             if let Cardinality::Range(_, _) =
                                                 feature.cardinality.unwrap()
                                             {
-                                                out.insert(ModuleSymbol { instance, sym }, val.clone());
+                                                out.insert(
+                                                    ModuleSymbol { instance, sym },
+                                                    val.clone(),
+                                                );
                                                 out_span.insert(
                                                     ModuleSymbol { instance, sym },
                                                     path.range(),
@@ -242,13 +247,13 @@ impl Module {
                                                     ),
                                                 );
                                             }
-                                        } 
-                                        Symbol::Attribute(i) => {
+                                        }
+                                        Symbol::Attribute(_) => {
                                             out.insert(ModuleSymbol { instance, sym }, val.clone());
-                                                out_span.insert(
-                                                    ModuleSymbol { instance, sym },
-                                                    path.range(),
-                                                );
+                                            out_span.insert(
+                                                ModuleSymbol { instance, sym },
+                                                path.range(),
+                                            );
                                         }
                                         _ => {
                                             err(
@@ -260,8 +265,7 @@ impl Module {
                                                 ),
                                             );
                                         }
-                                    } 
-                                        
+                                    }
                                 }
                             } else {
                                 err(path.range(), format!("unresolved value",));
@@ -390,8 +394,10 @@ impl ConfigModule {
                                         Some(())
                                     })
                                     .or_else(|| {
-                                        child_map
-                                            .insert(file.name(child).unwrap(), vec![cardinal_entry]);
+                                        child_map.insert(
+                                            file.name(child).unwrap(),
+                                            vec![cardinal_entry],
+                                        );
                                         Some(())
                                     });
                             }
@@ -403,7 +409,7 @@ impl ConfigModule {
                     if let Some(config) = self.values.get(&i.sym(child)) {
                         entries.push(ConfigEntry::Value(
                             Path {
-                                names: vec![file.name(sym).unwrap(),file.name(child).unwrap()],
+                                names: vec![file.name(sym).unwrap(), file.name(child).unwrap()],
                                 spans: Vec::new(),
                             },
                             config.clone(),
