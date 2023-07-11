@@ -519,7 +519,7 @@ impl From<Type> for CompletionKind {
     fn from(s: Type) -> Self {
         match s {
             Type::Bool => Self::Feature,
-            Type::String => Self::AttributeNumber,
+            Type::String => Self::Feature,
             Type::Namespace => Self::Import,
             Type::Real => Self::AttributeNumber,
             Type::Attributes => Self::AttributeAttributes,
@@ -620,9 +620,9 @@ fn add_group_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     );
 }
 fn add_lang_lvl_major_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["SMT-level".into(), "SAT-level".into(), "TYPE-level".into()]);
+    add_keywords(query, top, w, ["Boolean".into(), "Arithmetic".into(), "Type".into()]);
 }
-fn add_lang_lvl_smt(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+fn add_lang_lvl_arithmetic(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(
         query,
         top,
@@ -647,7 +647,7 @@ fn add_lang_lvl_type(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     );
 }
 
-fn add_lang_lvl_sat(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+fn add_lang_lvl_boolean(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(query, top, w, ["group-cardinality".into(), "*".into()]);
 }
 
@@ -941,18 +941,19 @@ fn compute_completions_impl(
                 //heuristic to provide nearly correct predictions, to
                 //make it more accurate we need to respect
                 //parenthesis
-                (CompletionEnv::Feature, CompletionOffset::SameLine) => {
-                    add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
-                }
-
-                (CompletionEnv::Feature, CompletionOffset::Cut) => {
-                    add_keywords(
-                        &ctx.postfix,
-                        &mut top,
-                        2.0,
-                        ["Integer".into(), "String".into(), "Real".into()],
-                    );
-                    completion_symbol(&snapshot, origin, &ctx, &mut top);
+                (CompletionEnv::Feature, offset) => {
+                    if matches!(offset, CompletionOffset::SameLine | CompletionOffset::Continuous) {
+                        add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
+                    }
+                    if matches!(offset, CompletionOffset::Continuous | CompletionOffset::Cut) {
+                        add_keywords(
+                            &ctx.postfix,
+                            &mut top,
+                            2.0,
+                            ["Integer".into(), "String".into(), "Real".into()],
+                        );
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    }
                 }
                 (
                     CompletionEnv::Constraint | CompletionEnv::Numeric,
@@ -995,9 +996,9 @@ fn compute_completions_impl(
         CompletionEnv::Include => {
             if !ctx.prefix.is_empty() {
                 match ctx.prefix[0].as_str() {
-                    "SAT-level" => add_lang_lvl_sat(&ctx.postfix, &mut top, 2.0),
-                    "SMT-level" => add_lang_lvl_smt(&ctx.postfix, &mut top, 2.0),
-                    "TYPE-level" => add_lang_lvl_type(&ctx.postfix, &mut top, 2.0),
+                    "Boolean" => add_lang_lvl_boolean(&ctx.postfix, &mut top, 2.0),
+                    "Arithmetic" => add_lang_lvl_arithmetic(&ctx.postfix, &mut top, 2.0),
+                    "Type" => add_lang_lvl_type(&ctx.postfix, &mut top, 2.0),
                     _ => {}
                 }
             } else {

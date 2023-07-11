@@ -172,6 +172,7 @@ impl LanguageServer for Backend {
                         },
                     ),
                 ),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 references_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Left(true)),
                 code_lens_provider: Some(CodeLensOptions {
@@ -247,6 +248,22 @@ impl LanguageServer for Backend {
             )));
         }
         Ok(None)
+    }
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let uri = params.text_document.uri;
+        let root_fileid = FileID::from_uri(&Url::parse(uri.as_str()).unwrap());
+        let root_graph = self.pipeline.root().borrow_and_update().clone();
+        if !root_graph.contains_id(root_fileid) {
+            return Ok(None);
+        }
+
+        let document = root_graph.files.get(&root_fileid).unwrap();
+        let c = ast::collapse::Collapse::new(
+            document.source.clone(),
+            document.tree.clone(),
+            uri.clone(),
+        );
+        Ok(Some(c.ranges))
     }
     async fn goto_definition(
         &self,

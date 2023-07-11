@@ -317,8 +317,8 @@ fn resolve_constraint(
                     ast_document.all_lang_lvls()
                         .map(|x| ast_document.lang_lvl(x).unwrap())
                              .any(|s|
-                                matches!(s, LanguageLevel::TYPE(x) if x.contains(&LanguageLevelTYPE::Any))
-                             || matches!(s, LanguageLevel::TYPE(x) if x.contains(&LanguageLevelTYPE::StringConstraints)))
+                                matches!(s, LanguageLevel::Type(x) if x.contains(&LanguageLevelType::Any))
+                             || matches!(s, LanguageLevel::Type(x) if x.contains(&LanguageLevelType::StringConstraints)))
                         || {let s: Vec<Symbol> = ast_document.all_lang_lvls().collect(); s.is_empty()}
                 }
             {

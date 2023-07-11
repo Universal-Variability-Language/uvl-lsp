@@ -33,16 +33,52 @@ use util::*;
 //JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
 //crate for span information and partial parsing so error reporting becomes impossible.
 
+// This enum is used for storing a cardinality inside of ConfigEntry
+// EntitiyLvl is only used to serialize cardinality.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub enum CardinalityEntry {
+    CardinalityLvl(Vec<Vec<ConfigEntry>>),
+    EntitiyLvl(Vec<ConfigEntry>),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ConfigValue {
     Bool(bool),
     Number(f64),
     String(String),
+    Cardinality(CardinalityEntry),
+}
+
+impl Serialize for CardinalityEntry {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+        match self {
+            CardinalityEntry::CardinalityLvl(childs) => {
+                let mut s = serializer.serialize_seq(Some(childs.len()))?;
+                for child in childs {
+                    let _ = s.serialize_element(&CardinalityEntry::EntitiyLvl(child.to_owned()));
+                }
+                s.end()
+            }
+            CardinalityEntry::EntitiyLvl(childs) => ConfigEntry::Import(
+                Path {
+                    names: vec![],
+                    spans: vec![],
+                },
+                childs.to_owned(),
+            )
+            .serialize(serializer),
+        }
+    }
 }
 impl ConfigValue {
     pub fn ty(&self) -> Type {
         match self {
+            Self::Cardinality(..) => Type::Object,
             Self::Bool(..) => Type::Bool,
             Self::Number(..) => Type::Real,
             Self::String(..) => Type::String,
@@ -66,6 +102,7 @@ impl Display for ConfigValue {
             Self::Bool(x) => write!(f, "{x}"),
             Self::Number(x) => write!(f, "{x}"),
             Self::String(x) => write!(f, "{x}"),
+            Self::Cardinality(_) => Ok(()),
         }
     }
 }
@@ -100,6 +137,22 @@ impl Serialize for ConfigEntry {
                 s.end()
             }
         }
+    }
+}
+
+// This is necesarry for rust compiler
+impl<'de> Deserialize<'de> for ConfigEntry {
+    fn deserialize<D>(_deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(ConfigEntry::Value(
+            Path {
+                names: vec![],
+                spans: vec![],
+            },
+            ConfigValue::Bool(true),
+        ))
     }
 }
 
@@ -201,8 +254,36 @@ fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
                         });
                         acc.push(ConfigEntry::Import(key, children));
                     }
+                    "array" => {
+                        let mut children: Vec<Vec<ConfigEntry>> = vec![];
+
+                        state.goto_first_child();
+                        state.goto_field("value");
+                        state.goto_first_child();
+
+                        visit_siblings(state, |state: &mut State<'_>| {
+                            if state.kind() == "object" {
+                                let children_object =
+                                    stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
+                                        visit_children(state, |state| opt_configs(state))
+                                    });
+                                children.push(children_object);
+                            }
+                        });
+                        state.goto_parent();
+                        state.goto_parent();
+
+                        acc.push(ConfigEntry::Value(
+                            key,
+                            ConfigValue::Cardinality(CardinalityEntry::CardinalityLvl(children)),
+                        ));
+                    }
                     _ => {
-                        state.push_error_node(val, 30, "expected a number or bool");
+                        state.push_error_node(
+                            val,
+                            30,
+                            format!("Expect Number or Bool {:?}", val.kind()),
+                        );
                     }
                 }
             }

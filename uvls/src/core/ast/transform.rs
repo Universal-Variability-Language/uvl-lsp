@@ -99,26 +99,29 @@ impl<'a> VisitorState<'a> {
         while let Some((node, scope, depth)) = stack.pop() {
             let new_scope = if let Some(name) = self.ast.name(node) {
                 match node {
-                    Symbol::Feature(..) => {
-                        if let Some(old) = self
-                            .ast
-                            .index
-                            .insert((Symbol::Root, name, SymbolKind::Feature), node)
-                        {
-                            self.errors.push(ErrorInfo {
-                                location: self.ast.lsp_range(node, self.source).unwrap(),
-                                severity: DiagnosticSeverity::ERROR,
-                                weight: 20,
-                                msg: "duplicate feature".to_string(),
-                                error_type: ErrorType::Any,
-                            });
-                            self.errors.push(ErrorInfo {
-                                location: self.ast.lsp_range(old, self.source).unwrap(),
-                                severity: DiagnosticSeverity::ERROR,
-                                weight: 20,
-                                msg: "duplicate feature".to_string(),
-                                error_type: ErrorType::Any,
-                            })
+                    Symbol::Feature(i) => {
+                        // removes duplicate feature error for cardinality
+                        if !self.ast.get_feature(i).unwrap().duplicate {
+                            if let Some(old) = self
+                                .ast
+                                .index
+                                .insert((Symbol::Root, name, SymbolKind::Feature), node)
+                            {
+                                self.errors.push(ErrorInfo {
+                                    location: self.ast.lsp_range(node, self.source).unwrap(),
+                                    severity: DiagnosticSeverity::ERROR,
+                                    weight: 20,
+                                    msg: "duplicate feature".to_string(),
+                                    error_type: ErrorType::Any,
+                                });
+                                self.errors.push(ErrorInfo {
+                                    location: self.ast.lsp_range(old, self.source).unwrap(),
+                                    severity: DiagnosticSeverity::ERROR,
+                                    weight: 20,
+                                    msg: "duplicate feature".to_string(),
+                                    error_type: ErrorType::Any,
+                                })
+                            }
                         }
                         node
                     }
@@ -142,7 +145,7 @@ impl<'a> VisitorState<'a> {
                                 msg: "duplicate attribute".to_string(),
                                 error_type: ErrorType::Any,
                             });
-                        };
+                        }
                         self.ast.attributes[i].depth = depth;
                         node
                     }
@@ -293,58 +296,58 @@ fn visit_namespace(state: &mut VisitorState) {
     }
 }
 
-fn opt_smt_minor(state: &mut VisitorState) -> Option<LanguageLevelSMT> {
+fn opt_arithmetic_minor(state: &mut VisitorState) -> Option<LanguageLevelArithmetic> {
     match state.kind() {
-        "*" => Some(LanguageLevelSMT::Any),
-        "feature-cardinality" => Some(LanguageLevelSMT::FeatureCardinality),
-        "aggregate-function" => Some(LanguageLevelSMT::Aggregate),
+        "*" => Some(LanguageLevelArithmetic::Any),
+        "feature-cardinality" => Some(LanguageLevelArithmetic::FeatureCardinality),
+        "aggregate-function" => Some(LanguageLevelArithmetic::Aggregate),
         "group-cardinality" | "string-constraints" | "numeric-constraints" => {
-            state.push_error(30, "not allowed under SMT");
+            state.push_error(30, "not allowed under Arithmetic");
             None
         }
         _ => {
-            state.push_error(30, "unknown SMT level");
+            state.push_error(30, "unknown Arithmetic level");
             None
         }
     }
 }
-fn opt_sat_minor(state: &mut VisitorState) -> Option<LanguageLevelSAT> {
+fn opt_boolean_minor(state: &mut VisitorState) -> Option<LanguageLevelBoolean> {
     match state.kind() {
-        "*" => Some(LanguageLevelSAT::Any),
-        "group-cardinality" => Some(LanguageLevelSAT::GroupCardinality),
+        "*" => Some(LanguageLevelBoolean::Any),
+        "group-cardinality" => Some(LanguageLevelBoolean::GroupCardinality),
         "feature-cardinality"
         | "aggregate-function"
         | "string-constraints"
         | "numeric-constraints" => {
-            state.push_error(30, "not allowed under SAT");
+            state.push_error(30, "not allowed under Boolean");
             None
         }
         _ => {
-            state.push_error(30, "unknown SAT level");
+            state.push_error(30, "unknown Boolean level");
             None
         }
     }
 }
-fn opt_type_minor(state: &mut VisitorState) -> Option<LanguageLevelTYPE> {
+fn opt_type_minor(state: &mut VisitorState) -> Option<LanguageLevelType> {
     match state.kind() {
-        "*" => Some(LanguageLevelTYPE::Any),
-        "numeric-constraints" => Some(LanguageLevelTYPE::NumericConstraints),
-        "string-constraints" => Some(LanguageLevelTYPE::StringConstraints),
+        "*" => Some(LanguageLevelType::Any),
+        "numeric-constraints" => Some(LanguageLevelType::NumericConstraints),
+        "string-constraints" => Some(LanguageLevelType::StringConstraints),
         "feature-cardinality" | "aggregate-function" | "group-cardinality" => {
-            state.push_error(30, "not allowed under TYPE");
+            state.push_error(30, "not allowed under Type");
             None
         }
         _ => {
-            state.push_error(30, "unknown TYPE level");
+            state.push_error(30, "unknown Type level");
             None
         }
     }
 }
 fn opt_major_lang_lvl(state: &mut VisitorState) -> Option<LanguageLevel> {
     match state.node().kind() {
-        "SMT-level" => Some(LanguageLevel::SMT(vec![])),
-        "SAT-level" => Some(LanguageLevel::SAT(vec![])),
-        "TYPE-level" => Some(LanguageLevel::TYPE(vec![])),
+        "Boolean" => Some(LanguageLevel::Boolean(vec![])),
+        "Arithmetic" => Some(LanguageLevel::Arithmetic(vec![])),
+        "Type" => Some(LanguageLevel::Type(vec![])),
         _ => {
             state.push_error(30, "unknown major language level");
             None
@@ -365,21 +368,21 @@ fn opt_lang_lvl(state: &mut VisitorState) -> Option<LanguageLevel> {
         if state.kind() == "minor_lvl" {
             if let Some(major) = out.as_mut() {
                 match major {
-                    LanguageLevel::SMT(v) => {
-                        if let Some(lvl) = visit_children(state, opt_smt_minor) {
+                    LanguageLevel::Arithmetic(v) => {
+                        if let Some(lvl) = visit_children(state, opt_arithmetic_minor) {
                             v.push(lvl);
                         } else {
                             return None;
                         }
                     }
-                    LanguageLevel::SAT(v) => {
-                        if let Some(lvl) = visit_children(state, opt_sat_minor) {
+                    LanguageLevel::Boolean(v) => {
+                        if let Some(lvl) = visit_children(state, opt_boolean_minor) {
                             v.push(lvl);
                         } else {
                             return None;
                         }
                     }
-                    LanguageLevel::TYPE(v) => {
+                    LanguageLevel::Type(v) => {
                         if let Some(lvl) = visit_children(state, opt_type_minor) {
                             v.push(lvl);
                         } else {
@@ -390,7 +393,7 @@ fn opt_lang_lvl(state: &mut VisitorState) -> Option<LanguageLevel> {
             } else {
                 state.push_error(
                     30,
-                    "missing major level, please specify SMT, SAT or TYPE level",
+                    "missing major level, please specify Arithmetic, Boolean or Type level",
                 );
                 return None;
             }
@@ -429,7 +432,7 @@ fn visit_include(state: &mut VisitorState) {
                 "lang_lvl" => visit_children(state, visit_lang_lvl),
                 "ref" => state.push_error_blk(
                     30,
-                    "unknown language level start with SMT-level, SAT-level or TYPE-level",
+                    "unknown language level start with Arithmetic, Boolean or Type",
                 ),
                 _ => {
                     state.push_error_blk(40, "expected a language level");
@@ -504,9 +507,11 @@ fn opt_cardinality(node: Node, state: &mut VisitorState) -> Option<Cardinality> 
             opt_int(begin, state)?,
             opt_int(end.unwrap(), state)?,
         )),
-        (Some(begin), Some("*")) => Some(Cardinality::From(opt_int(begin, state)?)),
-        (None, Some("int")) => Some(Cardinality::Max(opt_int(end.unwrap(), state)?)),
-        (_, _) => Some(Cardinality::Any),
+        (None, Some("int")) => Some(Cardinality::Range(
+            opt_int(end.unwrap(), state)?,
+            opt_int(end.unwrap(), state)?,
+        )),
+        (_, _) => Some(Cardinality::Range(0, 1)),
     }
 }
 
@@ -610,41 +615,41 @@ fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
     }
 
     if !match searched_lang_lvl.borrow() {
-        LanguageLevel::SMT(s) => check_sub_lang_lvls(
-            |x| matches!(x, LanguageLevel::SMT(_)),
-            |x| -> Option<Vec<LanguageLevelSMT>> {
+        LanguageLevel::Arithmetic(s) => check_sub_lang_lvls(
+            |x| matches!(x, LanguageLevel::Arithmetic(_)),
+            |x| -> Option<Vec<LanguageLevelArithmetic>> {
                 match x {
-                    LanguageLevel::SMT(l) => Some(l.to_vec()),
+                    LanguageLevel::Arithmetic(l) => Some(l.to_vec()),
                     _ => None,
                 }
             },
             s.clone(),
             includes,
-            LanguageLevelSMT::Any,
+            LanguageLevelArithmetic::Any,
         ),
-        LanguageLevel::SAT(s) => check_sub_lang_lvls(
-            |x| matches!(x, LanguageLevel::SAT(_)),
-            |x| -> Option<Vec<LanguageLevelSAT>> {
+        LanguageLevel::Boolean(s) => check_sub_lang_lvls(
+            |x| matches!(x, LanguageLevel::Boolean(_)),
+            |x| -> Option<Vec<LanguageLevelBoolean>> {
                 match x {
-                    LanguageLevel::SAT(l) => Some(l.to_vec()),
+                    LanguageLevel::Boolean(l) => Some(l.to_vec()),
                     _ => None,
                 }
             },
             s.clone(),
             includes,
-            LanguageLevelSAT::Any,
+            LanguageLevelBoolean::Any,
         ),
-        LanguageLevel::TYPE(s) => check_sub_lang_lvls(
-            |x| matches!(x, LanguageLevel::TYPE(_)),
-            |x| -> Option<Vec<LanguageLevelTYPE>> {
+        LanguageLevel::Type(s) => check_sub_lang_lvls(
+            |x| matches!(x, LanguageLevel::Type(_)),
+            |x| -> Option<Vec<LanguageLevelType>> {
                 match x {
-                    LanguageLevel::TYPE(l) => Some(l.to_vec()),
+                    LanguageLevel::Type(l) => Some(l.to_vec()),
                     _ => None,
                 }
             },
             s.clone(),
             includes,
-            LanguageLevelTYPE::Any,
+            LanguageLevelType::Any,
         ),
     } {
         state.push_error(
@@ -715,7 +720,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
         "number" => Some(Expr::Number(opt_number(state)?)),
         "string" => Some(Expr::String(opt_string(state)?)),
         "binary_expr" => {
-            check_langlvls(state, LanguageLevel::SMT(vec![]));
+            check_langlvls(state, LanguageLevel::Arithmetic(vec![]));
             let op = state.child_by_name("op").unwrap();
             visit_children(state, |state| {
                 if let Some(op) = opt_numeric_op(op) {
@@ -741,13 +746,16 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
         "nested_expr" => visit_children(state, opt_numeric).map(|c| c.content),
         "function" => match state.slice(state.child_by_name("op")?).borrow() {
             "sum" | "avg" => {
-                check_langlvls(state, LanguageLevel::SMT(vec![LanguageLevelSMT::Aggregate]));
+                check_langlvls(
+                    state,
+                    LanguageLevel::Arithmetic(vec![LanguageLevelArithmetic::Aggregate]),
+                );
                 opt_aggregate(state)
             }
             "len" => {
                 check_langlvls(
                     state,
-                    LanguageLevel::TYPE(vec![LanguageLevelTYPE::StringConstraints]),
+                    LanguageLevel::Type(vec![LanguageLevelType::StringConstraints]),
                 );
                 if state.child_by_name("tail").is_some() {
                     state.push_error(10, "tailing comma not allowed");
@@ -770,7 +778,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
             "floor" | "ceil" => {
                 check_langlvls(
                     state,
-                    LanguageLevel::TYPE(vec![LanguageLevelTYPE::NumericConstraints]),
+                    LanguageLevel::Type(vec![LanguageLevelType::NumericConstraints]),
                 );
                 opt_integer(state)
             }
@@ -826,7 +834,7 @@ fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
         }
         "nested_expr" => visit_children(state, opt_constraint).map(|c| c.content),
         "binary_expr" => {
-            check_langlvls(state, LanguageLevel::SMT(vec![]));
+            check_langlvls(state, LanguageLevel::Arithmetic(vec![]));
             let op = state.child_by_name("op").unwrap();
             visit_children(state, |state| {
                 if let Some(op) = opt_logic_op(op) {
@@ -866,7 +874,7 @@ fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
     }
     .map(|content| ConstraintDecl { span, content })
 }
-fn visit_constraint(state: &mut VisitorState, parent: Symbol) {
+fn visit_constraint(state: &mut VisitorState, parent: Symbol, _duplicate: &bool) {
     if let Some(cons) = opt_constraint(state) {
         state.add_constraint(cons, parent);
     }
@@ -919,7 +927,7 @@ fn opt_value(state: &mut VisitorState) -> Value {
     }
 }
 
-fn visit_attribute_value(state: &mut VisitorState, parent: Symbol) {
+fn visit_attribute_value(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
     state.goto_field("name");
     let name = opt_name(state).unwrap();
     let sym = Symbol::Attribute(state.ast.attributes.len());
@@ -934,38 +942,39 @@ fn visit_attribute_value(state: &mut VisitorState, parent: Symbol) {
             span: state.node().byte_range(),
         },
         depth: 0,
+        duplicate: duplicate.clone(),
     });
     if has_children {
-        visit_children_arg(state, sym, visit_attributes);
+        visit_children_arg(state, sym, &duplicate, visit_attributes);
     }
 }
-fn visit_constraint_list(state: &mut VisitorState, parent: Symbol) {
+fn visit_constraint_list(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
     loop {
         if state.kind() == "constraint" {
-            visit_children_arg(state, parent, visit_constraint);
+            visit_children_arg(state, parent, duplicate, visit_constraint);
         }
         if !state.goto_next_sibling() {
             break;
         }
     }
 }
-fn visit_attributes(state: &mut VisitorState, parent: Symbol) {
+fn visit_attributes(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
     loop {
         match state.kind() {
             "attribute_constraints" => {
                 if state.child_by_name("tail").is_some() {
                     state.push_error(10, "tailing comma unsupported");
                 }
-                visit_children_arg(state, parent, visit_constraint_list);
+                visit_children_arg(state, parent, duplicate, visit_constraint_list);
             }
             "attribute_constraint" => {
                 visit_children(state, |state| {
                     debug_assert!(state.goto_kind("constraint"));
-                    visit_children_arg(state, parent, visit_constraint);
+                    visit_children_arg(state, parent, duplicate, visit_constraint);
                 });
             }
             "attribute_value" => {
-                visit_children_arg(state, parent, visit_attribute_value);
+                visit_children_arg(state, parent, duplicate, visit_attribute_value);
             }
             _ => {}
         }
@@ -975,7 +984,13 @@ fn visit_attributes(state: &mut VisitorState, parent: Symbol) {
     }
 }
 
-fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty: Type) {
+fn visit_feature(
+    state: &mut VisitorState,
+    parent: Symbol,
+    name: SymbolSpan,
+    ty: Type,
+    duplicate: bool,
+) {
     match parent {
         Symbol::Feature(..) => {
             state.push_error(40, "features have to be separated by groups");
@@ -993,23 +1008,62 @@ fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty:
             .and_then(|n| {
                 check_langlvls(
                     state,
-                    LanguageLevel::SMT(vec![LanguageLevelSMT::FeatureCardinality]),
+                    LanguageLevel::Arithmetic(vec![LanguageLevelArithmetic::FeatureCardinality]),
                 );
                 opt_cardinality(n, state)
-            }),
+            })
+            .or_else(|| Some(Cardinality::Fixed)),
+        duplicate: duplicate.clone(),
+        first_cardinality_child: true,
     };
-    let sym = Symbol::Feature(state.ast.features.len());
-    state.ast.features.push(feature);
-    state.push_child(parent, sym);
+
+    // remaps feature to different entities of the cardinality
+    let mut sym = vec![];
+
+    match feature.clone().cardinality.unwrap() {
+        Cardinality::Fixed => {
+            sym.push(Symbol::Feature(state.ast.features.len()));
+            state.ast.features.push(feature.clone());
+            state.push_child(parent, sym.get(0).unwrap().clone());
+        }
+        Cardinality::Range(_, max) => {
+            for i in 0..max {
+                let mut dup_feature = feature.clone();
+                sym.push(Symbol::Feature(state.ast.features.len()));
+                if i != 0 {
+                    dup_feature.duplicate = true;
+                    dup_feature.first_cardinality_child = false;
+                }
+                state.ast.features.push(dup_feature);
+                state.push_child(parent, sym.get(i).unwrap().clone());
+            }
+        }
+    }
     loop {
-        match state.kind() {
-            "attributes" => {
-                visit_children_arg(state, sym, visit_attributes);
+        for index in 0..sym.len() {
+            let mut duplicate_par = false;
+            if let Symbol::Feature(id) = sym.get(index).unwrap() {
+                duplicate_par = state.ast.get_feature(*id).unwrap().duplicate;
             }
-            "blk" => {
-                visit_children_arg(state, sym, visit_blk_decl);
+            match state.kind() {
+                "attributes" => {
+                    visit_children_arg(
+                        state,
+                        sym.get(index).unwrap().clone(),
+                        &duplicate_par,
+                        visit_attributes,
+                    );
+                }
+                "blk" => {
+                    visit_children_arg(
+                        state,
+                        sym.get(index).unwrap().clone(),
+                        &&duplicate_par,
+                        visit_blk_decl,
+                    );
+                }
+                _ => {}
             }
-            _ => {}
         }
         if !state.goto_next_sibling() {
             break;
@@ -1032,7 +1086,7 @@ fn visit_ref(state: &mut VisitorState, parent: Symbol, path: Path) {
         }
     }
 }
-fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode) {
+fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode, duplicate: &bool) {
     match parent {
         Symbol::Group(..) => {
             state.push_error(40, "groups have to be separated by features");
@@ -1051,22 +1105,22 @@ fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode) {
     loop {
         check_no_extra_blk(state, "group");
         if state.kind() == "blk" {
-            visit_children_arg(state, sym, visit_blk_decl);
+            visit_children_arg(state, sym, duplicate, visit_blk_decl);
         }
         if !state.goto_next_sibling() {
             break;
         }
     }
 }
-fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
+fn visit_blk_decl(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
     state.goto_field("header");
     match state.kind() {
         "name" => {
             let name = opt_name(state).unwrap();
-            visit_feature(state, parent, name, Type::Bool);
+            visit_feature(state, parent, name, Type::Bool, *duplicate);
         }
         "typed_feature" => {
-            check_langlvls(state, LanguageLevel::TYPE(vec![]));
+            check_langlvls(state, LanguageLevel::Type(vec![]));
             let (name, ty) = visit_children(state, |state| {
                 state.goto_field("type");
                 let ty = match &*state.slice_raw(state.node().byte_range()) {
@@ -1082,7 +1136,7 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
                 Some((opt_name(state).unwrap(), ty))
             })
             .unwrap();
-            visit_feature(state, parent, name, ty);
+            visit_feature(state, parent, name, ty, *duplicate);
         }
         "ref" => {
             let path = visit_children(state, |state| {
@@ -1104,15 +1158,15 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
                 "alternative" => GroupMode::Alternative,
                 _ => GroupMode::Mandatory,
             };
-            visit_group(state, parent, mode);
+            visit_group(state, parent, mode, duplicate);
         }
         "cardinality" => {
             check_langlvls(
                 state,
-                LanguageLevel::SAT(vec![LanguageLevelSAT::GroupCardinality]),
+                LanguageLevel::Boolean(vec![LanguageLevelBoolean::GroupCardinality]),
             );
-            let card = opt_cardinality(state.node(), state).unwrap_or(Cardinality::Any);
-            visit_group(state, parent, GroupMode::Cardinality(card));
+            let card = opt_cardinality(state.node(), state).unwrap_or(Cardinality::Fixed);
+            visit_group(state, parent, GroupMode::Cardinality(card), duplicate);
         }
         _ => {
             if state.kind() == "constraint" && state.name(state.cursor().node()).contains("-") {
@@ -1137,7 +1191,7 @@ fn visit_features(state: &mut VisitorState) {
     loop {
         check_no_extra_blk(state, "features");
         if state.kind() == "blk" {
-            visit_children_arg(state, Symbol::Root, visit_blk_decl);
+            visit_children_arg(state, Symbol::Root, &false, visit_blk_decl);
         }
         if !state.goto_next_sibling() {
             break;
@@ -1148,8 +1202,10 @@ fn visit_constraint_decl(state: &mut VisitorState) {
     loop {
         check_simple_blk(state, "constraints");
         match state.kind() {
-            "constraint" | "ref" => visit_children_arg(state, Symbol::Root, visit_constraint),
-            "name" => visit_constraint(state, Symbol::Root),
+            "constraint" | "ref" => {
+                visit_children_arg(state, Symbol::Root, &false, visit_constraint)
+            }
+            "name" => visit_constraint(state, Symbol::Root, &false),
             _ => {}
         }
         if state.kind() == "ref" {

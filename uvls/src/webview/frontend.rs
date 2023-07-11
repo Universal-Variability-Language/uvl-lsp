@@ -195,6 +195,9 @@ fn ConfigInput<'a>(cx: Scope<'a, ConfigInputProps<'a>>) -> Element {
                     }
                 }
             },
+            _ => rsx!{ div {
+                config.to_string()
+            }},
         };
         cx.render(rsx! {
             div{

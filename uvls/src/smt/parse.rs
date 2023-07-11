@@ -190,7 +190,7 @@ mod tests {
         assert_eq!(n, "test");
         let (i,(_,ConfigValue::Bool(n))) = parser.parse(i).unwrap() else {panic!()};
         assert_eq!(n, true);
-        let (i,(_,ConfigValue::Number(n))) = parser.parse(i).unwrap() else {panic!()};
+        let (_i,(_,ConfigValue::Number(n))) = parser.parse(i).unwrap() else {panic!()};
         assert_approx_eq!(n,1.0);
     }
 }
