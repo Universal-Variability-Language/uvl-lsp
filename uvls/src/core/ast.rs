@@ -11,6 +11,7 @@ use tower_lsp::lsp_types::Url;
 use tree_sitter::Tree;
 use ustr::Ustr;
 use util::lsp_range;
+pub mod collapse;
 mod def;
 pub mod graph;
 mod transform;
