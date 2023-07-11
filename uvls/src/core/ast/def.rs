@@ -55,6 +55,7 @@ pub enum Type {
     Bool,
     Void,
     Namespace,
+    Object,
 }
 
 #[derive(Clone, Debug)]
@@ -67,10 +68,8 @@ pub enum GroupMode {
 }
 #[derive(Clone, Debug)]
 pub enum Cardinality {
-    From(usize),
     Range(usize, usize),
-    Max(usize),
-    Any,
+    Fixed,
 }
 #[derive(Clone, Debug)]
 pub enum LanguageLevelMajor {
@@ -112,6 +111,8 @@ pub struct Feature {
     pub name: SymbolSpan,
     pub cardinality: Option<Cardinality>,
     pub ty: Type,
+    pub duplicate:  bool,
+    pub first_cardinality_child: bool, // used to fix same name problem
 }
 #[derive(Clone, Debug)]
 pub struct Import {
@@ -136,6 +137,7 @@ pub struct Attribute {
     pub name: SymbolSpan,
     pub value: ValueDecl,
     pub depth: u32,
+    pub duplicate: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Keyword {

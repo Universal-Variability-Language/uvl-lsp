@@ -317,6 +317,7 @@ fn opt_int(node: Node, state: &mut VisitorGraph) -> Option<usize> {
         None
     }
 }
+// returns cardinality for Node
 fn opt_cardinality(node: Node, state: &mut VisitorGraph) -> Option<Cardinality> {
     let begin = node.child_by_field_name("begin");
     let end = node.child_by_field_name("end");
@@ -325,9 +326,8 @@ fn opt_cardinality(node: Node, state: &mut VisitorGraph) -> Option<Cardinality> 
             opt_int(begin, state)?,
             opt_int(end.unwrap(), state)?,
         )),
-        (Some(begin), Some("*")) => Some(Cardinality::From(opt_int(begin, state)?)),
-        (None, Some("int")) => Some(Cardinality::Max(opt_int(end.unwrap(), state)?)),
-        (_, _) => Some(Cardinality::Any),
+        (None, Some("int")) => Some(Cardinality::Range(0, opt_int(end.unwrap(), state)?)),
+        (_, _) => Some(Cardinality::Range(0, 1)),
     }
 }
 
@@ -475,7 +475,7 @@ fn opt_equation(node: Node) -> Option<EquationOP> {
         _ => None,
     }
 }
-fn visit_constraint(graph: &mut VisitorGraph, _: GraphNode) {
+fn visit_constraint(graph: &mut VisitorGraph, _: GraphNode, _: &bool) {
     graph.add_constraint(graph.node().byte_range());
 }
 fn opt_bool(graph: &mut VisitorGraph) -> bool {
@@ -522,34 +522,34 @@ fn opt_value(graph: &mut VisitorGraph) -> Value {
     }
 }
 
-fn visit_attribute_value(graph: &mut VisitorGraph, _: GraphNode) {
+fn visit_attribute_value(graph: &mut VisitorGraph, _: GraphNode, _: &bool) {
     graph.goto_field("name");
     let _ = opt_name(graph).unwrap();
 }
-fn visit_constraint_list(graph: &mut VisitorGraph, parent: GraphNode) {
+fn visit_constraint_list(graph: &mut VisitorGraph, parent: GraphNode, _: &bool) {
     loop {
         if graph.kind() == "constraint" {
-            visit_children_arg(graph, parent.clone(), visit_constraint);
+            visit_children_arg(graph, parent.clone(), &false, visit_constraint);
         }
         if !graph.goto_next_sibling() {
             break;
         }
     }
 }
-fn visit_attributes(graph: &mut VisitorGraph, parent: &GraphNode) {
+fn visit_attributes(graph: &mut VisitorGraph, parent: &GraphNode, _: &bool) {
     loop {
         match graph.kind() {
             "attribute_constraints" => {
-                visit_children_arg(graph, parent.clone(), visit_constraint_list);
+                visit_children_arg(graph, parent.clone(), &false, visit_constraint_list);
             }
             "attribute_constraint" => {
                 visit_children(graph, |state| {
                     debug_assert!(state.goto_kind("constraint"));
-                    visit_children_arg(state, parent.clone(), visit_constraint);
+                    visit_children_arg(state, parent.clone(), &false, visit_constraint);
                 });
             }
             "attribute_value" => {
-                visit_children_arg(graph, parent.clone(), visit_attribute_value);
+                visit_children_arg(graph, parent.clone(), &false, visit_attribute_value);
             }
             _ => {}
         }
@@ -577,10 +577,10 @@ fn visit_feature(graph: &mut VisitorGraph, parent: &mut GraphNode, name: SymbolS
     loop {
         match graph.cursor().node().kind() {
             "attributes" => {
-                visit_children_arg(graph, &feature, visit_attributes);
+                visit_children_arg(graph, &feature, &false, visit_attributes);
             }
             "blk" => {
-                visit_children_arg(graph, &mut feature, visit_blk_decl);
+                visit_children_arg(graph, &mut feature, &false, visit_blk_decl);
             }
             _ => {}
         }
@@ -606,14 +606,14 @@ fn visit_group(graph: &mut VisitorGraph, mut parent: &mut GraphNode, mode: Group
     parent.group_mode = Some(mode);
     loop {
         if graph.kind() == "blk" {
-            visit_children_arg(graph, &mut *parent, visit_blk_decl);
+            visit_children_arg(graph, &mut *parent, &false, visit_blk_decl);
         }
         if !graph.goto_next_sibling() {
             break;
         }
     }
 }
-fn visit_blk_decl(graph: &mut VisitorGraph, parent: &mut GraphNode) {
+fn visit_blk_decl(graph: &mut VisitorGraph, parent: &mut GraphNode, _: &bool) {
     graph.goto_field("header");
     match graph.kind() {
         "name" => {
@@ -653,7 +653,7 @@ fn visit_blk_decl(graph: &mut VisitorGraph, parent: &mut GraphNode) {
             visit_group(graph, parent, mode);
         }
         "cardinality" => {
-            let card = opt_cardinality(graph.node(), graph).unwrap_or(Cardinality::Any);
+            let card = opt_cardinality(graph.node(), graph).unwrap_or(Cardinality::Fixed);
             visit_group(graph, parent, GroupMode::Cardinality(card));
         }
         _ => {}
@@ -663,7 +663,7 @@ fn visit_features(graph: &mut VisitorGraph) {
     let mut root: GraphNode = GraphNode::root(graph.root_name.clone());
     loop {
         if graph.kind() == "blk" {
-            visit_children_arg(graph, &mut root, visit_blk_decl);
+            visit_children_arg(graph, &mut root, &false, visit_blk_decl);
         }
         if !graph.goto_next_sibling() {
             break;
@@ -674,9 +674,9 @@ fn visit_constraint_decl(graph: &mut VisitorGraph) {
     loop {
         match graph.kind() {
             "constraint" | "ref" => {
-                visit_children_arg(graph, GraphNode::root(None), visit_constraint)
+                visit_children_arg(graph, GraphNode::root(None), &false, visit_constraint)
             }
-            "name" => visit_constraint(graph, GraphNode::root(None)),
+            "name" => visit_constraint(graph, GraphNode::root(None), &false),
             _ => {}
         }
         if !graph.goto_next_sibling() {

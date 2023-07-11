@@ -90,6 +90,7 @@ impl<'a> VisitorState<'a> {
                         "duplicate import already defined in line {}",
                         self.ast.lsp_range(old, self.source).unwrap().start.line
                     ),
+                    error_type: ErrorType::Any,
                 });
             }
         }
@@ -98,24 +99,29 @@ impl<'a> VisitorState<'a> {
         while let Some((node, scope, depth)) = stack.pop() {
             let new_scope = if let Some(name) = self.ast.name(node) {
                 match node {
-                    Symbol::Feature(..) => {
-                        if let Some(old) = self
-                            .ast
-                            .index
-                            .insert((Symbol::Root, name, SymbolKind::Feature), node)
-                        {
-                            self.errors.push(ErrorInfo {
-                                location: self.ast.lsp_range(node, self.source).unwrap(),
-                                severity: DiagnosticSeverity::ERROR,
-                                weight: 20,
-                                msg: "duplicate feature".to_string(),
-                            });
-                            self.errors.push(ErrorInfo {
-                                location: self.ast.lsp_range(old, self.source).unwrap(),
-                                severity: DiagnosticSeverity::ERROR,
-                                weight: 20,
-                                msg: "duplicate feature".to_string(),
-                            })
+                    Symbol::Feature(i) => {
+                        // removes duplicate feature error for cardinality
+                        if !self.ast.get_feature(i).unwrap().duplicate {
+                            if let Some(old) = self
+                                .ast
+                                .index
+                                .insert((Symbol::Root, name, SymbolKind::Feature), node)
+                            {
+                                self.errors.push(ErrorInfo {
+                                    location: self.ast.lsp_range(node, self.source).unwrap(),
+                                    severity: DiagnosticSeverity::ERROR,
+                                    weight: 20,
+                                    msg: "duplicate feature".to_string(),
+                                    error_type: ErrorType::Any,
+                                });
+                                self.errors.push(ErrorInfo {
+                                    location: self.ast.lsp_range(old, self.source).unwrap(),
+                                    severity: DiagnosticSeverity::ERROR,
+                                    weight: 20,
+                                    msg: "duplicate feature".to_string(),
+                                    error_type: ErrorType::Any,
+                                })
+                            }
                         }
                         node
                     }
@@ -130,14 +136,16 @@ impl<'a> VisitorState<'a> {
                                 severity: DiagnosticSeverity::ERROR,
                                 weight: 20,
                                 msg: "duplicate attribute".to_string(),
+                                error_type: ErrorType::Any,
                             });
                             self.errors.push(ErrorInfo {
                                 location: self.ast.lsp_range(old, self.source).unwrap(),
                                 severity: DiagnosticSeverity::ERROR,
                                 weight: 20,
                                 msg: "duplicate attribute".to_string(),
+                                error_type: ErrorType::Any,
                             });
-                        };
+                        }
                         self.ast.attributes[i].depth = depth;
                         node
                     }
@@ -164,6 +172,7 @@ impl<'a> VisitorState<'a> {
                         severity: DiagnosticSeverity::ERROR,
                         weight: 20,
                         msg: "name already defined as import directory".to_string(),
+                        error_type: ErrorType::Any,
                     });
                 }
                 if self
@@ -177,6 +186,7 @@ impl<'a> VisitorState<'a> {
                         severity: DiagnosticSeverity::ERROR,
                         weight: 20,
                         msg: "name already defined as import".to_string(),
+                        error_type: ErrorType::Any,
                     });
                 }
             }
@@ -197,6 +207,7 @@ impl<'a> VisitorState<'a> {
             severity: DiagnosticSeverity::ERROR,
             weight: w,
             msg: error.into(),
+            error_type: ErrorType::Any,
         });
     }
 }
@@ -496,9 +507,11 @@ fn opt_cardinality(node: Node, state: &mut VisitorState) -> Option<Cardinality> 
             opt_int(begin, state)?,
             opt_int(end.unwrap(), state)?,
         )),
-        (Some(begin), Some("*")) => Some(Cardinality::From(opt_int(begin, state)?)),
-        (None, Some("int")) => Some(Cardinality::Max(opt_int(end.unwrap(), state)?)),
-        (_, _) => Some(Cardinality::Any),
+        (None, Some("int")) => Some(Cardinality::Range(
+            opt_int(end.unwrap(), state)?,
+            opt_int(end.unwrap(), state)?,
+        )),
+        (_, _) => Some(Cardinality::Range(0, 1)),
     }
 }
 
@@ -861,7 +874,7 @@ fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
     }
     .map(|content| ConstraintDecl { span, content })
 }
-fn visit_constraint(state: &mut VisitorState, parent: Symbol) {
+fn visit_constraint(state: &mut VisitorState, parent: Symbol, _duplicate: &bool) {
     if let Some(cons) = opt_constraint(state) {
         state.add_constraint(cons, parent);
     }
@@ -914,7 +927,7 @@ fn opt_value(state: &mut VisitorState) -> Value {
     }
 }
 
-fn visit_attribute_value(state: &mut VisitorState, parent: Symbol) {
+fn visit_attribute_value(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
     state.goto_field("name");
     let name = opt_name(state).unwrap();
     let sym = Symbol::Attribute(state.ast.attributes.len());
@@ -929,38 +942,39 @@ fn visit_attribute_value(state: &mut VisitorState, parent: Symbol) {
             span: state.node().byte_range(),
         },
         depth: 0,
+        duplicate: duplicate.clone(),
     });
     if has_children {
-        visit_children_arg(state, sym, visit_attributes);
+        visit_children_arg(state, sym, &duplicate, visit_attributes);
     }
 }
-fn visit_constraint_list(state: &mut VisitorState, parent: Symbol) {
+fn visit_constraint_list(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
     loop {
         if state.kind() == "constraint" {
-            visit_children_arg(state, parent, visit_constraint);
+            visit_children_arg(state, parent, duplicate, visit_constraint);
         }
         if !state.goto_next_sibling() {
             break;
         }
     }
 }
-fn visit_attributes(state: &mut VisitorState, parent: Symbol) {
+fn visit_attributes(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
     loop {
         match state.kind() {
             "attribute_constraints" => {
                 if state.child_by_name("tail").is_some() {
                     state.push_error(10, "tailing comma unsupported");
                 }
-                visit_children_arg(state, parent, visit_constraint_list);
+                visit_children_arg(state, parent, duplicate, visit_constraint_list);
             }
             "attribute_constraint" => {
                 visit_children(state, |state| {
                     debug_assert!(state.goto_kind("constraint"));
-                    visit_children_arg(state, parent, visit_constraint);
+                    visit_children_arg(state, parent, duplicate, visit_constraint);
                 });
             }
             "attribute_value" => {
-                visit_children_arg(state, parent, visit_attribute_value);
+                visit_children_arg(state, parent, duplicate, visit_attribute_value);
             }
             _ => {}
         }
@@ -970,7 +984,13 @@ fn visit_attributes(state: &mut VisitorState, parent: Symbol) {
     }
 }
 
-fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty: Type) {
+fn visit_feature(
+    state: &mut VisitorState,
+    parent: Symbol,
+    name: SymbolSpan,
+    ty: Type,
+    duplicate: bool,
+) {
     match parent {
         Symbol::Feature(..) => {
             state.push_error(40, "features have to be separated by groups");
@@ -991,20 +1011,59 @@ fn visit_feature(state: &mut VisitorState, parent: Symbol, name: SymbolSpan, ty:
                     LanguageLevel::Arithmetic(vec![LanguageLevelArithmetic::FeatureCardinality]),
                 );
                 opt_cardinality(n, state)
-            }),
+            })
+            .or_else(|| Some(Cardinality::Fixed)),
+        duplicate: duplicate.clone(),
+        first_cardinality_child: true,
     };
-    let sym = Symbol::Feature(state.ast.features.len());
-    state.ast.features.push(feature);
-    state.push_child(parent, sym);
+
+    // remaps feature to different entities of the cardinality
+    let mut sym = vec![];
+
+    match feature.clone().cardinality.unwrap() {
+        Cardinality::Fixed => {
+            sym.push(Symbol::Feature(state.ast.features.len()));
+            state.ast.features.push(feature.clone());
+            state.push_child(parent, sym.get(0).unwrap().clone());
+        }
+        Cardinality::Range(_, max) => {
+            for i in 0..max {
+                let mut dup_feature = feature.clone();
+                sym.push(Symbol::Feature(state.ast.features.len()));
+                if i != 0 {
+                    dup_feature.duplicate = true;
+                    dup_feature.first_cardinality_child = false;
+                }
+                state.ast.features.push(dup_feature);
+                state.push_child(parent, sym.get(i).unwrap().clone());
+            }
+        }
+    }
     loop {
-        match state.kind() {
-            "attributes" => {
-                visit_children_arg(state, sym, visit_attributes);
+        for index in 0..sym.len() {
+            let mut duplicate_par = false;
+            if let Symbol::Feature(id) = sym.get(index).unwrap() {
+                duplicate_par = state.ast.get_feature(*id).unwrap().duplicate;
             }
-            "blk" => {
-                visit_children_arg(state, sym, visit_blk_decl);
+            match state.kind() {
+                "attributes" => {
+                    visit_children_arg(
+                        state,
+                        sym.get(index).unwrap().clone(),
+                        &duplicate_par,
+                        visit_attributes,
+                    );
+                }
+                "blk" => {
+                    visit_children_arg(
+                        state,
+                        sym.get(index).unwrap().clone(),
+                        &&duplicate_par,
+                        visit_blk_decl,
+                    );
+                }
+                _ => {}
             }
-            _ => {}
         }
         if !state.goto_next_sibling() {
             break;
@@ -1027,7 +1086,7 @@ fn visit_ref(state: &mut VisitorState, parent: Symbol, path: Path) {
         }
     }
 }
-fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode) {
+fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode, duplicate: &bool) {
     match parent {
         Symbol::Group(..) => {
             state.push_error(40, "groups have to be separated by features");
@@ -1046,19 +1105,19 @@ fn visit_group(state: &mut VisitorState, parent: Symbol, mode: GroupMode) {
     loop {
         check_no_extra_blk(state, "group");
         if state.kind() == "blk" {
-            visit_children_arg(state, sym, visit_blk_decl);
+            visit_children_arg(state, sym, duplicate, visit_blk_decl);
         }
         if !state.goto_next_sibling() {
             break;
         }
     }
 }
-fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
+fn visit_blk_decl(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
     state.goto_field("header");
     match state.kind() {
         "name" => {
             let name = opt_name(state).unwrap();
-            visit_feature(state, parent, name, Type::Bool);
+            visit_feature(state, parent, name, Type::Bool, *duplicate);
         }
         "typed_feature" => {
             check_langlvls(state, LanguageLevel::Type(vec![]));
@@ -1077,7 +1136,7 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
                 Some((opt_name(state).unwrap(), ty))
             })
             .unwrap();
-            visit_feature(state, parent, name, ty);
+            visit_feature(state, parent, name, ty, *duplicate);
         }
         "ref" => {
             let path = visit_children(state, |state| {
@@ -1099,18 +1158,27 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol) {
                 "alternative" => GroupMode::Alternative,
                 _ => GroupMode::Mandatory,
             };
-            visit_group(state, parent, mode);
+            visit_group(state, parent, mode, duplicate);
         }
         "cardinality" => {
             check_langlvls(
                 state,
                 LanguageLevel::Boolean(vec![LanguageLevelBoolean::GroupCardinality]),
             );
-            let card = opt_cardinality(state.node(), state).unwrap_or(Cardinality::Any);
-            visit_group(state, parent, GroupMode::Cardinality(card));
+            let card = opt_cardinality(state.node(), state).unwrap_or(Cardinality::Fixed);
+            visit_group(state, parent, GroupMode::Cardinality(card), duplicate);
         }
         _ => {
-            state.push_error(40, "expected a feature or group declaration");
+            if state.kind() == "constraint" && state.name(state.cursor().node()).contains("-") {
+                // todo check if also for groups
+                state.push_error_with_type(
+                    40,
+                    "name contains a dash (-)",
+                    ErrorType::FeatureNameContainsDashes,
+                )
+            } else {
+                state.push_error(40, "expected a feature or group declaration");
+            }
         }
     }
 }
@@ -1123,7 +1191,7 @@ fn visit_features(state: &mut VisitorState) {
     loop {
         check_no_extra_blk(state, "features");
         if state.kind() == "blk" {
-            visit_children_arg(state, Symbol::Root, visit_blk_decl);
+            visit_children_arg(state, Symbol::Root, &false, visit_blk_decl);
         }
         if !state.goto_next_sibling() {
             break;
@@ -1134,8 +1202,10 @@ fn visit_constraint_decl(state: &mut VisitorState) {
     loop {
         check_simple_blk(state, "constraints");
         match state.kind() {
-            "constraint" | "ref" => visit_children_arg(state, Symbol::Root, visit_constraint),
-            "name" => visit_constraint(state, Symbol::Root),
+            "constraint" | "ref" => {
+                visit_children_arg(state, Symbol::Root, &false, visit_constraint)
+            }
+            "name" => visit_constraint(state, Symbol::Root, &false),
             _ => {}
         }
         if state.kind() == "ref" {

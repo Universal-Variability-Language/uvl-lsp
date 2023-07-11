@@ -179,6 +179,7 @@ impl LanguageServer for Backend {
                     resolve_provider: Some(true),
                 }),
                 inlay_hint_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         "uvls/show_config".into(),
@@ -575,6 +576,28 @@ impl LanguageServer for Backend {
                 },
             ]))
         }
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        for diagnostic in params.clone().context.diagnostics {
+            // Checks if there is a quick fix for the current diagnostic message
+            match diagnostic.clone().data {
+                Some(serde_json::value::Value::Number(number)) => {
+                    match ErrorType::from_u32(number.as_u64().unwrap_or(0) as u32) {
+                        ErrorType::Any => info!("No Quickfix for this Error"),
+                        ErrorType::FeatureNameContainsDashes => {
+                            return actions::rename_dash(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
+                    }
+                }
+                _ => (),
+            }
+        }
+        return Ok(None);
     }
 
     async fn shutdown(&self) -> Result<()> {
