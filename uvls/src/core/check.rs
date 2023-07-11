@@ -10,7 +10,7 @@ use tower_lsp::Client;
 use tree_sitter::{Node, QueryCursor, Tree};
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ErrorInfo {
     pub location: Range,
     pub severity: DiagnosticSeverity,
@@ -35,11 +35,14 @@ impl ErrorInfo {
     }
 }
 pub async fn publish(client: &Client, uri: &Url, err: &[ErrorInfo]) {
-    if let Some(max) = err.iter().max_by_key(|e| e.weight) {
+    // reduces cardinality error to one error
+    let mut reduced_err = vec![];
+    err.iter().for_each(|ele| if !reduced_err.contains(ele) {reduced_err.push(ele.clone())});
+    if let Some(max) = reduced_err.clone().into_iter().max_by_key(|e| e.weight) {
         client
             .publish_diagnostics(
                 uri.clone(),
-                err.iter()
+                reduced_err[..].iter()
                     .rev()
                     .filter(|e| e.weight == max.weight)
                     .map(|i| i.clone().diagnostic())
