@@ -1,5 +1,5 @@
 # UVLS (Universal Variability Language Server) in JetBrain IDEs
-UVLS is a language server for [UVL](https://github.com/Universal-Variability-Language)(Universal Variability Language).
+UVLS is a language server for [UVL](https://github.com/Universal-Variability-Language) (Universal Variability Language).
 
 The server is still in active development but should provide a solid editing experience.
 
