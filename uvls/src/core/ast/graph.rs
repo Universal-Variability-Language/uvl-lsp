@@ -1,19 +1,19 @@
-use std::borrow::{Cow, Borrow};
+use std::borrow::{Borrow, Cow};
 
 use crate::core::*;
+use ast::visitor::Visitor;
 use ast::visitor::*;
 use check::ErrorInfo;
+use html_escape::encode_text;
 use parse::*;
 use ropey::Rope;
 use tower_lsp::lsp_types::Url;
 use tree_sitter::{Node, Tree, TreeCursor};
-use ast::visitor::Visitor;
-use html_escape::encode_text;
 
 #[derive(Debug)]
 pub struct Graph {
     pub dot: String,
-    pub uri: Url
+    pub uri: Url,
 }
 impl Graph {
     pub fn new(source: Rope, tree: Tree, uri: Url) -> Self {
@@ -24,8 +24,8 @@ impl Graph {
 #[derive(Clone, Debug)]
 pub enum GraphSymbol {
     Feature(String, String, Option<GroupMode>, Option<Type>), // name, description
-    Group(String, String, GroupMode),  // name, description
-    Root(String), // name
+    Group(String, String, GroupMode),                         // name, description
+    Root(String),                                             // name
 }
 
 #[derive(Clone, Debug)]
@@ -35,7 +35,7 @@ pub struct GraphNode {
     pub r#type: Option<Type>,
     pub group_mode: Option<GroupMode>,
     pub cardinality: Option<Cardinality>,
-    pub parent: Option<Box<GraphNode>>
+    pub parent: Option<Box<GraphNode>>,
 }
 
 impl GraphNode {
@@ -50,7 +50,14 @@ impl GraphNode {
 }
 impl Default for GraphNode {
     fn default() -> Self {
-        GraphNode { name: String::default(), description: None, r#type: None, group_mode: None, cardinality: None, parent: None }
+        GraphNode {
+            name: String::default(),
+            description: None,
+            r#type: None,
+            group_mode: None,
+            cardinality: None,
+            parent: None,
+        }
     }
 }
 
@@ -61,7 +68,7 @@ struct VisitorGraph<'a> {
     cursor: TreeCursor<'a>,
     dot: String,
     source: &'a Rope,
-    root_name: Option<String>
+    root_name: Option<String>,
 }
 impl<'a> Visitor<'a> for VisitorGraph<'a> {
     fn cursor(&self) -> &TreeCursor<'a> {
@@ -77,20 +84,27 @@ impl<'a> Visitor<'a> for VisitorGraph<'a> {
 }
 
 impl<'a> VisitorGraph<'a> {
-
     // Generate Graph Code:
 
     fn begin(&mut self) {
         self.dot.push_str(&"digraph FeatureModel {\nrankdir=\"TB\"\nnewrank=true\nnode [style=filled fontname=\"Arial Unicode MS, Arial\"];\n\n".to_string());
     }
-    
+
     fn add_feature(&mut self, feature: GraphNode) {
         //info!("[GRAPH] add Feature '{}'", feature.name);
         let shape = Shape::by_mode(feature.group_mode.clone().unwrap_or(GroupMode::Optional));
-        self.dot.push_str(format!("{} [fillcolor=\"{}\" tooltip=\"Cardinality: {:?}\" shape=\"{}\"]\n",
-            feature.name, FEATURE_COLOR, feature.cardinality, shape.as_str()).as_str());
+        self.dot.push_str(
+            format!(
+                "{} [fillcolor=\"{}\" tooltip=\"Cardinality: {:?}\" shape=\"{}\"]\n",
+                feature.name,
+                FEATURE_COLOR,
+                feature.cardinality,
+                shape.as_str()
+            )
+            .as_str(),
+        );
     }
-    
+
     fn add_feature_link(&mut self, feature: GraphNode, parent: GraphNode) {
         if parent.group_mode.is_none() {
             return;
@@ -98,10 +112,19 @@ impl<'a> VisitorGraph<'a> {
         //info!("[GRAPH] add link Feature->Feature from '{:?}'", parent.name);
         let arrow_tail = ArrowEnd::tail(parent.group_mode.clone().unwrap());
         let arrow_head = ArrowEnd::head(parent.group_mode.clone().unwrap());
-        
-        self.dot.push_str(format!("{} -> {} [arrowhead=\"{}\", arrowtail=\"{}\", dir=\"both\"]\n", parent.name, feature.name, arrow_tail.as_str(), arrow_head.as_str()).as_str());
+
+        self.dot.push_str(
+            format!(
+                "{} -> {} [arrowhead=\"{}\", arrowtail=\"{}\", dir=\"both\"]\n",
+                parent.name,
+                feature.name,
+                arrow_tail.as_str(),
+                arrow_head.as_str()
+            )
+            .as_str(),
+        );
     }
-    
+
     fn add_legend(&mut self) {
         self.dot.push_str(&"subgraph clusterLegend {
             label = \"Legend\"
@@ -142,7 +165,7 @@ impl<'a> VisitorGraph<'a> {
           }
         ".to_string())
     }
-    
+
     fn begin_constraints(&mut self) {
         self.dot.push_str(&"\n\nsubgraph cluster_constraints{
     label=\"Constraints\"
@@ -152,16 +175,21 @@ impl<'a> VisitorGraph<'a> {
     }
 
     fn add_constraint(&mut self, span: Span) {
-        self.dot.push_str(&"    <tr><td align=\"left\">".to_string());
-        self.dot.push_str(&encode_text(&self.source().slice_raw(span).to_string()));
+        self.dot
+            .push_str(&"    <tr><td align=\"left\">".to_string());
+        self.dot
+            .push_str(&encode_text(&self.source().slice_raw(span).to_string()));
         self.dot.push_str(&"</td></tr>\n".to_string());
     }
-    
+
     fn end_constraints(&mut self) {
-        self.dot.push_str(&"</table>>]
-}\n".to_string());
+        self.dot.push_str(
+            &"</table>>]
+}\n"
+            .to_string(),
+        );
     }
-    
+
     fn end(&mut self) {
         self.dot.push_str(&"}\n".to_string());
     }
@@ -184,7 +212,7 @@ fn visit_namespace(graph: &mut VisitorGraph) {
             visit_children(graph, |state| {
                 state.goto_field("name");
                 if state.root_name.is_none() {
-                    state.root_name = opt_path(state).map(|p|p.names[0].to_string());
+                    state.root_name = opt_path(state).map(|p| p.names[0].to_string());
                 }
             });
         }
@@ -289,6 +317,7 @@ fn opt_int(node: Node, state: &mut VisitorGraph) -> Option<usize> {
         None
     }
 }
+// returns cardinality for Node
 fn opt_cardinality(node: Node, state: &mut VisitorGraph) -> Option<Cardinality> {
     let begin = node.child_by_field_name("begin");
     let end = node.child_by_field_name("end");
@@ -297,9 +326,8 @@ fn opt_cardinality(node: Node, state: &mut VisitorGraph) -> Option<Cardinality> 
             opt_int(begin, state)?,
             opt_int(end.unwrap(), state)?,
         )),
-        (Some(begin), Some("*")) => Some(Cardinality::From(opt_int(begin, state)?)),
-        (None, Some("int")) => Some(Cardinality::Max(opt_int(end.unwrap(), state)?)),
-        (_, _) => Some(Cardinality::Any),
+        (None, Some("int")) => Some(Cardinality::Range(0, opt_int(end.unwrap(), state)?)),
+        (_, _) => Some(Cardinality::Range(0, 1)),
     }
 }
 
@@ -323,18 +351,14 @@ fn opt_aggreate_op(state: &mut VisitorGraph) -> Option<AggregateOP> {
     match state.slice(state.child_by_name("op")?).borrow() {
         "sum" => Some(AggregateOP::Sum),
         "avg" => Some(AggregateOP::Avg),
-        _ => {
-            None
-        }
+        _ => None,
     }
 }
 fn opt_integer_op(state: &mut VisitorGraph) -> Option<IntegerOP> {
     match state.slice(state.child_by_name("op")?).borrow() {
         "floor" => Some(IntegerOP::Floor),
         "ceil" => Some(IntegerOP::Ceil),
-        _ => {
-            None
-        }
+        _ => None,
     }
 }
 fn opt_function_args(state: &mut VisitorGraph) -> Option<Vec<Path>> {
@@ -362,7 +386,7 @@ fn opt_aggregate(state: &mut VisitorGraph) -> Option<Expr> {
     let op = opt_aggreate_op(state)?;
     let args = opt_function_args(state)?;
     match args.len() {
-        0 => { None }
+        0 => None,
         1 => Some(Expr::Aggregate {
             op,
             query: args[0].clone(),
@@ -373,7 +397,7 @@ fn opt_aggregate(state: &mut VisitorGraph) -> Option<Expr> {
             query: args[1].clone(),
             context: None,
         }),
-        _ => { None }
+        _ => None,
     }
 }
 fn opt_integer(state: &mut VisitorGraph) -> Option<Expr> {
@@ -381,9 +405,11 @@ fn opt_integer(state: &mut VisitorGraph) -> Option<Expr> {
     visit_children(state, |state| {
         if state.goto_field("arg") {
             let n: Box<ExprDecl> = opt_numeric(state)?.into();
-            let out = Some(Expr::Integer{op: op.clone(), n});
+            let out = Some(Expr::Integer { op: op.clone(), n });
             out
-        } else { None }
+        } else {
+            None
+        }
     })
 }
 fn opt_numeric(state: &mut VisitorGraph) -> Option<ExprDecl> {
@@ -410,27 +436,25 @@ fn opt_numeric(state: &mut VisitorGraph) -> Option<ExprDecl> {
                         lhs: Box::new(lhs),
                         rhs: Box::new(rhs),
                     })
-                } else { None }
+                } else {
+                    None
+                }
             })
         }
         "nested_expr" => visit_children(state, opt_numeric).map(|c| c.content),
-        "function" => {match state.slice(state.child_by_name("op")?).borrow() {
-            "sum" | "avg" => {
-                opt_aggregate(state)
-            },
-            "len" => {
-                visit_children(state, |state| {
-                    if state.goto_field("arg") {
-                        Some(Expr::Len(opt_numeric(state)?.into()))
-                    } else { None }
-                })
-            },
-            "floor" | "ceil" => {
-                opt_integer(state)
-            },
-            _ => { None }
-        }},
-        _ => { None }
+        "function" => match state.slice(state.child_by_name("op")?).borrow() {
+            "sum" | "avg" => opt_aggregate(state),
+            "len" => visit_children(state, |state| {
+                if state.goto_field("arg") {
+                    Some(Expr::Len(opt_numeric(state)?.into()))
+                } else {
+                    None
+                }
+            }),
+            "floor" | "ceil" => opt_integer(state),
+            _ => None,
+        },
+        _ => None,
     }
     .map(|content| ExprDecl { span, content })
 }
@@ -451,7 +475,7 @@ fn opt_equation(node: Node) -> Option<EquationOP> {
         _ => None,
     }
 }
-fn visit_constraint(graph: &mut VisitorGraph, _: GraphNode) {
+fn visit_constraint(graph: &mut VisitorGraph, _: GraphNode, _: &bool) {
     graph.add_constraint(graph.node().byte_range());
 }
 fn opt_bool(graph: &mut VisitorGraph) -> bool {
@@ -483,10 +507,8 @@ fn opt_attrib_expr(graph: &mut VisitorGraph) -> Option<Value> {
         "number" => Some(Value::Number(opt_number(graph)?)),
         "bool" => Some(Value::Bool(visit_children(graph, opt_bool))),
         "string" => Some(Value::String(opt_string(graph)?)),
-        "path" => { None }
-        "binary_expr" | "nested_expr" | "aggregate" | "unary_expr" => {
-            None
-        }
+        "path" => None,
+        "binary_expr" | "nested_expr" | "aggregate" | "unary_expr" => None,
         _ => None,
     }
 }
@@ -500,34 +522,34 @@ fn opt_value(graph: &mut VisitorGraph) -> Value {
     }
 }
 
-fn visit_attribute_value(graph: &mut VisitorGraph, _: GraphNode) {
+fn visit_attribute_value(graph: &mut VisitorGraph, _: GraphNode, _: &bool) {
     graph.goto_field("name");
     let _ = opt_name(graph).unwrap();
 }
-fn visit_constraint_list(graph: &mut VisitorGraph, parent: GraphNode) {
+fn visit_constraint_list(graph: &mut VisitorGraph, parent: GraphNode, _: &bool) {
     loop {
         if graph.kind() == "constraint" {
-            visit_children_arg(graph, parent.clone(), visit_constraint);
+            visit_children_arg(graph, parent.clone(), &false, visit_constraint);
         }
         if !graph.goto_next_sibling() {
             break;
         }
     }
 }
-fn visit_attributes(graph: &mut VisitorGraph, parent: &GraphNode) {
+fn visit_attributes(graph: &mut VisitorGraph, parent: &GraphNode, _: &bool) {
     loop {
         match graph.kind() {
             "attribute_constraints" => {
-                visit_children_arg(graph, parent.clone(), visit_constraint_list);
+                visit_children_arg(graph, parent.clone(), &false, visit_constraint_list);
             }
             "attribute_constraint" => {
                 visit_children(graph, |state| {
                     debug_assert!(state.goto_kind("constraint"));
-                    visit_children_arg(state, parent.clone(), visit_constraint);
+                    visit_children_arg(state, parent.clone(), &false, visit_constraint);
                 });
             }
             "attribute_value" => {
-                visit_children_arg(graph, parent.clone(), visit_attribute_value);
+                visit_children_arg(graph, parent.clone(), &false, visit_attribute_value);
             }
             _ => {}
         }
@@ -548,19 +570,17 @@ fn visit_feature(graph: &mut VisitorGraph, parent: &mut GraphNode, name: SymbolS
             .parent()
             .unwrap()
             .child_by_field_name("cardinality")
-            .and_then(|n| {
-                opt_cardinality(n, graph)
-            }),
-        parent: Some(Box::new(parent.clone()))
+            .and_then(|n| opt_cardinality(n, graph)),
+        parent: Some(Box::new(parent.clone())),
     };
 
     loop {
         match graph.cursor().node().kind() {
             "attributes" => {
-                visit_children_arg(graph, &feature, visit_attributes);
+                visit_children_arg(graph, &feature, &false, visit_attributes);
             }
             "blk" => {
-                visit_children_arg(graph, &mut feature, visit_blk_decl);
+                visit_children_arg(graph, &mut feature, &false, visit_blk_decl);
             }
             _ => {}
         }
@@ -586,14 +606,14 @@ fn visit_group(graph: &mut VisitorGraph, mut parent: &mut GraphNode, mode: Group
     parent.group_mode = Some(mode);
     loop {
         if graph.kind() == "blk" {
-            visit_children_arg(graph, &mut *parent, visit_blk_decl);
+            visit_children_arg(graph, &mut *parent, &false, visit_blk_decl);
         }
         if !graph.goto_next_sibling() {
             break;
         }
     }
 }
-fn visit_blk_decl(graph: &mut VisitorGraph, parent: &mut GraphNode) {
+fn visit_blk_decl(graph: &mut VisitorGraph, parent: &mut GraphNode, _: &bool) {
     graph.goto_field("header");
     match graph.kind() {
         "name" => {
@@ -606,7 +626,7 @@ fn visit_blk_decl(graph: &mut VisitorGraph, parent: &mut GraphNode) {
                 let ty = match &*graph.slice_raw(graph.node().byte_range()) {
                     "Integer" | "Real" => Type::Real,
                     "String" => Type::String,
-                    _ => { Type::Bool }
+                    _ => Type::Bool,
                 };
                 graph.goto_field("name");
                 Some((opt_name(graph).unwrap(), ty))
@@ -633,17 +653,17 @@ fn visit_blk_decl(graph: &mut VisitorGraph, parent: &mut GraphNode) {
             visit_group(graph, parent, mode);
         }
         "cardinality" => {
-            let card = opt_cardinality(graph.node(), graph).unwrap_or(Cardinality::Any);
+            let card = opt_cardinality(graph.node(), graph).unwrap_or(Cardinality::Fixed);
             visit_group(graph, parent, GroupMode::Cardinality(card));
         }
-        _ => { }
+        _ => {}
     }
 }
 fn visit_features(graph: &mut VisitorGraph) {
     let mut root: GraphNode = GraphNode::root(graph.root_name.clone());
     loop {
         if graph.kind() == "blk" {
-            visit_children_arg(graph, &mut root, visit_blk_decl);
+            visit_children_arg(graph, &mut root, &false, visit_blk_decl);
         }
         if !graph.goto_next_sibling() {
             break;
@@ -653,8 +673,10 @@ fn visit_features(graph: &mut VisitorGraph) {
 fn visit_constraint_decl(graph: &mut VisitorGraph) {
     loop {
         match graph.kind() {
-            "constraint" | "ref" => visit_children_arg(graph, GraphNode::root(None), visit_constraint),
-            "name" => visit_constraint(graph, GraphNode::root(None)),
+            "constraint" | "ref" => {
+                visit_children_arg(graph, GraphNode::root(None), &false, visit_constraint)
+            }
+            "name" => visit_constraint(graph, GraphNode::root(None), &false),
             _ => {}
         }
         if !graph.goto_next_sibling() {
@@ -669,14 +691,14 @@ fn visit_constraints(graph: &mut VisitorGraph) {
             let header = graph.header().unwrap();
             match header.kind() {
                 "constraint" | "name" | "ref" => {
-                    if !has_constraints{
+                    if !has_constraints {
                         graph.begin_constraints();
                         has_constraints = true;
                     }
-                    
+
                     visit_children(graph, visit_constraint_decl);
                 }
-                _ => { }
+                _ => {}
             }
         }
         if !graph.goto_next_sibling() {
@@ -714,7 +736,7 @@ pub fn visit_root(source: Rope, tree: Tree, uri: Url) -> Graph {
         cursor: tree.walk(),
         dot: "".to_string(),
         source: &source,
-        root_name: None
+        root_name: None,
     };
     graph.begin();
     visit_children(&mut graph, visit_top_lvl);
@@ -723,7 +745,7 @@ pub fn visit_root(source: Rope, tree: Tree, uri: Url) -> Graph {
 
     Graph {
         dot: graph.dot,
-        uri
+        uri,
     }
 }
 
@@ -746,7 +768,7 @@ enum ArrowEnd {
     DiamondEmpty,
     Box,
     BoxEmpty,
-    Tee
+    Tee,
 }
 impl ArrowEnd {
     fn as_str(&self) -> &str {
@@ -770,14 +792,14 @@ impl ArrowEnd {
         match mode {
             GroupMode::Or => Self::DotFilled,
             GroupMode::Alternative => Self::DotEmpty,
-            _ => Self::None
+            _ => Self::None,
         }
     }
     fn tail(mode: GroupMode) -> Self {
         match mode {
             GroupMode::Optional => Self::DotEmpty,
             GroupMode::Mandatory => Self::DotFilled,
-            _ => Self::None
+            _ => Self::None,
         }
     }
 }
@@ -788,7 +810,7 @@ enum Shape {
     Ellipse,
     Oval,
     Circle,
-    HouseInverted
+    HouseInverted,
 }
 impl Shape {
     fn as_str(&self) -> &str {
@@ -804,7 +826,7 @@ impl Shape {
     fn by_mode(mode: GroupMode) -> Self {
         match mode {
             GroupMode::Alternative | GroupMode::Or => Self::HouseInverted,
-            _ => Self::Box
+            _ => Self::Box,
         }
     }
 }

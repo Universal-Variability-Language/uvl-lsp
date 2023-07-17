@@ -1,4 +1,4 @@
-use crate::{core::*, ide::inlays::InlayHandler, load_blocking, smt};
+use crate::{core::*, ide::inlays::InlayHandler, smt};
 use check::*;
 use dashmap::DashMap;
 use document::*;
@@ -39,7 +39,7 @@ enum DraftMsg {
     Delete(Instant),
     Update(DidChangeTextDocumentParams, Instant),
     Snapshot(oneshot::Sender<Draft>),
-    Shutdown,//Not really needed, TODO remove this
+    Shutdown, //Not really needed, TODO remove this
 }
 //Turn a tree-sitter trees into a usable rust structure and send it to the linker
 async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
@@ -50,7 +50,8 @@ async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
             source,
             tree,
         } => {
-            let mut ast = ast::AstDocument::new(source.clone(), tree.clone(), uri.clone(), timestamp);
+            let mut ast =
+                ast::AstDocument::new(source.clone(), tree.clone(), uri.clone(), timestamp);
             ast.errors.append(&mut check::check_sanity(&tree, &source));
             ast.errors.append(&mut check::check_errors(&tree, &source));
             let _ = tx_link.send(LinkMsg::UpdateAst(Arc::new(ast))).await;

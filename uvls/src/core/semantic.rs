@@ -209,7 +209,6 @@ impl RootGraph {
                 }
             }
         }
-        //info!("dirty {:?}",dirty);
         Self {
             cancel: CancellationToken::new(),
             cache: Cache::new(old, files, configs, &dirty, revision, err),

@@ -165,7 +165,6 @@ impl SMTModule {
         (define-fun floor ((x Real)) Int (to_int x))
         (define-fun ceil ((x Real)) Int (ite (= (to_int x) x) (to_int x) (to_int (+ x 1)) ))
         (set-option :smt.core.minimize true)\n"
-
             .to_string();
         out
     }
@@ -304,13 +303,10 @@ impl SMTModule {
                                 stack.push(CExpr::Expr(i));
                             }
                         }
-                        Expr::Strlen(e)
-                            | Expr::Ceil(e)
-                            | Expr::Floor(e)
-                            | Expr::Not(e) => {
-                                stack.push(CExpr::End);
-                                stack.push(CExpr::Expr(e));
-                            }
+                        Expr::Strlen(e) | Expr::Ceil(e) | Expr::Floor(e) | Expr::Not(e) => {
+                            stack.push(CExpr::End);
+                            stack.push(CExpr::Expr(e));
+                        }
                         Expr::StrConcat(rhs, lhs) => {
                             stack.push(CExpr::End);
                             stack.push(CExpr::Expr(rhs));
@@ -425,6 +421,7 @@ impl Into<Expr> for ConfigValue {
             Self::Bool(b) => Expr::Bool(b),
             Self::Number(n) => Expr::Real(n),
             Self::String(s) => Expr::String(s),
+            Self::Cardinality(_) => Expr::Bool(true),
         }
     }
 }
@@ -440,6 +437,36 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
     for (m, file) in module.instances() {
         for f in file.all_features() {
             builder.push_var(m.sym(f));
+        }
+
+        for sym_feature in file.all_features() {
+            if let Symbol::Feature(id) = sym_feature {
+                let feature = file.get_feature(id).unwrap().clone();
+                if let Cardinality::Range(min, _) =
+                    feature.cardinality.unwrap_or_else(|| Cardinality::Fixed)
+                {
+                    // Make AtLeast assertion for cardinality feature
+                    if feature.first_cardinality_child {
+                        let mut list = vec![];
+                        let parent = file.parent(sym_feature, false).unwrap();
+
+                        for child in file.direct_children(parent) {
+                            if let Symbol::Feature(sibling_id) = child {
+                                let sibling = file.get_feature(sibling_id);
+                                if sibling.unwrap().name.name.as_str() == feature.name.name.as_str()
+                                {
+                                    list.push(builder.var(m.sym(Symbol::Feature(sibling_id))));
+                                }
+                            }
+                        }
+
+                        builder.assert.push(Assert(
+                            Some(AssertInfo(m.sym(sym_feature), AssertName::GroupMin)),
+                            Expr::AtLeast(min, list),
+                        ));
+                    }
+                }
+            }
         }
     }
     //set config features
@@ -527,14 +554,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
                             ))
                         }
                     }
-                    GroupMode::Optional | GroupMode::Cardinality(Cardinality::Any) => {}
-                    GroupMode::Cardinality(Cardinality::Max(max)) => {
-                        builder.max_assert(max, &p_bind, m.sym(g));
-                    }
-
-                    GroupMode::Cardinality(Cardinality::From(min)) => {
-                        builder.min_assert(min, &p_bind, m.sym(g));
-                    }
+                    GroupMode::Optional | GroupMode::Cardinality(Cardinality::Fixed) => {}
                     GroupMode::Cardinality(Cardinality::Range(min, max)) => {
                         builder.min_assert(min, &p_bind, m.sym(g));
                         builder.max_assert(max, &p_bind, m.sym(g));
@@ -593,7 +613,7 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
                     return true;
                 }
                 let ms = m.sym(a);
-                 builder.push_var(ms);
+                builder.push_var(ms);
                 true
             });
         }
@@ -721,14 +741,12 @@ fn translate_expr(decl: &ast::ExprDecl, m: InstanceID, builder: &mut SMTBuilder)
                 )
             }
         }
-        ast::Expr::Integer { op, n} => {
-           (
-                match op {
-                    ast::IntegerOP::Ceil => Expr::Ceil(translate_expr(n, m, builder).0.into()),
-                    ast::IntegerOP::Floor => Expr::Floor(translate_expr(n, m, builder).0.into())
-                },
-                Type::Real,
-            )
-        }
+        ast::Expr::Integer { op, n } => (
+            match op {
+                ast::IntegerOP::Ceil => Expr::Ceil(translate_expr(n, m, builder).0.into()),
+                ast::IntegerOP::Floor => Expr::Floor(translate_expr(n, m, builder).0.into()),
+            },
+            Type::Real,
+        ),
     }
 }

@@ -114,8 +114,7 @@ pub fn iter_values<'a>(
     module: &'a Module,
     mut values: &'a str,
 ) -> impl Iterator<Item = (ModuleSymbol, ConfigValue)> + 'a {
-
-    values = &values[values.find('(').map(|i|i+1).unwrap_or(0) ..];
+    values = &values[values.find('(').map(|i| i + 1).unwrap_or(0)..];
     let parser = ValueParser {
         var_ty: |id| module.type_of(smt_module.variables[id]),
     };
@@ -124,10 +123,7 @@ pub fn iter_values<'a>(
             values = i;
             Some((smt_module.variables[v], c))
         }
-        Err(_e) =>{
-            None
-
-        },
+        Err(_e) => None,
     })
 }
 
@@ -190,7 +186,7 @@ mod tests {
         assert_eq!(n, "test");
         let (i,(_,ConfigValue::Bool(n))) = parser.parse(i).unwrap() else {panic!()};
         assert_eq!(n, true);
-        let (i,(_,ConfigValue::Number(n))) = parser.parse(i).unwrap() else {panic!()};
-        assert_approx_eq!(n,1.0);
+        let (_i,(_,ConfigValue::Number(n))) = parser.parse(i).unwrap() else {panic!()};
+        assert_approx_eq!(n, 1.0);
     }
 }

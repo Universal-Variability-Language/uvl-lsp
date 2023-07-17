@@ -172,7 +172,7 @@ async fn inlay_handler(mut rx: mpsc::Receiver<InlayEvent>, client: Client) -> Re
                     .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
                     .await?;
 
-                info!("{}",map.is_some());
+                info!("{}", map.is_some());
             }
             InlayEvent::Publish(model, timestamp) => {
                 info!("publish");

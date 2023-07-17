@@ -3,13 +3,15 @@
 
 use flexi_logger::FileSpec;
 use get_port::Ops;
+
 use log::info;
-use serde::Serialize;
-use tokio::{join, spawn};
-use std::io::{Read, Write};
 use percent_encoding::percent_decode_str;
+use serde::Serialize;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::{join, spawn};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -144,12 +146,14 @@ impl LanguageServer for Backend {
                         },
                     ),
                 ),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 references_provider: Some(OneOf::Left(true)),
-                rename_provider : Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Left(true)),
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(true),
                 }),
                 inlay_hint_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         "uvls/show_config".into(),
@@ -229,6 +233,22 @@ impl LanguageServer for Backend {
         }
         Ok(None)
     }
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let uri = params.text_document.uri;
+        let root_fileid = FileID::from_uri(&Url::parse(uri.as_str()).unwrap());
+        let root_graph = self.pipeline.root().borrow_and_update().clone();
+        if !root_graph.contains_id(root_fileid) {
+            return Ok(None);
+        }
+
+        let document = root_graph.files.get(&root_fileid).unwrap();
+        let c = ast::collapse::Collapse::new(
+            document.source.clone(),
+            document.tree.clone(),
+            uri.clone(),
+        );
+        Ok(Some(c.ranges))
+    }
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
@@ -267,7 +287,7 @@ impl LanguageServer for Backend {
                 &draft,
                 uri,
                 &params.text_document_position.position,
-                params.new_name
+                params.new_name,
             ))
         } else {
             return Ok(None);
@@ -377,22 +397,36 @@ impl LanguageServer for Backend {
             "uvls/generate_diagram" => {
                 let root_fileid = FileID::from_uri(&Url::parse(uri.as_str()).unwrap());
                 let root_graph = self.pipeline.root().borrow_and_update().clone();
-                if !root_graph.contains_id(root_fileid){{}}
-                
+                if !root_graph.contains_id(root_fileid) {
+                    {}
+                }
+
                 let document = root_graph.files.get(&root_fileid).unwrap();
-                let g = ast::graph::Graph::new(document.source.clone(), document.tree.clone(), uri.clone());
+                let g = ast::graph::Graph::new(
+                    document.source.clone(),
+                    document.tree.clone(),
+                    uri.clone(),
+                );
 
                 // write graph script (dot) to file:
                 let diagram_file_extension = "dot";
                 let re = regex::Regex::new(r"(.*\.)(.*)").unwrap();
-                let path = re.replace(uri.path(), |caps: &regex::Captures| {format!("{}{}", &caps[1], diagram_file_extension)});
-                let file = std::fs::File::create(path.as_ref())
-                    .or(std::fs::File::create(percent_decode_str(&path.replacen("/", "", 1)).decode_utf8().unwrap().into_owned())); // windows specific
+                let path = re.replace(uri.path(), |caps: &regex::Captures| {
+                    format!("{}{}", &caps[1], diagram_file_extension)
+                });
+                let file = std::fs::File::create(path.as_ref()).or(std::fs::File::create(
+                    percent_decode_str(&path.replacen("/", "", 1))
+                        .decode_utf8()
+                        .unwrap()
+                        .into_owned(),
+                )); // windows specific
 
                 if file.is_ok() {
-                    file.unwrap().write_all(g.dot.as_bytes()).expect("Error while writing to dot file");
+                    file.unwrap()
+                        .write_all(g.dot.as_bytes())
+                        .expect("Error while writing to dot file");
                 } else {
-                    return Ok(Some(serde_json::to_value(g.dot).unwrap()))
+                    return Ok(Some(serde_json::to_value(g.dot).unwrap()));
                 }
             }
             _ => {}
@@ -433,6 +467,9 @@ impl LanguageServer for Backend {
                             character: 0,
                         },
                     },
+                    command: if self.pipeline.inlay_state().is_active(
+                        ide::inlays::InlaySource::File(semantic::FileID::new(uri.as_str())),
+                    ) {
                     command: if self.pipeline.inlay_state().is_active(
                         ide::inlays::InlaySource::File(semantic::FileID::new(uri.as_str())),
                     ) {
@@ -524,9 +561,31 @@ impl LanguageServer for Backend {
                         arguments: Some(vec![uri_json]),
                     }),
                     data: None,
-                }
+                },
             ]))
         }
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        for diagnostic in params.clone().context.diagnostics {
+            // Checks if there is a quick fix for the current diagnostic message
+            match diagnostic.clone().data {
+                Some(serde_json::value::Value::Number(number)) => {
+                    match ErrorType::from_u32(number.as_u64().unwrap_or(0) as u32) {
+                        ErrorType::Any => info!("No Quickfix for this Error"),
+                        ErrorType::FeatureNameContainsDashes => {
+                            return actions::rename_dash(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
+                    }
+                }
+                _ => (),
+            }
+        }
+        return Ok(None);
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -544,6 +603,7 @@ fn main() {
 }
 async fn server_main() {
     std::env::set_var("RUST_BACKTRACE", "1");
+
 
     log_panics::Config::new()
         .backtrace_mode(log_panics::BacktraceMode::Unresolved)

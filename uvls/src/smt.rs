@@ -222,7 +222,6 @@ async fn find_fixed(
         }
         //let time = Instant::now();
         if solve.check_sat().await? {
-            //info!("check sat {:?}", time.elapsed());
             let unknown = state
                 .iter()
                 .filter(|(_, v)| !matches!(*v, SMTValueState::Any))
@@ -230,7 +229,6 @@ async fn find_fixed(
                     format!("{acc} v{}", module.var(*k))
                 });
             let values = solve.values(unknown).await?;
-            //info!("model {:?}", time.elapsed());
             for (s, v) in module.parse_values(&values, base_module) {
                 if let Some(old) = state.get(&s) {
                     match (v, old) {
@@ -413,7 +411,7 @@ async fn check_base_sat(
                 for r in reasons {
                     let file = module.file(r.0.instance).id;
                     if !void_is_marked {
-                        // works only if keyword feature is the only keyword stored in the Keyword vector in the AST, but since I see no reason 
+                        // works only if keyword feature is the only keyword stored in the Keyword vector in the AST, but since I see no reason
                         // why another keyword is needed in the green tree, so the features keyword would always have id 0.
                         e.sym(Symbol::Keyword(0), file, 12, "void feature model");
                         void_is_marked = true;
@@ -596,13 +594,11 @@ pub async fn web_view_handler(
                             })
                         })
                         .await;
-                    //info!("model: {model:?}");
                     tx_ui
                         .send(webview::UIAction::UpdateSMTModel(model, tag))
                         .await?;
                 }
                 Err(e) => {
-                    //info!("err {e}");
                     inlay_state.maybe_reset(inlay_source).await;
                     tx_ui
                         .send(webview::UIAction::UpdateSMTInvalid(format!("{e}"), tag))
