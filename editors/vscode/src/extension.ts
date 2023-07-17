@@ -32,6 +32,8 @@ import { info } from 'console';
 let client: LanguageClient | null = null;
 let outputChannel: vscode.OutputChannel | null = null;
 const SOURCE_URI = "https://api.github.com/repos/Universal-Variability-Language/uvl-lsp/releases/latest";
+let rangeOrOptions: Map<String,Array<Array<vscode.Range>>> = new Map();
+const decorators: Array<vscode.TextEditorDecorationType> = new Array(4);
 
 
 function getDefaultInstallationName(): string | null {
@@ -316,7 +318,6 @@ async function startClient(context: ExtensionContext) {
 
 	};
 	// Decorator for dead features
-	const decorators: Array<vscode.TextEditorDecorationType> = new Array(4);
 	decorators[0] = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: context.asAbsolutePath("assets/deadfeature.svg"),
 		gutterIconSize: "90%",
@@ -342,7 +343,7 @@ async function startClient(context: ExtensionContext) {
 		gutterIconSize: "90%",
 		backgroundColor: { id: 'color.voidfeature' }
 	});
-	let rangeOrOptions: Map<String,Array<Array<vscode.Range>>> = new Map();
+	rangeOrOptions = new Map();
 	
 	//If we change the textEditor, the Decoration remains intact 
 	window.onDidChangeActiveTextEditor((editor) =>{
@@ -411,6 +412,13 @@ async function startClient(context: ExtensionContext) {
 	client.start();
 }
 async function stopClient(): Promise<void> {
+	for (const editor of  window.visibleTextEditors) {
+		let range = rangeOrOptions.get(editor.document.fileName);
+		if (range !== undefined ){
+			decorators.forEach((decorator) => editor.setDecorations(decorator, []));
+		}
+	}
+	rangeOrOptions = new Map();
 	if (client) client.stop();
 	client = null;
 }
