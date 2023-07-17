@@ -110,6 +110,8 @@ impl LanguageServer for Backend {
         {
             self.settings.lock().has_webview = true;
         }
+        
+        self.pipeline.import_handler();
 
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
