@@ -8,7 +8,6 @@ use log::info;
 use percent_encoding::percent_decode_str;
 use serde::Serialize;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::{join, spawn};
@@ -75,7 +74,7 @@ impl Backend {
     }
 }
 //load a file, this is tricky because the editor can also load it at the same time
-fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
+pub fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
     if let Err(e) = std::fs::File::open(uri.to_file_path().unwrap()).and_then(|mut f| {
         let meta = f.metadata()?;
         let modified = meta.modified()?;
@@ -467,9 +466,6 @@ impl LanguageServer for Backend {
                             character: 0,
                         },
                     },
-                    command: if self.pipeline.inlay_state().is_active(
-                        ide::inlays::InlaySource::File(semantic::FileID::new(uri.as_str())),
-                    ) {
                     command: if self.pipeline.inlay_state().is_active(
                         ide::inlays::InlaySource::File(semantic::FileID::new(uri.as_str())),
                     ) {

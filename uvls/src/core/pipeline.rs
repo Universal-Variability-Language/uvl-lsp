@@ -1,4 +1,4 @@
-use crate::{core::*, ide::inlays::InlayHandler, smt};
+use crate::{core::*, ide::inlays::InlayHandler, smt, load_blocking};
 use check::*;
 use dashmap::DashMap;
 use document::*;
