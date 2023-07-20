@@ -317,7 +317,7 @@ impl AstDocument {
     pub fn get_reference(&self, index: usize) -> Option<&Reference> {
         self.ast.references.get(index)
     }
-    pub  fn get_ast (&self) -> Ast {
+    pub fn get_ast(&self) -> Ast {
         self.ast.clone()
     }
     pub fn lsp_range(&self, sym: Symbol) -> Option<tower_lsp::lsp_types::Range> {

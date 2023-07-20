@@ -321,7 +321,8 @@ impl FileSystem {
                                     Some(name) => {
                                         // checks if already written text is prefix of the path
                                         let mut valid_path = true;
-                                        let mut check_path: Vec<&str> = name.clone().split("/").collect();
+                                        let mut check_path: Vec<&str> =
+                                            name.clone().split("/").collect();
                                         for i in prefix.iter() {
                                             let check_prefix = i.as_str();
 
@@ -347,8 +348,10 @@ impl FileSystem {
                                         }
                                         let name_up = check_path.join("/");
                                         if valid_path {
-                                            let new_name =
-                                                name_up.replace("/", ".").replace("\\", ".").replace(".uvl", "");
+                                            let new_name = name_up
+                                                .replace("/", ".")
+                                                .replace("\\", ".")
+                                                .replace(".uvl", "");
                                             // safe file for autoCompletion
                                             stack.push((
                                                 new_name.as_str().into(),
@@ -495,7 +498,12 @@ impl Cache {
                         .keys()
                         .find(|key| {
                             key.as_str().strip_prefix("file:///").unwrap_or("")
-                                == content.file.as_str().strip_prefix("file://").unwrap_or("").replace("\\", "/")
+                                == content
+                                    .file
+                                    .as_str()
+                                    .strip_prefix("file://")
+                                    .unwrap_or("")
+                                    .replace("\\", "/")
                         })
                         .unwrap_or(&FileID::new("X"))
                 };

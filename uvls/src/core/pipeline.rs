@@ -1,4 +1,4 @@
-use crate::{core::*, ide::inlays::InlayHandler, smt, load_blocking};
+use crate::{core::*, ide::inlays::InlayHandler, load_blocking, smt};
 use check::*;
 use dashmap::DashMap;
 use document::*;
@@ -241,7 +241,7 @@ async fn link_handler(
         )>,
         tx_cache: watch::Sender<Arc<RootGraph>>,
         tx_err: mpsc::Sender<DiagnosticUpdate>,
-        tx_root_imports: watch::Sender<Arc<RootGraph>>
+        tx_root_imports: watch::Sender<Arc<RootGraph>>,
     ) {
         let mut timestamps: HashMap<FileID, Instant> = HashMap::new();
         info!("started link execute");
@@ -269,7 +269,7 @@ async fn link_handler(
                     error_state: err.errors,
                 })
                 .await;
-            let _= tx_root_imports.send(Arc::new(root));
+            let _ = tx_root_imports.send(Arc::new(root));
         }
     }
 }
@@ -338,7 +338,13 @@ impl AsyncPipeline {
         let revision_counter = Arc::new(AtomicU64::new(0));
         let (tx_dirty, _) = broadcast::channel(1024);
         let inlay_handler = InlayHandler::new(client.clone());
-        spawn(link_handler(rx_link, tx_root, tx_err.clone(), tx_ast, tx_root_imports));
+        spawn(link_handler(
+            rx_link,
+            tx_root,
+            tx_err.clone(),
+            tx_ast,
+            tx_root_imports,
+        ));
         spawn(check::diagnostic_handler(rx_err, client.clone()));
         spawn(smt::check_handler(
             rx_root.clone(),

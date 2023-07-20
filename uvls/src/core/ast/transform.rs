@@ -1313,7 +1313,7 @@ pub fn visit_root(source: Rope, tree: Tree, uri: Url, timestamp: Instant) -> Ast
         (state.ast, state.errors)
     };
     let path = uri_to_path(&uri).unwrap();
-    // without this Code namespaces are ignored for imports and the normal path is used 
+    // without this Code namespaces are ignored for imports and the normal path is used
     // if let Some(ns) = ast.namespace.as_ref() {
     //     let len = path.len().saturating_sub(ns.names.len());
     //     path.truncate(len);

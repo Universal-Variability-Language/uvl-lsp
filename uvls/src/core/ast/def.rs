@@ -40,18 +40,18 @@ impl Path {
     }
     pub fn to_string(&self) -> String {
         self.names.iter().map(|i| i.as_str()).join(".")
-    } 
+    }
 
     //creates from root_path and the path an absolute path
-    pub fn to_file(&self,root_path: &str ) -> String {
+    pub fn to_file(&self, root_path: &str) -> String {
         let mut slash = "/";
-        if std::env::consts::OS == "windows"  {
+        if std::env::consts::OS == "windows" {
             slash = "\\"
         }
-        let mut dir:Vec<&str> = root_path.split(slash).collect();
+        let mut dir: Vec<&str> = root_path.split(slash).collect();
         let absoultpath = self.names.iter().map(|i| i.as_str()).join(slash);
         let root_dir = root_path.replace(dir.pop().unwrap(), "");
-        let path = root_dir+ slash+ &absoultpath+".uvl";
+        let path = root_dir + slash + &absoultpath + ".uvl";
         path
     }
 }

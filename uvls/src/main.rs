@@ -30,7 +30,6 @@ impl Default for Settings {
     }
 }
 
-
 //The LSP
 struct Backend {
     client: Client,
@@ -111,7 +110,7 @@ impl LanguageServer for Backend {
         {
             self.settings.lock().has_webview = true;
         }
-        
+
         self.pipeline.import_handler();
 
         Ok(InitializeResult {
@@ -345,8 +344,8 @@ impl LanguageServer for Backend {
         for i in params.changes {
             match i.typ {
                 FileChangeType::CREATED => {
-                        self.load(i.uri);
-                        break;
+                    self.load(i.uri);
+                    break;
                 }
                 FileChangeType::CHANGED => {
                     self.load(i.uri);
@@ -599,7 +598,6 @@ fn main() {
 }
 async fn server_main() {
     std::env::set_var("RUST_BACKTRACE", "1");
-
 
     log_panics::Config::new()
         .backtrace_mode(log_panics::BacktraceMode::Unresolved)
