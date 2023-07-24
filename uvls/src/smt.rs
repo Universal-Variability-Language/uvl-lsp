@@ -29,6 +29,7 @@ mod parse;
 pub mod smt_lib;
 pub use smt_lib::*;
 
+
 //SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
 //While the performance is worse than linking with Z3, we are solver independent and don't have to interact
 //with any C-Bindings. UVL is translated directly into SMT-LIB, both attributes and features are treated as
@@ -154,6 +155,7 @@ pub enum SMTValueState {
     On,
     Off,
     Core,
+    FalseOptional,
 }
 #[derive(Debug, Clone)]
 pub enum SMTModel {
@@ -187,7 +189,15 @@ async fn find_fixed(
     cancel: CancellationToken,
 ) -> Result<HashMap<ModuleSymbol, SMTValueState>> {
     let mut state = HashMap::new();
-    for (s, v) in initial_model {
+    let mut optionals: HashMap<ModuleSymbol, SMTValueState> = HashMap::new();
+
+    let x = initial_model;
+    for (s, v) in x {
+
+        let x = base_module.file(s.instance);
+        if let Some(GroupMode::Optional) = x.group_mode(x.parent(s.sym, false).unwrap_or(Symbol::Root)){
+            optionals.insert(s, SMTValueState::FalseOptional);
+        }
         match v {
             ConfigValue::Bool(true) => {
                 state.insert(s, SMTValueState::On);
@@ -228,6 +238,14 @@ async fn find_fixed(
                     ))
                     .await?;
             }
+            SMTValueState::FalseOptional => {
+                solve
+                    .push(format!(
+                        "(push 1)(assert (not {}))",
+                        module.pseudo_bool(k, base_module)
+                    ))
+                    .await?;
+            }
         }
         //let time = Instant::now();
         if solve.check_sat().await? {
@@ -250,12 +268,17 @@ async fn find_fixed(
                             state.insert(s, SMTValueState::Any);
                         }
                         (ConfigValue::Bool(true), SMTValueState::On) => {
-                            state.insert(s, SMTValueState::Core);
+                            if optionals.contains_key(&s) {
+                                state.insert(s, SMTValueState::FalseOptional);
+                            } else {
+                                state.insert(s, SMTValueState::Core);
+                            }
                         }
                         _ => {}
                     }
                 }
             }
+
         }
         solve.push("(pop 1)".into()).await?;
     }
@@ -373,6 +396,8 @@ async fn check_base_sat(
     }))
     .await;
 
+
+
     let mut e = ErrorsAcc::new(root);
     for k in models.into_iter() {
         match k {
@@ -392,6 +417,12 @@ async fn check_base_sat(
                                     SMTValueState::Core => {              
                                         if visited.insert((sym, file.id)) {
                                             e.sym_info(sym, file.id, 10, "Core feature");
+                                        }
+                                        true
+                                    }
+                                    SMTValueState::FalseOptional => {              
+                                        if visited.insert((sym, file.id)) {
+                                            e.sym_info(sym, file.id, 10, "False Optional");
                                         }
                                         true
                                     }
