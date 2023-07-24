@@ -29,7 +29,6 @@ mod parse;
 pub mod smt_lib;
 pub use smt_lib::*;
 
-
 //SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
 //While the performance is worse than linking with Z3, we are solver independent and don't have to interact
 //with any C-Bindings. UVL is translated directly into SMT-LIB, both attributes and features are treated as
@@ -193,9 +192,10 @@ async fn find_fixed(
 
     let x = initial_model;
     for (s, v) in x {
-
         let x = base_module.file(s.instance);
-        if let Some(GroupMode::Optional) = x.group_mode(x.parent(s.sym, false).unwrap_or(Symbol::Root)){
+        if let Some(GroupMode::Optional) =
+            x.group_mode(x.parent(s.sym, false).unwrap_or(Symbol::Root))
+        {
             optionals.insert(s, SMTValueState::FalseOptional);
         }
         match v {
@@ -278,7 +278,6 @@ async fn find_fixed(
                     }
                 }
             }
-
         }
         solve.push("(pop 1)".into()).await?;
     }
@@ -396,8 +395,6 @@ async fn check_base_sat(
     }))
     .await;
 
-
-
     let mut e = ErrorsAcc::new(root);
     for k in models.into_iter() {
         match k {
@@ -414,13 +411,13 @@ async fn check_base_sat(
                                         }
                                         false
                                     }
-                                    SMTValueState::Core => {              
+                                    SMTValueState::Core => {
                                         if visited.insert((sym, file.id)) {
                                             e.sym_info(sym, file.id, 10, "Core feature");
                                         }
                                         true
                                     }
-                                    SMTValueState::FalseOptional => {              
+                                    SMTValueState::FalseOptional => {
                                         if visited.insert((sym, file.id)) {
                                             e.sym_info(sym, file.id, 10, "False Optional");
                                         }
@@ -432,7 +429,6 @@ async fn check_base_sat(
                                     }
                                     _ => true,
                                 }
-                                
                             } else {
                                 true
                             }
@@ -463,7 +459,7 @@ async fn check_base_sat(
                 for r in reasons {
                     let file = module.file(r.0.instance).id;
                     if !void_is_marked {
-                        // works only if keyword feature is the only keyword stored in the Keyword vector in the AST, but since I see no reason 
+                        // works only if keyword feature is the only keyword stored in the Keyword vector in the AST, but since I see no reason
                         // why another keyword is needed in the green tree, so the features keyword would always have id 0.
                         e.sym(Symbol::Keyword(0), file, 12, "void feature model");
                         void_is_marked = true;
