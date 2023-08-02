@@ -634,22 +634,6 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
     }
 }
 
-// Translates a list of expressions into one big Or expression of those expressions
-fn or_expr(list: Vec<Expr>) -> Expr {
-    let mut right: Expr;
-    if list.len() > 1 {
-        right = list[0].clone();
-        for i in 1..list.len() {
-            right = Expr::Or(vec![list[i].clone(), right])
-        }
-    } else if list.len() == 1 {
-        right = list[0].clone();
-    } else {
-        panic!("No Expr found!")
-    }
-    return right;
-}
-
 fn translate_constraint(
     decl: &ast::ConstraintDecl,
     m: InstanceID,
@@ -666,7 +650,7 @@ fn translate_constraint(
                         .into_iter()
                         .map(|feature| builder.var(m.sym(feature)))
                         .collect::<Vec<Expr>>();
-                    return or_expr(all_of);
+                    return Expr::Or(all_of);
                 }
                 _ => (),
             }
