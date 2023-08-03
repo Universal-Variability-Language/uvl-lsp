@@ -204,6 +204,30 @@ impl Ast {
             .chain(self.all_references())
             .find(|s| self.span(*s).unwrap().contains(&offset))
     }
+    fn find_all_of(&self, current: Symbol, name: Ustr) -> Vec<Symbol> {
+        let mut relatives: Vec<Symbol> = vec![];
+        if let Symbol::Feature(x) = current {
+            if let Some(feature) = self.get_feature(x) {
+                if feature.name.name == name {
+                    relatives.push(Symbol::Feature(x));
+                    return relatives;
+                }
+            }
+        }
+        // Go through Children
+        match self.structure.children.get(&current) {
+            Some(list) => {
+                for sym in list {
+                    relatives.append(self.find_all_of(sym.to_owned(), name).as_mut())
+                }
+            }
+            None => {
+                // info!("Relative Symbol {:?} has no children", from);
+            }
+        }
+
+        return relatives;
+    }
 }
 //Combines the AST with metadata, this is also a public interface to the AST.
 #[derive(Clone, Debug)]
@@ -526,7 +550,9 @@ impl AstDocument {
     ) {
         self.visit_children_depth(root, merge_root_features, |sym, _| f(sym));
     }
-
+    pub fn find_all_of(&self, name: Ustr) -> Vec<Symbol> {
+        self.ast.find_all_of(Symbol::Root, name)
+    }
     //Iterate all named symbole under root
     pub fn visit_children_depth<F: FnMut(Symbol, u32) -> bool>(
         &self,
