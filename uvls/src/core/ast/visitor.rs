@@ -104,6 +104,16 @@ pub trait Visitor<'a> {
             severity: DiagnosticSeverity::ERROR,
             weight: w,
             msg: error.into(),
+            error_type: ErrorType::Any,
+        });
+    }
+    fn push_error_with_type<T: Into<String>>(&mut self, w: u32, error: T, error_type: ErrorType) {
+        self.push_err_raw(ErrorInfo {
+            location: node_range(self.node(), self.source()),
+            severity: DiagnosticSeverity::ERROR,
+            weight: w,
+            msg: error.into(),
+            error_type,
         });
     }
     fn push_error_node<T: Into<String>>(&mut self, node: Node, w: u32, error: T) {
@@ -112,6 +122,7 @@ pub trait Visitor<'a> {
             severity: DiagnosticSeverity::ERROR,
             weight: w,
             msg: error.into(),
+            error_type: ErrorType::Any,
         });
     }
 }
@@ -136,14 +147,14 @@ where
     }
 }
 
-pub fn visit_children_arg<'a, A, F, T, V>(state: &mut V, arg: A, mut f: F) -> T
+pub fn visit_children_arg<'a, A, F, T, V>(state: &mut V, arg: A, duplicate: &bool, mut f: F) -> T
 where
     V: Visitor<'a>,
-    F: FnMut(&mut V, A) -> T,
+    F: FnMut(&mut V, A, &bool) -> T,
     T: Default,
 {
     if state.goto_first_child() {
-        let out = stacker::maybe_grow(32 * 1024, 1024 * 1024, || f(state, arg));
+        let out = stacker::maybe_grow(32 * 1024, 1024 * 1024, || f(state, arg, duplicate));
         state.goto_parent();
         out
     } else {

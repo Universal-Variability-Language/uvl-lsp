@@ -143,7 +143,6 @@ pub fn parse_lang_lvl<S: SymbolSlice>(node: Node, source: &S) -> Option<SymbolSp
     }
 }
 pub fn parse_lang_lvl_path<S: SymbolSlice>(node: Node, source: &S) -> Option<Path> {
-    info!("{:?}", node);
     if let Some(name) = parse_lang_lvl(node, source) {
         Some(Path {
             names: vec![name.name],

@@ -192,9 +192,9 @@ module.exports = grammar({
             "optional",
         ),
         major_lvl: _ => choice(
-            'SMT-level',
-            'SAT-level',
-            'TYPE-level',
+            'Boolean',
+            'Arithmetic',
+            'Type',
         ),
         minor_lvl: _ => choice(
             'group-cardinality',

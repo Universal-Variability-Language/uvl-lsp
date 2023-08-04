@@ -35,22 +35,18 @@ pub fn token_types() -> Vec<SemanticTokenType> {
         SemanticTokenType::PARAMETER,
         SemanticTokenType::NUMBER,
         SemanticTokenType::STRING,
-
     ]
 }
-pub fn modifiers()->Vec<SemanticTokenModifier>{
-
+pub fn modifiers() -> Vec<SemanticTokenModifier> {
     vec![
-
         SemanticTokenModifier::DEPRECATED,
         SemanticTokenModifier::READONLY,
         SemanticTokenModifier::MODIFICATION,
         SemanticTokenModifier::ASYNC,
         SemanticTokenModifier::STATIC,
         SemanticTokenModifier::ABSTRACT,
-        SemanticTokenModifier::ASYNC
+        SemanticTokenModifier::ASYNC,
     ]
-
 }
 fn token_index(name: &str) -> u32 {
     match name {
@@ -66,18 +62,16 @@ fn token_index(name: &str) -> u32 {
         "macro" => 9,
         "parameter" => 10,
         "number" => 11,
-        "string"=>12,
+        "string" => 12,
         _ => 0,
     }
 }
-fn modifier_bitset(name:&str)->u32{
-    match name{
-        "deprecated"=>0b1, 
-        "readonly"=>0b10,
-        _=>0,
+fn modifier_bitset(name: &str) -> u32 {
+    match name {
+        "deprecated" => 0b1,
+        "readonly" => 0b10,
+        _ => 0,
     }
-
-
 }
 
 pub enum ColorUpdate {
@@ -133,10 +127,12 @@ impl FileState {
                     }],
                 });
             }
-        } else if self.state.len() > new.state.len() && self.state[prefix + diff..]
+        } else if self.state.len() > new.state.len()
+            && self.state[prefix + diff..]
                 .iter()
                 .zip(new.state[prefix..].iter())
-                .all(|(i, k)| i == k) {
+                .all(|(i, k)| i == k)
+        {
             return SemanticTokensFullDeltaResult::TokensDelta(SemanticTokensDelta {
                 result_id: None,
                 edits: vec![SemanticTokensEdit {
@@ -167,11 +163,7 @@ impl FileState {
         let mut cursor = QueryCursor::new();
 
         let captures = TS.queries.highlight.capture_names();
-        for i in cursor.matches(
-            &TS.queries.highlight,
-            origin,
-            node_source(source),
-        ) {
+        for i in cursor.matches(&TS.queries.highlight, origin, node_source(source)) {
             for c in i.captures {
                 let kind = captures[c.index as usize].as_str();
                 let range = fast_lsp_range(c.node, source, utf16_line);
@@ -208,7 +200,6 @@ impl FileState {
             if !sections.goto_next_sibling() {
                 break;
             }
-
         }
         token.sort_by_key(|a| (a.range.start.line, a.range.start.character));
         token.dedup();
@@ -242,7 +233,7 @@ impl FileState {
                         },
                         length: len,
                         token_type: i.kind,
-                        token_modifiers_bitset:  0
+                        token_modifiers_bitset: 0,
                     })
                 } else {
                     filtered.push(SemanticToken {
@@ -250,7 +241,7 @@ impl FileState {
                         delta_start: next_col,
                         length: len,
                         token_type: i.kind,
-                        token_modifiers_bitset: 0,                   
+                        token_modifiers_bitset: 0,
                     })
                 }
             } else {
@@ -317,16 +308,10 @@ impl State {
             files: Default::default(),
         }
     }
-    pub fn remove(&self,uri: &Url){
+    pub fn remove(&self, uri: &Url) {
         self.files.remove(uri);
     }
-    pub fn get(
-        &self,
-        root: Snapshot,
-        uri: Url,
-        tree: Tree,
-        source: ropey::Rope,
-    ) -> SemanticTokens {
+    pub fn get(&self, root: Snapshot, uri: Url, tree: Tree, source: ropey::Rope) -> SemanticTokens {
         let state = FileState::new(&uri, tree, &source, &root);
         let out = state.state.clone();
         self.files.insert(uri, state);

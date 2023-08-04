@@ -1,10 +1,10 @@
-use tokio::time::Instant;
 use crate::core::*;
-use resolve;
 use config::*;
 use hashbrown::HashMap;
 use indexmap::IndexSet;
 use log::info;
+use resolve;
+use tokio::time::Instant;
 use ustr::Ustr;
 
 use std::sync::Arc;
@@ -167,7 +167,8 @@ impl Module {
             _ => panic!("{src_sym:?} not a value"),
         }
     }
-    //Bind a recursive configuration doc to a linear set of symbols
+    // Bind a recursive configuration doc to a linear set of symbols
+    // Add layer for cardinality
     pub fn resolve_config<E: FnMut(Span, String)>(
         &self,
         doc: &Vec<ConfigEntry>,
@@ -179,35 +180,98 @@ impl Module {
         assert!(self.ok);
         let mut out = HashMap::new();
         let mut out_span = HashMap::new();
-        let mut stack = vec![(InstanceID(0), doc.as_slice())];
-        while let Some((instance, config)) = stack.pop() {
+        // offset is used for mapping to different entities of a cardinality and its children
+        let mut stack = vec![(InstanceID(0), doc.as_slice(), 0 as usize)];
+        while let Some((instance, config, offset)) = stack.pop() {
             let file = self.file(instance);
             for c in config.iter() {
                 match c {
-                    ConfigEntry::Value(path, val) => {
-                        if let Some(sym) = file
-                            .lookup(Symbol::Root, &path.names, |sym| {
-                                matches!(sym, Symbol::Feature(..) | Symbol::Attribute(..))
-                            })
-                            .next()
-                        {
-                            if file.type_of(sym).unwrap() == val.ty() {
-                                out.insert(ModuleSymbol { instance, sym }, val.clone());
-                                out_span.insert(ModuleSymbol { instance, sym }, path.range());
-                            } else {
-                                err(
-                                    path.range(),
-                                    format!(
-                                        "expected {} got {}",
-                                        file.type_of(sym).unwrap(),
-                                        val.ty()
-                                    ),
-                                );
+                    ConfigEntry::Value(path, val) => match val {
+                        ConfigValue::Cardinality(cardinality) => match cardinality {
+                            CardinalityEntry::CardinalityLvl(cardinality_lvl) => {
+                                let entries = file.get_all_entities(&path.names.clone());
+                                let entries = entries.iter().nth(offset);
+                                match entries {
+                                    Some(Symbol::Feature(id)) => {
+                                        let feature = file.get_feature(id.clone()).unwrap();
+                                        match feature.cardinality {
+                                            Some(Cardinality::Range(_, max)) => {
+                                                for i in 0..cardinality_lvl.len() {
+                                                    stack.push((
+                                                        instance,
+                                                        cardinality_lvl.iter().nth(i).unwrap(),
+                                                        offset * max + i,
+                                                    ));
+                                                }
+                                            }
+                                            _ => (),
+                                        }
+                                    }
+                                    _ => panic!("unexpected feature"),
+                                }
                             }
-                        } else {
-                            err(path.range(), format!("unresolved value",));
+                            CardinalityEntry::EntitiyLvl(_) => {
+                                panic!("unexpected cardinality level")
+                            }
+                        },
+                        _ => {
+                            if let Some(sym_ref) =
+                                file.get_all_entities(&path.names).iter().nth(offset)
+                            {
+                                let sym = sym_ref.clone();
+                                if file.type_of(sym).unwrap() == val.ty() {
+                                    out.insert(ModuleSymbol { instance, sym }, val.clone());
+                                    out_span.insert(ModuleSymbol { instance, sym }, path.range());
+                                } else {
+                                    match sym {
+                                        Symbol::Feature(i) => {
+                                            let feature = file.get_feature(i).unwrap().clone();
+                                            if let Cardinality::Range(_, _) =
+                                                feature.cardinality.unwrap()
+                                            {
+                                                out.insert(
+                                                    ModuleSymbol { instance, sym },
+                                                    val.clone(),
+                                                );
+                                                out_span.insert(
+                                                    ModuleSymbol { instance, sym },
+                                                    path.range(),
+                                                );
+                                            } else {
+                                                err(
+                                                    path.range(),
+                                                    format!(
+                                                        "expected {} got {}",
+                                                        file.type_of(sym).unwrap(),
+                                                        val.ty()
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                        Symbol::Attribute(_) => {
+                                            out.insert(ModuleSymbol { instance, sym }, val.clone());
+                                            out_span.insert(
+                                                ModuleSymbol { instance, sym },
+                                                path.range(),
+                                            );
+                                        }
+                                        _ => {
+                                            err(
+                                                path.range(),
+                                                format!(
+                                                    "expected {} got {}",
+                                                    file.type_of(sym).unwrap(),
+                                                    val.ty()
+                                                ),
+                                            );
+                                        }
+                                    }
+                                }
+                            } else {
+                                err(path.range(), format!("unresolved value",));
+                            }
                         }
-                    }
+                    },
                     ConfigEntry::Import(path, val) => {
                         if let Some(sym) = file
                             .lookup(Symbol::Root, &path.names, |sym| {
@@ -215,7 +279,7 @@ impl Module {
                             })
                             .find(|sym| matches!(sym, Symbol::Import(..)))
                         {
-                            stack.push((self.get_instance(instance, sym), &val));
+                            stack.push((self.get_instance(instance, sym), &val, offset));
                         } else {
                             err(path.range(), format!("unresolved import",));
                         }
@@ -270,21 +334,8 @@ impl ConfigModule {
                 entries.push(entry);
             }
         }
-        file.visit_named_children(Symbol::Root, false, |sym, prefix| match sym {
-            Symbol::Feature(_) | Symbol::Attribute(_) => {
-                if let Some(config) = self.values.get(&i.sym(sym)) {
-                    entries.push(ConfigEntry::Value(
-                        Path {
-                            names: prefix.to_vec(),
-                            spans: Vec::new(),
-                        },
-                        config.clone(),
-                    ))
-                }
-                true
-            }
-            _ => false,
-        });
+
+        entries.append(&mut self.serialize_rec_file(Symbol::Root, file, i));
         ConfigEntry::Import(
             Path {
                 names: path.to_vec(),
@@ -293,6 +344,98 @@ impl ConfigModule {
             entries,
         )
     }
+
+    // serialize file recursive while accommodate for cardinality
+    fn serialize_rec_file(
+        &self,
+        sym: Symbol,
+        file: &AstDocument,
+        i: InstanceID,
+    ) -> Vec<ConfigEntry> {
+        let mut entries: Vec<ConfigEntry> = Vec::new();
+        // used for different entities of cardinality
+        let mut child_map: HashMap<Ustr, Vec<Vec<ConfigEntry>>> = hashbrown::HashMap::new();
+
+        for child in file.direct_children(sym) {
+            match child {
+                Symbol::Feature(id) => {
+                    let feature = file.get_feature(id).unwrap();
+                    match feature.cardinality {
+                        Some(Cardinality::Fixed) => {
+                            if let Some(config) = self.values.get(&i.sym(child)) {
+                                entries.push(ConfigEntry::Value(
+                                    Path {
+                                        names: vec![file.name(child).unwrap()],
+                                        spans: Vec::new(),
+                                    },
+                                    config.clone(),
+                                ))
+                            }
+                            entries.append(&mut self.serialize_rec_file(child, file, i));
+                        }
+                        Some(Cardinality::Range(_, _)) => {
+                            let mut cardinal_entry: Vec<ConfigEntry> = vec![];
+                            // add self to cardinality definition
+                            if let Some(config) = self.values.get(&i.sym(child)) {
+                                cardinal_entry.push(ConfigEntry::Value(
+                                    Path {
+                                        names: vec![file.name(child).unwrap()],
+                                        spans: Vec::new(),
+                                    },
+                                    config.clone(),
+                                ));
+                            }
+                            cardinal_entry.append(&mut self.serialize_rec_file(child, file, i));
+                            if cardinal_entry.len() > 0 {
+                                child_map
+                                    .get_mut(&file.name(child).unwrap())
+                                    .and_then(|x| {
+                                        x.push(cardinal_entry.clone());
+                                        Some(())
+                                    })
+                                    .or_else(|| {
+                                        child_map.insert(
+                                            file.name(child).unwrap(),
+                                            vec![cardinal_entry],
+                                        );
+                                        Some(())
+                                    });
+                            }
+                        }
+                        None => (),
+                    }
+                }
+                Symbol::Attribute(_) => {
+                    if let Some(config) = self.values.get(&i.sym(child)) {
+                        entries.push(ConfigEntry::Value(
+                            Path {
+                                names: vec![file.name(sym).unwrap(), file.name(child).unwrap()],
+                                spans: Vec::new(),
+                            },
+                            config.clone(),
+                        ))
+                    }
+                    entries.append(&mut self.serialize_rec_file(child, file, i));
+                }
+                _ => {
+                    entries.append(&mut self.serialize_rec_file(child, file, i));
+                }
+            }
+        }
+        for (cardinality_name, cardinality_childs) in child_map.iter() {
+            entries.push(ConfigEntry::Value(
+                Path {
+                    names: vec![cardinality_name.clone()],
+                    spans: Vec::new(),
+                },
+                ConfigValue::Cardinality(CardinalityEntry::CardinalityLvl(
+                    cardinality_childs.clone(),
+                )),
+            ))
+        }
+        return entries;
+    }
+
     //Turns a the set of linear configuration values of this module into theire recusive from
     //used in json
     pub fn serialize(&self) -> Vec<ConfigEntry> {

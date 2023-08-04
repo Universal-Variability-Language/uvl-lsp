@@ -311,14 +311,15 @@ fn resolve_constraint(
             }
             let req = Type::String | Type::Real;
             let ty = req & lhs_ty & rhs_ty;
-            if !((Type::String | Type::String) & ty).is_empty() &&
-                !{  // if TYPE-level.string-constraints is not included in any way
+            if !((Type::String | Type::String) & ty).is_empty()
+                && !{
+                    // if TYPE-level.string-constraints is not included in any way
                     let ast_document = ctx.files.get(&file).unwrap();
                     ast_document.all_lang_lvls()
                         .map(|x| ast_document.lang_lvl(x).unwrap())
                              .any(|s|
-                                matches!(s, LanguageLevel::TYPE(x) if x.contains(&LanguageLevelTYPE::Any))
-                             || matches!(s, LanguageLevel::TYPE(x) if x.contains(&LanguageLevelTYPE::StringConstraints)))
+                                matches!(s, LanguageLevel::Type(x) if x.contains(&LanguageLevelType::Any))
+                             || matches!(s, LanguageLevel::Type(x) if x.contains(&LanguageLevelType::StringConstraints)))
                         || {let s: Vec<Symbol> = ast_document.all_lang_lvls().collect(); s.is_empty()}
                 }
             {
@@ -326,9 +327,7 @@ fn resolve_constraint(
                     constraint.span.clone(),
                     file,
                     30,
-                    format!(
-                        "Need to include TYPE-level.string-constraints"
-                    ),
+                    format!("Need to include TYPE-level.string-constraints"),
                 );
             }
             if ty.is_empty() {
@@ -380,7 +379,7 @@ fn gather_expr_options(
             }
             Type::Real.into()
         }
-        Expr::Integer { op: _ , n } => {
+        Expr::Integer { op: _, n } => {
             let n_ty = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
                 gather_expr_options(ctx, file, n, err, ref_map)
             });
@@ -395,7 +394,7 @@ fn gather_expr_options(
             } else {
                 Type::Real.into()
             }
-        },
+        }
         Expr::Binary { rhs, lhs, op } => {
             let lhs_ty = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
                 gather_expr_options(ctx, file, lhs, err, ref_map)
@@ -485,7 +484,7 @@ fn commit_expr(
                 commit_expr(ctx, file, lhs, Type::String, err, ref_map);
             });
         }
-        Expr::Integer{op: _, n} => {
+        Expr::Integer { op: _, n } => {
             stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
                 commit_expr(ctx, file, n, Type::Real, err, ref_map);
             });

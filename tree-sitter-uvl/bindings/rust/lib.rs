@@ -55,9 +55,9 @@ mod tests {
         cursor.goto_first_child();
         cursor.goto_first_child();
         loop {
-            println!("{}",cursor.node().kind());
-            println!("{:?}",cursor.field_name());
-            if !cursor.goto_next_sibling(){
+            println!("{}", cursor.node().kind());
+            println!("{:?}", cursor.field_name());
+            if !cursor.goto_next_sibling() {
                 break;
             }
         }

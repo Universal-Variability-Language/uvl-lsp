@@ -1,7 +1,7 @@
 //Basic Ast components
-use ustr::Ustr;
-use itertools::Itertools;
 use enumflags2::bitflags;
+use itertools::Itertools;
+use ustr::Ustr;
 pub type Span = std::ops::Range<usize>;
 #[derive(Clone, Debug)]
 pub struct SymbolSpan {
@@ -55,6 +55,7 @@ pub enum Type {
     Bool,
     Void,
     Namespace,
+    Object,
 }
 
 #[derive(Clone, Debug)]
@@ -67,39 +68,37 @@ pub enum GroupMode {
 }
 #[derive(Clone, Debug)]
 pub enum Cardinality {
-    From(usize),
     Range(usize, usize),
-    Max(usize),
-    Any,
+    Fixed,
 }
 #[derive(Clone, Debug)]
 pub enum LanguageLevelMajor {
-    SAT,
-    SMT,
-    TYPE,
+    Boolean,
+    Arithmetic,
+    Type,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub enum LanguageLevelSMT {
+pub enum LanguageLevelArithmetic {
     Any,
     FeatureCardinality,
     Aggregate,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub enum LanguageLevelSAT {
+pub enum LanguageLevelBoolean {
     Any,
     GroupCardinality,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub enum LanguageLevelTYPE {
+pub enum LanguageLevelType {
     Any,
     NumericConstraints,
     StringConstraints,
 }
 #[derive(Clone, Debug)]
 pub enum LanguageLevel {
-    SAT(Vec<LanguageLevelSAT>),
-    SMT(Vec<LanguageLevelSMT>),
-    TYPE(Vec<LanguageLevelTYPE>),
+    Boolean(Vec<LanguageLevelBoolean>),
+    Arithmetic(Vec<LanguageLevelArithmetic>),
+    Type(Vec<LanguageLevelType>),
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +111,8 @@ pub struct Feature {
     pub name: SymbolSpan,
     pub cardinality: Option<Cardinality>,
     pub ty: Type,
+    pub duplicate: bool,
+    pub first_cardinality_child: bool, // used to fix same name problem
 }
 #[derive(Clone, Debug)]
 pub struct Import {
@@ -136,6 +137,7 @@ pub struct Attribute {
     pub name: SymbolSpan,
     pub value: ValueDecl,
     pub depth: u32,
+    pub duplicate: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Keyword {
@@ -170,7 +172,7 @@ impl Default for Value {
     }
 }
 
-#[derive(Clone, Debug,PartialEq,Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NumericOP {
     Add,
     Sub,
@@ -215,7 +217,6 @@ pub enum EquationOP {
     Smaller,
     Equal,
 }
-
 
 #[derive(Clone, Debug)]
 pub enum Constraint {
