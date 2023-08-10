@@ -33,8 +33,7 @@ ext install caradhras.uvls-code
 To enable feature analysis, z3 has to be in PATH.
 Just install it via your favorite package manager.
 ### Windows
-Download [Chocolatey via Powershell](https://www.liquidweb.com/kb/how-to-install-chocolatey-on-windows/)
-Afterwards run the command below. The PATH will be set automatically after a restart.
+Download [Chocolatey via Powershell](https://www.liquidweb.com/kb/how-to-install-chocolatey-on-windows/) and run the command below. The PATH will be set automatically after a restart.
 ```
 choco install z3
 ```
