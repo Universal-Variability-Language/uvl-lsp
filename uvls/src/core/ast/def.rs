@@ -44,15 +44,21 @@ impl Path {
 
     //creates from root_path and the path an absolute path
     pub fn to_file(&self, root_path: &str) -> String {
-        let mut slash = "/";
-        if std::env::consts::OS == "windows" {
-            slash = "\\"
-        }
+        let slash = "/";
         let mut dir: Vec<&str> = root_path.split(slash).collect();
         let absoultpath = self.names.iter().map(|i| i.as_str()).join(slash);
-        let root_dir = root_path.replace(dir.pop().unwrap(), "");
-        let path = root_dir + slash + &absoultpath + ".uvl";
-        path
+        if let Some(name) = dir.pop() {
+            if std::env::consts::OS == "windows" {
+                let root_dir = root_path.replace(name, "");
+                let path = "file://".to_string() + &root_dir + &absoultpath + ".uvl";
+                return path;
+            } else {
+                let root_dir = root_path.replace(name, "");
+                let path = "file://".to_string() + &root_dir + slash + &absoultpath + ".uvl";
+                return path;
+            }
+        }
+        absoultpath
     }
 }
 

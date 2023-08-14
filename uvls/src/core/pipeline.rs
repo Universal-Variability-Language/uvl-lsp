@@ -288,13 +288,10 @@ async fn import_handler(pipeline: AsyncPipeline) {
         if let Ok(uri) = Url::parse(arc.1.as_str()) {
             for import in ast.imports() {
                 let relative_path_string = import.path.to_file(uri.path());
-                if let Ok(url_import) = Url::from_file_path(&relative_path_string) {
+                if let Ok(url_import) = Url::parse(relative_path_string.as_str()) {
                     //check if import is already loaded, if not, load
                     let pip = pipeline.clone();
-                    //wait that rootGraph is update
-                    if rx_root.changed().await.is_err() {
-                        break;
-                    }
+
                     //only load import if it isn't loaded yet
                     if !rx_root.borrow().contains(&url_import) {
                         tokio::task::spawn_blocking(move || {
