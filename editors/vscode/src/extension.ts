@@ -32,6 +32,8 @@ import { info } from 'console';
 let client: LanguageClient | null = null;
 let outputChannel: vscode.OutputChannel | null = null;
 const SOURCE_URI = "https://api.github.com/repos/Universal-Variability-Language/uvl-lsp/releases/latest";
+let rangeOrOptions: Map<String, Array<Array<vscode.Range>>> = new Map();
+const decorators: Array<vscode.TextEditorDecorationType> = new Array(4);
 
 
 function getDefaultInstallationName(): string | null {
@@ -262,34 +264,34 @@ export async function activate(context: vscode.ExtensionContext) {
 		</html>`;
 	});
 	vscode.commands.registerCommand('uvls.generate_diagram', async () => {
-		if(!client){return;}
+		if (!client) { return; }
 
-        const uri = window.activeTextEditor?.document.uri;
-        if (uri === undefined || !uri.toString().endsWith('uvl')){return;}
+		const uri = window.activeTextEditor?.document.uri;
+		if (uri === undefined || !uri.toString().endsWith('uvl')) { return; }
 
-        const content = await client.sendRequest(ExecuteCommandRequest.method, {
-            command: "uvls/generate_diagram",
-            arguments: [uri.toString()]
-        });
+		const content = await client.sendRequest(ExecuteCommandRequest.method, {
+			command: "uvls/generate_diagram",
+			arguments: [uri.toString()]
+		});
 
-        const regex = /(.*\.)(.*)/gm;
-        const subst = '$1dot';
-        let doturi = vscode.Uri.file(uri.fsPath.replace(regex, subst));
-        /* // open graphviz (dot) source file
-        vscode.workspace.openTextDocument(doturi).then(doc => {
-            vscode.window.showTextDocument(doc);
-        });*/
+		const regex = /(.*\.)(.*)/gm;
+		const subst = '$1dot';
+		let doturi = vscode.Uri.file(uri.fsPath.replace(regex, subst));
+		/* // open graphviz (dot) source file
+		vscode.workspace.openTextDocument(doturi).then(doc => {
+			vscode.window.showTextDocument(doc);
+		});*/
 
-        // Open with external extension
-        const graphvizExtension = vscode.extensions.getExtension("tintinweb.graphviz-interactive-preview");
-        if(graphvizExtension === undefined) {
-            window.showInformationMessage("You do not have the recommended [Graphviz Preview Extension](https://marketplace.visualstudio.com/items?itemName=tintinweb.graphviz-interactive-preview) installed.\nActivate it to have the best user experience and be able to see the generated graph!");
-            return;
-        }
-        graphvizExtension.activate();
-        let options = { uri: doturi, title: "Feature Model", content};
-        vscode.commands.executeCommand("graphviz-interactive-preview.preview.beside", options);
-        
+		// Open with external extension
+		const graphvizExtension = vscode.extensions.getExtension("tintinweb.graphviz-interactive-preview");
+		if (graphvizExtension === undefined) {
+			window.showInformationMessage("You do not have the recommended [Graphviz Preview Extension](https://marketplace.visualstudio.com/items?itemName=tintinweb.graphviz-interactive-preview) installed.\nActivate it to have the best user experience and be able to see the generated graph!");
+			return;
+		}
+		graphvizExtension.activate();
+		let options = { uri: doturi, title: "Feature Model", content };
+		vscode.commands.executeCommand("graphviz-interactive-preview.preview.beside", options);
+
 	});
 	await checkUpdateMaybe(context);
 	await startClient(context);
@@ -316,7 +318,6 @@ async function startClient(context: ExtensionContext) {
 
 	};
 	// Decorator for dead features
-	const decorators: Array<vscode.TextEditorDecorationType> = new Array(4);
 	decorators[0] = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: context.asAbsolutePath("assets/deadfeature.svg"),
 		gutterIconSize: "90%",
@@ -342,16 +343,16 @@ async function startClient(context: ExtensionContext) {
 		gutterIconSize: "90%",
 		backgroundColor: { id: 'color.voidfeature' }
 	});
-	let rangeOrOptions: Map<String,Array<Array<vscode.Range>>> = new Map();
-	
+	rangeOrOptions = new Map();
+
 	//If we change the textEditor, the Decoration remains intact 
-	window.onDidChangeActiveTextEditor((editor) =>{
-		if(editor !== undefined && rangeOrOptions !== null){
+	window.onDidChangeActiveTextEditor((editor) => {
+		if (editor !== undefined && rangeOrOptions !== null) {
 			const range = rangeOrOptions.get(editor.document.fileName);
-			if(range !== undefined) decorators.forEach((decorator, index) => editor.setDecorations(decorator,range[index]));
+			if (range !== undefined) decorators.forEach((decorator, index) => editor.setDecorations(decorator, range[index]));
 		}
 	});
-	
+
 	let documentSelector = [{ scheme: "file", language: "uvl" }, { scheme: "file", pattern: "**/*.uvl.json" }];
 	const clientOptions: LanguageClientOptions = {
 		documentSelector,
@@ -363,10 +364,10 @@ async function startClient(context: ExtensionContext) {
 				// handle anomilies
 				const textEditor = window.activeTextEditor;
 
-				if (!rangeOrOptions.has(uri.path)) {
-					rangeOrOptions.set(uri.path, [[], [], [], []]);
+				if (!rangeOrOptions.has(uri.fsPath)) {
+					rangeOrOptions.set(uri.fsPath, [[], [], [], []]);
 				}
-				let range = rangeOrOptions.get(uri.path);
+				let range = rangeOrOptions.get(uri.fsPath);
 				range![0] = [];
 				range![1] = [];
 				range![2] = [];
@@ -392,7 +393,7 @@ async function startClient(context: ExtensionContext) {
 
 					}
 				}
-				if (textEditor !== undefined && textEditor.document.fileName === uri.path) {
+				if (textEditor !== undefined && textEditor.document.fileName === uri.fsPath) {
 					decorators.forEach((decorator, index) => textEditor.setDecorations(decorator, range![index]));
 				}
 
@@ -411,6 +412,13 @@ async function startClient(context: ExtensionContext) {
 	client.start();
 }
 async function stopClient(): Promise<void> {
+	for (const editor of window.visibleTextEditors) {
+		let range = rangeOrOptions.get(editor.document.fileName);
+		if (range !== undefined) {
+			decorators.forEach((decorator) => editor.setDecorations(decorator, []));
+		}
+	}
+	rangeOrOptions = new Map();
 	if (client) client.stop();
 	client = null;
 }
