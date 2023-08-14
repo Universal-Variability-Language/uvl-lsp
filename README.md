@@ -44,6 +44,13 @@ choco install z3
 brew install z3
 ```
 
+### Linux
+
+```
+sudo apt-get update
+sudo apt-get install z3
+```
+
 ## Configuration Editor
 ![alt text](img/show_editor.gif)
 ## Why tree-sitter
