@@ -59,8 +59,13 @@ interface Metadata {
 	tag_name: string,
 	assets: [Asset],
 }
-async function fetchInfo(): Promise<Metadata> {
-	return (await axios.get<Metadata>(SOURCE_URI)).data
+async function fetchInfo(): Promise<Metadata | null> {
+	try {
+		return (await axios.get<Metadata>(SOURCE_URI)).data;
+	} catch {
+		return null;
+	}
+
 }
 
 
@@ -135,27 +140,31 @@ async function installExecutable(context: ExtensionContext): Promise<string | nu
 	}, async progress => {
 		progress.report({ message: "Downloading UVLS executable..." });
 		let meta = await fetchInfo();
-		let tgt = meta.assets.find(e => e.name.endsWith(archiveName));
-		if (tgt === undefined) {
-			window.showInformationMessage(`Your system isn't built by our CI!\nPlease follow the instructions [here](https://github.com/Caradhrass/uvls) to get started!`);
-			return null;
+		if (meta !== null) {
+			let tgt = meta.assets.find(e => e.name.endsWith(archiveName));
+			if (tgt === undefined) {
+				window.showInformationMessage(`Your system isn't built by our CI!\nPlease follow the instructions [here](https://github.com/Caradhrass/uvls) to get started!`);
+				return null;
+			}
+			const url = tgt?.browser_download_url;
+			const data = (await axios.get(url!, { responseType: "arraybuffer" })).data;
+			const zip = new AdmZip(data);
+			const folder = `uvls-${meta.tag_name}-${def}`;
+			const name = `uvls${def.endsWith("windows") ? ".exe" : ""}`;
+
+			progress.report({ message: "Installing..." });
+			zip.extractEntryTo(`${folder}/${name}`, context.globalStorageUri.fsPath, false, true);
+			const installDir = context.globalStorageUri;
+			const uvlsBinPath = vscode.Uri.joinPath(installDir, name).fsPath;
+			fs.chmodSync(uvlsBinPath, 0o755);
+
+			let config = workspace.getConfiguration("uvls");
+			await config.update("path", uvlsBinPath, true);
+
+			return uvlsBinPath;
 		}
-		const url = tgt?.browser_download_url;
-		const data = (await axios.get(url!, { responseType: "arraybuffer" })).data;
-		const zip = new AdmZip(data);
-		const folder = `uvls-${meta.tag_name}-${def}`;
-		const name = `uvls${def.endsWith("windows") ? ".exe" : ""}`;
-
-		progress.report({ message: "Installing..." });
-		zip.extractEntryTo(`${folder}/${name}`, context.globalStorageUri.fsPath, false, true);
-		const installDir = context.globalStorageUri;
-		const uvlsBinPath = vscode.Uri.joinPath(installDir, name).fsPath;
-		fs.chmodSync(uvlsBinPath, 0o755);
-
-		let config = workspace.getConfiguration("uvls");
-		await config.update("path", uvlsBinPath, true);
-
-		return uvlsBinPath;
+		window.showErrorMessage("Download failed");
+		return "";
 	});
 }
 interface Version {
@@ -178,15 +187,18 @@ function parseVersion(str: string): Version | null {
 	};
 }
 async function isUpdateAvailable(uvlsPath: string): Promise<boolean | null> {
-	let remote = parseVersion(await (await fetchInfo()).tag_name);
-	const current = parseVersion(child_process.execFileSync(uvlsPath, ['-v']).toString("utf-8"));
-	if (!current || !remote) return null;
-	if (remote.major < current.major) return false;
-	if (remote.major > current.major) return true;
-	if (remote.minor < current.minor) return false;
-	if (remote.minor > current.minor) return true;
-	if (remote.patch < current.patch) return false;
-	if (remote.patch > current.patch) return true;
+	let meta = await fetchInfo();
+	if (meta !== null) {
+		let remote = parseVersion(meta.tag_name);
+		const current = parseVersion(child_process.execFileSync(uvlsPath, ['-v']).toString("utf-8"));
+		if (!current || !remote) return null;
+		if (remote.major < current.major) return false;
+		if (remote.major > current.major) return true;
+		if (remote.minor < current.minor) return false;
+		if (remote.minor > current.minor) return true;
+		if (remote.patch < current.patch) return false;
+		if (remote.patch > current.patch) return true;
+	}
 	return false;
 }
 async function isUVLSPrebuildBinary(context: ExtensionContext): Promise<boolean> {
