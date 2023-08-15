@@ -3,6 +3,7 @@ use compact_str::CompactString;
 use hashbrown::HashMap;
 use itertools::{Either, Itertools};
 use log::info;
+use regex::Regex;
 use ropey::Rope;
 use std::cmp::Ordering;
 use std::ops::Add;
@@ -577,10 +578,11 @@ fn add_keywords<const I: usize>(
     w: f32,
     words: [CompactString; I],
 ) {
+    let regex = Regex::new(r"(\s*\[)(\$\d+)\]").unwrap();
     for word in words {
         top.push(CompletionOpt {
             op: TextOP::Put(word.clone()),
-            label: word.clone(),
+            label: regex.replace_all(word.clone().as_mut_str(), "").into(),
             rank: if query.is_empty() {
                 w
             } else {
@@ -962,7 +964,7 @@ fn compute_completions_impl(
                         offset,
                         CompletionOffset::SameLine | CompletionOffset::Continuous
                     ) {
-                        add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
+                        add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality [$1]".into()]);
                     }
                     if matches!(offset, CompletionOffset::Continuous | CompletionOffset::Cut) {
                         add_keywords(
@@ -1109,6 +1111,7 @@ pub fn compute_completions(
                     CompletionKind::Folder => CompletionItemKind::FOLDER,
                     _ => CompletionItemKind::TEXT,
                 }),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
                 ..Default::default()
             })
             .collect();
