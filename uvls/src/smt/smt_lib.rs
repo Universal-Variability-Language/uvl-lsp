@@ -577,7 +577,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
     //encode constraints
     for (m, file) in module.instances() {
         for c in file.all_constraints() {
-            let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder);
+            let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder, file);
             builder.assert.push(Assert(
                 Some(AssertInfo(m.sym(c), AssertName::Constraint)),
                 expr,
@@ -621,7 +621,7 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
     //encode constraints
     for (m, file) in module.instances() {
         for c in file.all_constraints() {
-            let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder);
+            let expr = translate_constraint(file.constraint(c).unwrap(), m, &mut builder, file);
             builder.assert.push(Assert(
                 Some(AssertInfo(m.sym(c), AssertName::Constraint)),
                 expr,
@@ -633,22 +633,38 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
         asserts: builder.assert,
     }
 }
+
 fn translate_constraint(
     decl: &ast::ConstraintDecl,
     m: InstanceID,
     builder: &mut SMTBuilder,
+    ast: &AstDocument,
 ) -> Expr {
     match &decl.content {
-        ast::Constraint::Ref(sym) => builder.var(m.sym(*sym)),
+        ast::Constraint::Ref(sym) => {
+            let module_symbol: ModuleSymbol = builder.module.resolve_value(m.sym(*sym));
+            match module_symbol.sym {
+                Symbol::Feature(x) => {
+                    let all_of = ast
+                        .find_all_of(ast.name(Symbol::Feature(x)).unwrap())
+                        .into_iter()
+                        .map(|feature| builder.var(m.sym(feature)))
+                        .collect::<Vec<Expr>>();
+                    return Expr::Or(all_of);
+                }
+                _ => (),
+            }
+            builder.var(m.sym(*sym))
+        }
         ast::Constraint::Not(lhs) => stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
-            Expr::Not(translate_constraint(lhs, m, builder).into())
+            Expr::Not(translate_constraint(lhs, m, builder, ast).into())
         }),
         ast::Constraint::Constant(b) => Expr::Bool(*b),
         ast::Constraint::Logic { op, lhs, rhs } => {
             let lhs = stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
-                translate_constraint(lhs, m, builder)
+                translate_constraint(lhs, m, builder, ast)
             });
-            let rhs = translate_constraint(rhs, m, builder);
+            let rhs = translate_constraint(rhs, m, builder, ast);
             match op {
                 ast::LogicOP::Or => Expr::Or(vec![lhs, rhs]),
                 ast::LogicOP::And => Expr::And(vec![lhs, rhs]),
