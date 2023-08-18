@@ -578,7 +578,7 @@ fn add_keywords<const I: usize>(
     w: f32,
     words: [CompactString; I],
 ) {
-    let regex = Regex::new(r"(\s*\[)(\$\d+)\]").unwrap();
+    let regex = Regex::new(r"\$\d+|\$\{\d+:.+}").unwrap();
     for word in words {
         top.push(CompletionOpt {
             op: TextOP::Put(word.clone()),
@@ -664,13 +664,13 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         top,
         w,
         [
-            "&".into(),
-            "|".into(),
-            "=>".into(),
-            "<=>".into(),
-            ">".into(),
-            "<".into(),
-            "==".into(),
+            "& ".into(),
+            "| ".into(),
+            "=> ".into(),
+            "<=> ".into(),
+            "> ".into(),
+            "< ".into(),
+            "== ".into(),
         ],
     );
 }
@@ -680,11 +680,11 @@ fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         top,
         w,
         [
-            "sum".into(),
-            "avg".into(),
-            "len".into(),
-            "floor".into(),
-            "ceil".into(),
+            "sum($1) ".into(),
+            "avg($1) ".into(),
+            "len($1) ".into(),
+            "floor($1) ".into(),
+            "ceil($1) ".into(),
         ],
     );
 }
@@ -964,14 +964,19 @@ fn compute_completions_impl(
                         offset,
                         CompletionOffset::SameLine | CompletionOffset::Continuous
                     ) {
-                        add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality [$1]".into()]);
+                        add_keywords(
+                            &ctx.postfix,
+                            &mut top,
+                            2.0,
+                            ["cardinality [${1:0..1}] ".into()],
+                        );
                     }
                     if matches!(offset, CompletionOffset::Continuous | CompletionOffset::Cut) {
                         add_keywords(
                             &ctx.postfix,
                             &mut top,
                             2.0,
-                            ["Integer".into(), "String".into(), "Real".into()],
+                            ["Integer ".into(), "String ".into(), "Real ".into()],
                         );
                         completion_symbol(&snapshot, origin, &ctx, &mut top);
                     }
