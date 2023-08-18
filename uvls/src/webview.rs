@@ -179,6 +179,8 @@ pub enum UIAction {
     SolverActive,
     Save,
     Show,
+    ExpandAll,
+    CollapseAll,
 }
 #[derive(Debug, Clone)]
 pub enum UISyncState {
@@ -489,6 +491,20 @@ async fn ui_event_loop(
                         x.sync = UISyncState::InternalError("invalid sources".into());
                     });
                 }
+            }
+            UIAction::ExpandAll => {
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    entries.into_iter().for_each(|(_, entrie)| {
+                        entrie.open = true;
+                    })
+                });
+            }
+            UIAction::CollapseAll => {
+                ui_config.with_mut(|UIConfigState { entries, .. }| {
+                    entries.into_iter().for_each(|(_, entrie)| {
+                        entrie.open = false;
+                    })
+                });
             }
             UIAction::Save => {
                 let module = tx_config.borrow().module.clone();

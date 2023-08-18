@@ -554,6 +554,24 @@ pub fn App(cx: Scope<AppProps>) -> Element {
                                 }
                             }
                         }
+                        li{
+                            button{
+                                class:"btn-save",
+                                onclick: move |_|{
+                                    ui_tx.send(UIAction::ExpandAll);
+                                },
+                                rsx!{"Expand All"}
+                            }
+                        }
+                        li{
+                            button{
+                                class:"btn-save",
+                                onclick: move |_|{
+                                    ui_tx.send(UIAction::CollapseAll);
+                                },
+                                rsx!{"Collapse All"}
+                            }
+                        }
                     }
                     "Files:"
                     table{
