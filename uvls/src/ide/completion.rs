@@ -95,8 +95,12 @@ pub fn make_path<T: AsRef<str>, I: Iterator<Item = T>>(i: I) -> CompactString {
 //What kind of value is likely required to complete the expression
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum CompletionEnv {
+    NumericConstraint,
+    StringConstraint,
     Numeric,
+    String,
     Constraint,
+    ConstraintOperator,
     GroupMode,
     Feature,
     Any,
@@ -187,12 +191,8 @@ pub fn contains(range: Range, pos: &Position) -> bool {
 pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv {
     if node.is_error() && node.start_position().row == node.end_position().row {
         let err_raw: String = source.byte_slice(node.byte_range()).into();
-        if err_raw.contains("=>")
-            || err_raw.contains("<=>")
-            || err_raw.contains('&')
-            || err_raw.contains('|')
-        {
-            return CompletionEnv::Constraint;
+        if err_raw.contains("==") && err_raw.contains("\'") {
+            return CompletionEnv::StringConstraint;
         }
         if err_raw.contains('+')
             || err_raw.contains('-')
@@ -200,11 +200,19 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
             || err_raw.contains('/')
             || err_raw.contains('>')
             || err_raw.contains('<')
+        {
+            return CompletionEnv::NumericConstraint;
+        }
+        if err_raw.contains("=>")
+            || err_raw.contains("<=>")
+            || err_raw.contains('&')
+            || err_raw.contains('|')
             || err_raw.contains("==")
         {
-            return CompletionEnv::Numeric;
+            return CompletionEnv::Constraint;
         }
     }
+    info!("test {:?}", node.kind());
     match node.kind() {
         "number" => CompletionEnv::Numeric,
         "function" => {
@@ -258,11 +266,12 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
                 .into();
             match op.as_str() {
                 "=>" | "&" | "|" | "<=>" => CompletionEnv::Constraint,
-                _ => CompletionEnv::Numeric,
+                _ => CompletionEnv::NumericConstraint,
             }
         }
         "nested_expr" | "path" => estimate_expr(node.parent().unwrap(), pos, source),
-        _ => CompletionEnv::Constraint,
+        "string_content" | "string" => CompletionEnv::String,
+        _ => CompletionEnv::ConstraintOperator,
     }
 }
 
@@ -674,6 +683,15 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         ],
     );
 }
+
+fn add_numeric_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+    add_keywords(query, top, w, ["> ".into(), "< ".into(), "== ".into()]);
+}
+
+fn add_string_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
+    add_keywords(query, top, w, ["== ".into()]);
+}
+
 fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(
         query,
@@ -954,7 +972,47 @@ fn compute_completions_impl(
                 completion_symbol_local(&snapshot, origin, i, &[], ctx, &mut top)
             }
         }
-        CompletionEnv::Constraint | CompletionEnv::Numeric | CompletionEnv::Feature => {
+        CompletionEnv::Numeric | CompletionEnv::String => match (&ctx.env, &ctx.offset) {
+            (CompletionEnv::Numeric, CompletionOffset::SameLine) => {
+                add_numeric_op(&ctx.postfix, &mut top, 6.1);
+            }
+            (CompletionEnv::String, CompletionOffset::SameLine) => {
+                add_string_op(&ctx.postfix, &mut top, 6.1);
+            }
+            _ => {
+                completion_symbol(&snapshot, origin, &ctx, &mut top);
+            }
+        },
+
+        CompletionEnv::StringConstraint
+        | CompletionEnv::NumericConstraint
+        | CompletionEnv::ConstraintOperator => match (&ctx.env, &ctx.offset) {
+            (CompletionEnv::NumericConstraint, CompletionOffset::SameLine) => {
+                add_function_keywords(&ctx.postfix, &mut top, 2.0);
+                completion_symbol(&snapshot, origin, &ctx, &mut top);
+            }
+            (CompletionEnv::StringConstraint, CompletionOffset::SameLine) => {
+                completion_symbol(&snapshot, origin, &ctx, &mut top);
+            }
+            (
+                CompletionEnv::ConstraintOperator,
+                CompletionOffset::Continuous | CompletionOffset::Cut,
+            ) => {
+                completion_symbol(&snapshot, origin, &ctx, &mut top);
+                add_function_keywords(&ctx.postfix, &mut top, 2.0);
+            }
+            (CompletionEnv::ConstraintOperator, CompletionOffset::SameLine) => {
+                add_logic_op(&ctx.postfix, &mut top, 6.1);
+            }
+            (CompletionEnv::ConstraintOperator, CompletionOffset::Dot) => {
+                completion_symbol(&snapshot, origin, &ctx, &mut top);
+            }
+            _ => {
+                completion_symbol(&snapshot, origin, &ctx, &mut top);
+            }
+        },
+
+        CompletionEnv::Constraint | CompletionEnv::Feature => {
             match (&ctx.env, &ctx.offset) {
                 //heuristic to provide nearly correct predictions, to
                 //make it more accurate we need to respect
@@ -977,16 +1035,10 @@ fn compute_completions_impl(
                     }
                 }
                 (
-                    CompletionEnv::Constraint | CompletionEnv::Numeric,
-                    CompletionOffset::SameLine,
-                ) => {
-                    add_logic_op(&ctx.postfix, &mut top, 6.1);
-                    add_function_keywords(&ctx.postfix, &mut top, 2.0);
-                    completion_symbol(&snapshot, origin, &ctx, &mut top);
-                }
-                (
-                    CompletionEnv::Constraint | CompletionEnv::Numeric,
-                    CompletionOffset::Cut | CompletionOffset::Continuous,
+                    CompletionEnv::Constraint,
+                    CompletionOffset::Cut
+                    | CompletionOffset::Continuous
+                    | CompletionOffset::SameLine,
                 ) => {
                     add_function_keywords(&ctx.postfix, &mut top, 2.0);
                     completion_symbol(&snapshot, origin, &ctx, &mut top);
