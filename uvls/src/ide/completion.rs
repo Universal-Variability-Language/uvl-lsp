@@ -600,10 +600,10 @@ fn add_top_lvl_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         w,
         [
             "namespace".into(),
-            "features".into(),
-            "imports".into(),
-            "constraints".into(),
-            "include".into(),
+            "features\n\t".into(),
+            "imports\n\t".into(),
+            "constraints\n\t".into(),
+            "include\n\t".into(),
         ],
     );
 }
@@ -614,10 +614,10 @@ fn add_group_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         top,
         w,
         [
-            "or".into(),
-            "optional".into(),
-            "mandatory".into(),
-            "alternative".into(),
+            "or\n\t".into(),
+            "optional\n\t".into(),
+            "mandatory\n\t".into(),
+            "alternative\n\t".into(),
         ],
     );
 }
