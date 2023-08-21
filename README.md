@@ -38,6 +38,19 @@ Download [Chocolatey via Powershell](https://www.liquidweb.com/kb/how-to-install
 choco install z3
 ```
 
+### macOS
+
+```
+brew install z3
+```
+
+### Linux
+
+```
+sudo apt-get update
+sudo apt-get install z3
+```
+
 ## Configuration Editor
 ![alt text](img/show_editor.gif)
 ## Why tree-sitter
