@@ -975,6 +975,9 @@ fn compute_completions_impl(
                         );
                         completion_symbol(&snapshot, origin, &ctx, &mut top);
                     }
+                    if matches!(offset, CompletionOffset::Dot) {
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    }
                 }
                 (
                     CompletionEnv::Constraint | CompletionEnv::Numeric,
