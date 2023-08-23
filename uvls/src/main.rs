@@ -519,24 +519,6 @@ impl LanguageServer for Backend {
                     }),
                     data: None,
                 },
-                CodeLens {
-                    range: Range {
-                        start: Position {
-                            line: 0,
-                            character: 0,
-                        },
-                        end: Position {
-                            line: 0,
-                            character: 0,
-                        },
-                    },
-                    command: Some(Command {
-                        title: "generate graph".into(),
-                        command: "uvls/generate_diagram".into(),
-                        arguments: Some(vec![uri_json]),
-                    }),
-                    data: None,
-                },
             ]))
         } else {
             Ok(Some(vec![
