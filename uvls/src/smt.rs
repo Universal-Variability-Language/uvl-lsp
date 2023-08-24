@@ -153,7 +153,6 @@ pub enum SMTValueState {
     Any,
     On,
     Off,
-    Core,
     FalseOptional,
 }
 #[derive(Debug, Clone)]
@@ -196,7 +195,7 @@ async fn find_fixed(
         if let Some(GroupMode::Optional) =
             x.group_mode(x.parent(s.sym, false).unwrap_or(Symbol::Root))
         {
-            optionals.insert(s, SMTValueState::FalseOptional);
+            optionals.insert(s, SMTValueState::Any);
         }
         match v {
             ConfigValue::Bool(true) => {
@@ -214,7 +213,7 @@ async fn find_fixed(
             SMTValueState::Any => {
                 continue;
             }
-            SMTValueState::On => {
+            SMTValueState::On | SMTValueState::FalseOptional => {
                 solve
                     .push(format!(
                         "(push 1)(assert (not {}))",
@@ -226,22 +225,6 @@ async fn find_fixed(
                 solve
                     .push(format!(
                         "(push 1)(assert {})",
-                        module.pseudo_bool(k, base_module)
-                    ))
-                    .await?;
-            }
-            SMTValueState::Core => {
-                solve
-                    .push(format!(
-                        "(push 1)(assert (not {}))",
-                        module.pseudo_bool(k, base_module)
-                    ))
-                    .await?;
-            }
-            SMTValueState::FalseOptional => {
-                solve
-                    .push(format!(
-                        "(push 1)(assert (not {}))",
                         module.pseudo_bool(k, base_module)
                     ))
                     .await?;
@@ -269,7 +252,7 @@ async fn find_fixed(
                             if optionals.contains_key(&s) {
                                 state.insert(s, SMTValueState::FalseOptional);
                             } else {
-                                state.insert(s, SMTValueState::Core);
+                                state.insert(s, SMTValueState::On);
                             }
                         }
                         _ => {}
@@ -409,20 +392,16 @@ async fn check_base_sat(
                                         }
                                         false
                                     }
-                                    SMTValueState::Core => {
-                                        if visited.insert((sym, file.id)) {
-                                            e.sym_info(sym, file.id, 10, "Core feature");
-                                        }
-                                        true
-                                    }
                                     SMTValueState::FalseOptional => {
                                         if visited.insert((sym, file.id)) {
-                                            e.sym_info(sym, file.id, 10, "False Optional");
+                                            e.sym_info(sym, file.id, 10, "false optional");
                                         }
                                         true
                                     }
                                     SMTValueState::On => {
-                                        //Is this even a good idea?
+                                        if visited.insert((sym, file.id)) {
+                                            e.sym_info(sym, file.id, 10, "core feature");
+                                        }
                                         true
                                     }
                                     _ => true,
