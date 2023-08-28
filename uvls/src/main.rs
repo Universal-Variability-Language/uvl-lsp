@@ -239,13 +239,15 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        let document = root_graph.files.get(&root_fileid).unwrap();
-        let c = ast::collapse::Collapse::new(
-            document.source.clone(),
-            document.tree.clone(),
-            uri.clone(),
-        );
-        Ok(Some(c.ranges))
+        if let Some(document) = root_graph.files.get(&root_fileid) {
+            let c = ast::collapse::Collapse::new(
+                document.source.clone(),
+                document.tree.clone(),
+                uri.clone(),
+            );
+            return Ok(Some(c.ranges));
+        }
+        Ok(None)
     }
     async fn goto_definition(
         &self,

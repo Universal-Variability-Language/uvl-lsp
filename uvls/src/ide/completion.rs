@@ -3,6 +3,7 @@ use compact_str::CompactString;
 use hashbrown::HashMap;
 use itertools::{Either, Itertools};
 use log::info;
+use regex::Regex;
 use ropey::Rope;
 use std::cmp::Ordering;
 use std::ops::Add;
@@ -577,10 +578,11 @@ fn add_keywords<const I: usize>(
     w: f32,
     words: [CompactString; I],
 ) {
+    let regex = Regex::new(r"\$\d+|\$\{\d+:.+}").unwrap();
     for word in words {
         top.push(CompletionOpt {
             op: TextOP::Put(word.clone()),
-            label: word.clone(),
+            label: regex.replace_all(word.clone().as_mut_str(), "").into(),
             rank: if query.is_empty() {
                 w
             } else {
@@ -598,10 +600,10 @@ fn add_top_lvl_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         w,
         [
             "namespace".into(),
-            "features".into(),
-            "imports".into(),
-            "constraints".into(),
-            "include".into(),
+            "features\n\t".into(),
+            "imports\n\t".into(),
+            "constraints\n\t".into(),
+            "include\n\t".into(),
         ],
     );
 }
@@ -612,10 +614,10 @@ fn add_group_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         top,
         w,
         [
-            "or".into(),
-            "optional".into(),
-            "mandatory".into(),
-            "alternative".into(),
+            "or\n\t".into(),
+            "optional\n\t".into(),
+            "mandatory\n\t".into(),
+            "alternative\n\t".into(),
         ],
     );
 }
@@ -662,13 +664,13 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         top,
         w,
         [
-            "&".into(),
-            "|".into(),
-            "=>".into(),
-            "<=>".into(),
-            ">".into(),
-            "<".into(),
-            "==".into(),
+            "& ".into(),
+            "| ".into(),
+            "=> ".into(),
+            "<=> ".into(),
+            "> ".into(),
+            "< ".into(),
+            "== ".into(),
         ],
     );
 }
@@ -678,11 +680,11 @@ fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         top,
         w,
         [
-            "sum".into(),
-            "avg".into(),
-            "len".into(),
-            "floor".into(),
-            "ceil".into(),
+            "sum($1) ".into(),
+            "avg($1) ".into(),
+            "len($1) ".into(),
+            "floor($1) ".into(),
+            "ceil($1) ".into(),
         ],
     );
 }
@@ -962,15 +964,23 @@ fn compute_completions_impl(
                         offset,
                         CompletionOffset::SameLine | CompletionOffset::Continuous
                     ) {
-                        add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality".into()]);
+                        add_keywords(
+                            &ctx.postfix,
+                            &mut top,
+                            2.0,
+                            ["cardinality [${1:0..1}] ".into()],
+                        );
                     }
                     if matches!(offset, CompletionOffset::Continuous | CompletionOffset::Cut) {
                         add_keywords(
                             &ctx.postfix,
                             &mut top,
                             2.0,
-                            ["Integer".into(), "String".into(), "Real".into()],
+                            ["Integer ".into(), "String ".into(), "Real ".into()],
                         );
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    }
+                    if matches!(offset, CompletionOffset::Dot) {
                         completion_symbol(&snapshot, origin, &ctx, &mut top);
                     }
                 }
@@ -1130,6 +1140,7 @@ pub fn compute_completions(
                     CompletionKind::Folder => CompletionItemKind::FOLDER,
                     _ => CompletionItemKind::TEXT,
                 }),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
                 ..Default::default()
             })
             .collect();

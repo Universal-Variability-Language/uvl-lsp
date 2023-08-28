@@ -7,6 +7,7 @@ use regex::Regex;
 use std::fmt::Display;
 use std::fmt::Write;
 use tokio::time::Instant;
+use ustr::Ustr;
 #[derive(Clone, Debug)]
 pub enum AssertName {
     Config,
@@ -390,11 +391,78 @@ impl<'a> SMTBuilder<'a> {
         }
     }
     fn clause(&self, g: ModuleSymbol) -> Vec<Expr> {
-        self.module
+        let file = self
+            .module
+            .instances()
+            .filter(|(id, _)| id == &g.instance)
+            .map(|(_, f)| f)
+            .collect::<Vec<&AstDocument>>()[0];
+
+        let mut cardinalitys: HashMap<Ustr, (Cardinality, Vec<Symbol>)> = HashMap::from([]);
+        // Cardinality
+        let card_expressions = self
+            .module
             .file(g.instance)
             .direct_children(g.sym)
+            .filter(|i| {
+                if let Symbol::Feature(index) = i {
+                    let feature = file.get_feature(index.clone()).unwrap();
+                    match feature.cardinality {
+                        Some(Cardinality::Range(_, _)) => {
+                            if !cardinalitys.contains_key(&feature.name.name) {
+                                cardinalitys.insert(
+                                    feature.name.name,
+                                    (
+                                        feature.clone().cardinality.unwrap(),
+                                        vec![Symbol::Feature(index.clone())],
+                                    ),
+                                );
+                            } else {
+                                cardinalitys
+                                    .get_mut(&feature.name.name)
+                                    .unwrap()
+                                    .1
+                                    .push(Symbol::Feature(index.clone()));
+                            }
+                            return true;
+                        }
+                        _ => return false,
+                    }
+                }
+                return false;
+            })
+            .collect::<Vec<Symbol>>();
+
+        let mut result = self
+            .module
+            .file(g.instance)
+            .direct_children(g.sym)
+            .filter(|s| !card_expressions.contains(s))
             .map(|i| self.pseudo_bool(g.instance.sym(i)))
-            .collect()
+            .collect::<Vec<Expr>>();
+
+        result.append(
+            cardinalitys
+                .values()
+                .into_iter()
+                .map(|(card, syms)| {
+                    let list = syms
+                        .into_iter()
+                        .map(|i| self.pseudo_bool(g.instance.sym(i.clone())))
+                        .collect::<Vec<Expr>>();
+                    match card {
+                        Cardinality::Range(min, max) => Expr::And(vec![
+                            Expr::AtLeast(min.clone(), list.clone()),
+                            Expr::AtMost(max.clone(), list),
+                        ]),
+                        _ => panic!(),
+                    }
+                })
+                .collect::<Vec<Expr>>()
+                .as_mut(),
+        );
+
+        return result;
     }
     fn min_assert(&mut self, min: usize, p_bind: &Expr, g: ModuleSymbol) {
         let clause = self.clause(g);
@@ -460,10 +528,24 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
                             }
                         }
 
-                        builder.assert.push(Assert(
-                            Some(AssertInfo(m.sym(sym_feature), AssertName::GroupMin)),
-                            Expr::AtLeast(min, list),
-                        ));
+                        match file.parent(Symbol::Feature(id), false) {
+                            Some(Symbol::Group(_)) => {
+                                // if parent is group, a cardinality can be atleast 0 or min, since it can not be selected at all.
+                                builder.assert.push(Assert(
+                                    Some(AssertInfo(m.sym(sym_feature), AssertName::GroupMin)),
+                                    Expr::Or(vec![
+                                        Expr::AtLeast(min, list.clone()),
+                                        Expr::AtMost(0, list),
+                                    ]),
+                                ));
+                            }
+                            _ => {
+                                builder.assert.push(Assert(
+                                    Some(AssertInfo(m.sym(sym_feature), AssertName::GroupMin)),
+                                    Expr::AtLeast(min, list),
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -546,13 +628,13 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
                         builder.max_assert(1, &p_bind, m.sym(g));
                     }
                     GroupMode::Mandatory => {
-                        for c in file.direct_children(g) {
-                            let c_bind = builder.pseudo_bool(m.sym(c));
+                        builder.clause(m.sym(g)).into_iter().for_each(|expr| {
+                            info!("expr {:?}", expr);
                             builder.assert.push(Assert(
-                                Some(AssertInfo(m.sym(c), AssertName::GroupMember)),
-                                Expr::Equal(vec![c_bind.into(), p_bind.clone().into()]),
+                                Some(AssertInfo(m.sym(p), AssertName::GroupMember)),
+                                Expr::Equal(vec![expr.into(), p_bind.clone().into()]),
                             ))
-                        }
+                        });
                     }
                     GroupMode::Optional | GroupMode::Cardinality(Cardinality::Fixed) => {}
                     GroupMode::Cardinality(Cardinality::Range(min, max)) => {

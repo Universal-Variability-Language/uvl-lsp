@@ -32,7 +32,7 @@ import { info } from 'console';
 let client: LanguageClient | null = null;
 let outputChannel: vscode.OutputChannel | null = null;
 const SOURCE_URI = "https://api.github.com/repos/Universal-Variability-Language/uvl-lsp/releases/latest";
-let rangeOrOptions: Map<String,Array<Array<vscode.Range>>> = new Map();
+let rangeOrOptions: Map<String, Array<Array<vscode.Range>>> = new Map();
 const decorators: Array<vscode.TextEditorDecorationType> = new Array(4);
 
 
@@ -61,8 +61,13 @@ interface Metadata {
 	tag_name: string,
 	assets: [Asset],
 }
-async function fetchInfo(): Promise<Metadata> {
-	return (await axios.get<Metadata>(SOURCE_URI)).data
+async function fetchInfo(): Promise<Metadata | null> {
+	try {
+		return (await axios.get<Metadata>(SOURCE_URI)).data;
+	} catch {
+		return null;
+	}
+
 }
 
 
@@ -137,27 +142,31 @@ async function installExecutable(context: ExtensionContext): Promise<string | nu
 	}, async progress => {
 		progress.report({ message: "Downloading UVLS executable..." });
 		let meta = await fetchInfo();
-		let tgt = meta.assets.find(e => e.name.endsWith(archiveName));
-		if (tgt === undefined) {
-			window.showInformationMessage(`Your system isn't built by our CI!\nPlease follow the instructions [here](https://github.com/Caradhrass/uvls) to get started!`);
-			return null;
+		if (meta !== null) {
+			let tgt = meta.assets.find(e => e.name.endsWith(archiveName));
+			if (tgt === undefined) {
+				window.showInformationMessage(`Your system isn't built by our CI!\nPlease follow the instructions [here](https://github.com/Caradhrass/uvls) to get started!`);
+				return null;
+			}
+			const url = tgt?.browser_download_url;
+			const data = (await axios.get(url!, { responseType: "arraybuffer" })).data;
+			const zip = new AdmZip(data);
+			const folder = `uvls-${meta.tag_name}-${def}`;
+			const name = `uvls${def.endsWith("windows") ? ".exe" : ""}`;
+
+			progress.report({ message: "Installing..." });
+			zip.extractEntryTo(`${folder}/${name}`, context.globalStorageUri.fsPath, false, true);
+			const installDir = context.globalStorageUri;
+			const uvlsBinPath = vscode.Uri.joinPath(installDir, name).fsPath;
+			fs.chmodSync(uvlsBinPath, 0o755);
+
+			let config = workspace.getConfiguration("uvls");
+			await config.update("path", uvlsBinPath, true);
+
+			return uvlsBinPath;
 		}
-		const url = tgt?.browser_download_url;
-		const data = (await axios.get(url!, { responseType: "arraybuffer" })).data;
-		const zip = new AdmZip(data);
-		const folder = `uvls-${meta.tag_name}-${def}`;
-		const name = `uvls${def.endsWith("windows") ? ".exe" : ""}`;
-
-		progress.report({ message: "Installing..." });
-		zip.extractEntryTo(`${folder}/${name}`, context.globalStorageUri.fsPath, false, true);
-		const installDir = context.globalStorageUri;
-		const uvlsBinPath = vscode.Uri.joinPath(installDir, name).fsPath;
-		fs.chmodSync(uvlsBinPath, 0o755);
-
-		let config = workspace.getConfiguration("uvls");
-		await config.update("path", uvlsBinPath, true);
-
-		return uvlsBinPath;
+		window.showErrorMessage("Download failed");
+		return "";
 	});
 }
 interface Version {
@@ -180,15 +189,18 @@ function parseVersion(str: string): Version | null {
 	};
 }
 async function isUpdateAvailable(uvlsPath: string): Promise<boolean | null> {
-	let remote = parseVersion(await (await fetchInfo()).tag_name);
-	const current = parseVersion(child_process.execFileSync(uvlsPath, ['-v']).toString("utf-8"));
-	if (!current || !remote) return null;
-	if (remote.major < current.major) return false;
-	if (remote.major > current.major) return true;
-	if (remote.minor < current.minor) return false;
-	if (remote.minor > current.minor) return true;
-	if (remote.patch < current.patch) return false;
-	if (remote.patch > current.patch) return true;
+	let meta = await fetchInfo();
+	if (meta !== null) {
+		let remote = parseVersion(meta.tag_name);
+		const current = parseVersion(child_process.execFileSync(uvlsPath, ['-v']).toString("utf-8"));
+		if (!current || !remote) return null;
+		if (remote.major < current.major) return false;
+		if (remote.major > current.major) return true;
+		if (remote.minor < current.minor) return false;
+		if (remote.minor > current.minor) return true;
+		if (remote.patch < current.patch) return false;
+		if (remote.patch > current.patch) return true;
+	}
 	return false;
 }
 async function isUVLSPrebuildBinary(context: ExtensionContext): Promise<boolean> {
@@ -264,34 +276,34 @@ export async function activate(context: vscode.ExtensionContext) {
 		</html>`;
 	});
 	vscode.commands.registerCommand('uvls.generate_diagram', async () => {
-		if(!client){return;}
+		if (!client) { return; }
 
-        const uri = window.activeTextEditor?.document.uri;
-        if (uri === undefined || !uri.toString().endsWith('uvl')){return;}
+		const uri = window.activeTextEditor?.document.uri;
+		if (uri === undefined || !uri.toString().endsWith('uvl')) { return; }
 
-        const content = await client.sendRequest(ExecuteCommandRequest.method, {
-            command: "uvls/generate_diagram",
-            arguments: [uri.toString()]
-        });
+		const content = await client.sendRequest(ExecuteCommandRequest.method, {
+			command: "uvls/generate_diagram",
+			arguments: [uri.toString()]
+		});
 
-        const regex = /(.*\.)(.*)/gm;
-        const subst = '$1dot';
-        let doturi = vscode.Uri.file(uri.fsPath.replace(regex, subst));
-        /* // open graphviz (dot) source file
-        vscode.workspace.openTextDocument(doturi).then(doc => {
-            vscode.window.showTextDocument(doc);
-        });*/
+		const regex = /(.*\.)(.*)/gm;
+		const subst = '$1dot';
+		let doturi = vscode.Uri.file(uri.fsPath.replace(regex, subst));
+		/* // open graphviz (dot) source file
+		vscode.workspace.openTextDocument(doturi).then(doc => {
+			vscode.window.showTextDocument(doc);
+		});*/
 
-        // Open with external extension
-        const graphvizExtension = vscode.extensions.getExtension("tintinweb.graphviz-interactive-preview");
-        if(graphvizExtension === undefined) {
-            window.showInformationMessage("You do not have the recommended [Graphviz Preview Extension](https://marketplace.visualstudio.com/items?itemName=tintinweb.graphviz-interactive-preview) installed.\nActivate it to have the best user experience and be able to see the generated graph!");
-            return;
-        }
-        graphvizExtension.activate();
-        let options = { uri: doturi, title: "Feature Model", content};
-        vscode.commands.executeCommand("graphviz-interactive-preview.preview.beside", options);
-        
+		// Open with external extension
+		const graphvizExtension = vscode.extensions.getExtension("tintinweb.graphviz-interactive-preview");
+		if (graphvizExtension === undefined) {
+			window.showInformationMessage("You do not have the recommended [Graphviz Preview Extension](https://marketplace.visualstudio.com/items?itemName=tintinweb.graphviz-interactive-preview) installed.\nActivate it to have the best user experience and be able to see the generated graph!");
+			return;
+		}
+		graphvizExtension.activate();
+		let options = { uri: doturi, title: "Feature Model", content };
+		vscode.commands.executeCommand("graphviz-interactive-preview.preview.beside", options);
+
 	});
 	await checkUpdateMaybe(context);
 	await startClient(context);
@@ -344,15 +356,15 @@ async function startClient(context: ExtensionContext) {
 		backgroundColor: { id: 'color.voidfeature' }
 	});
 	rangeOrOptions = new Map();
-	
+
 	//If we change the textEditor, the Decoration remains intact 
-	window.onDidChangeActiveTextEditor((editor) =>{
-		if(editor !== undefined && rangeOrOptions !== null){
+	window.onDidChangeActiveTextEditor((editor) => {
+		if (editor !== undefined && rangeOrOptions !== null) {
 			const range = rangeOrOptions.get(editor.document.fileName);
-			if(range !== undefined) decorators.forEach((decorator, index) => editor.setDecorations(decorator,range[index]));
+			if (range !== undefined) decorators.forEach((decorator, index) => editor.setDecorations(decorator, range[index]));
 		}
 	});
-	
+
 	let documentSelector = [{ scheme: "file", language: "uvl" }, { scheme: "file", pattern: "**/*.uvl.json" }];
 	const clientOptions: LanguageClientOptions = {
 		documentSelector,
@@ -364,10 +376,10 @@ async function startClient(context: ExtensionContext) {
 				// handle anomilies
 				const textEditor = window.activeTextEditor;
 
-				if (!rangeOrOptions.has(uri.path)) {
-					rangeOrOptions.set(uri.path, [[], [], [], []]);
+				if (!rangeOrOptions.has(uri.fsPath)) {
+					rangeOrOptions.set(uri.fsPath, [[], [], [], []]);
 				}
-				let range = rangeOrOptions.get(uri.path);
+				let range = rangeOrOptions.get(uri.fsPath);
 				range![0] = [];
 				range![1] = [];
 				range![2] = [];
@@ -393,7 +405,7 @@ async function startClient(context: ExtensionContext) {
 
 					}
 				}
-				if (textEditor !== undefined && textEditor.document.fileName === uri.path) {
+				if (textEditor !== undefined && textEditor.document.fileName === uri.fsPath) {
 					decorators.forEach((decorator, index) => textEditor.setDecorations(decorator, range![index]));
 				}
 
@@ -412,9 +424,9 @@ async function startClient(context: ExtensionContext) {
 	client.start();
 }
 async function stopClient(): Promise<void> {
-	for (const editor of  window.visibleTextEditors) {
+	for (const editor of window.visibleTextEditors) {
 		let range = rangeOrOptions.get(editor.document.fileName);
-		if (range !== undefined ){
+		if (range !== undefined) {
 			decorators.forEach((decorator) => editor.setDecorations(decorator, []));
 		}
 	}
