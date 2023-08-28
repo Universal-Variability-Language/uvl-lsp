@@ -277,7 +277,7 @@ async fn link_handler(
 //handler which takes care that all imported files are loaded recursively
 async fn import_handler(pipeline: AsyncPipeline) {
     let mut rx = pipeline.rx_ast.clone();
-    let mut rx_root = pipeline.rx_root_imports.clone();
+    let rx_root = pipeline.rx_root_imports.clone();
     loop {
         //wait that Ast Document is updated
         if rx.changed().await.is_err() {
