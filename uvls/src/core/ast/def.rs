@@ -48,15 +48,9 @@ impl Path {
         let mut dir: Vec<&str> = root_path.split(slash).collect();
         let absoultpath = self.names.iter().map(|i| i.as_str()).join(slash);
         if let Some(name) = dir.pop() {
-            if std::env::consts::OS == "windows" {
-                let root_dir = root_path.replace(name, "");
-                let path = "file://".to_string() + &root_dir + &absoultpath + ".uvl";
-                return path;
-            } else {
-                let root_dir = root_path.replace(name, "");
-                let path = "file://".to_string() + &root_dir + slash + &absoultpath + ".uvl";
-                return path;
-            }
+            let root_dir = root_path.replace(name, "");
+            let path = "file://".to_string() + &root_dir + &absoultpath + ".uvl";
+            return path;
         }
         absoultpath
     }
