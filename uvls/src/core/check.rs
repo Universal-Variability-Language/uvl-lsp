@@ -165,7 +165,7 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
                     weight: 100,
                     location: node_range(node, source),
                     severity: DiagnosticSeverity::ERROR,
-                    msg: "features have to be in diffrent lines".to_string(),
+                    msg: "features have to be in different lines".to_string(),
                     error_type: ErrorType::Any,
                 });
             }
@@ -187,9 +187,11 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
 }
 
 pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
+
     let err_source = source.byte_slice(root.byte_range());
     if root.start_position().row == root.end_position().row {
         let err_raw: String = err_source.into();
+        info!("err: {:?}", err_raw);
         if err_raw.contains("=>")
             || err_raw.contains("<=>")
             || err_raw.contains('&')
@@ -218,6 +220,7 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
         msg: "unknown syntax error".into(),
         error_type: ErrorType::Any,
     }
+    
 }
 pub fn check_errors(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
     let mut err: Vec<ErrorInfo> = Vec::new();
