@@ -165,7 +165,7 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
                     weight: 100,
                     location: node_range(node, source),
                     severity: DiagnosticSeverity::ERROR,
-                    msg: "features have to be in diffrent lines".to_string(),
+                    msg: "features have to be in different lines".to_string(),
                     error_type: ErrorType::Any,
                 });
             }
