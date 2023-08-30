@@ -275,6 +275,47 @@ async fn find_fixed(
     //create SMTSolver for the constraints
     let mut solver_constraint = SmtSolver::new(source_variable, &cancel).await?;
     for (i, Assert(info, expr)) in smt_module_constraint.asserts.iter().enumerate() {
+        //find implied constraints for core/falseOptional analysis
+        match expr {
+            smt_lib::Expr::Implies(x) => match x[0] {
+                smt_lib::Expr::Var(z) => {
+                    for source in state.clone() {
+                        if z == module.var(source.0) {
+                            match source.1 {
+                                SMTValueState::On | SMTValueState::FalseOptional => match x[1] {
+                                    smt_lib::Expr::Var(y) => {
+                                        for target in state.clone() {
+                                            if y == module.var(target.0) {
+                                                if let Some(GroupMode::Optional) =
+                                                    base_module.file(target.0.instance).group_mode(
+                                                        base_module
+                                                            .file(target.0.instance)
+                                                            .parent(target.0.sym, false)
+                                                            .unwrap_or(Symbol::Root),
+                                                    )
+                                                {
+                                                    state.insert(
+                                                        target.0,
+                                                        SMTValueState::FalseOptional,
+                                                    );
+                                                } else {
+                                                    state.insert(target.0, SMTValueState::On);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => (),
+                                },
+                                _ => (),
+                            }
+                        }
+                    }
+                }
+                _ => (),
+            },
+            _ => (),
+        }
+
         //get the negated constraint source
         let constraint_assert = smt_module_constraint.assert_to_source(i, info, expr, true);
         //push negated constraint
