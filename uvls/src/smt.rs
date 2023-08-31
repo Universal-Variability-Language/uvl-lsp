@@ -154,6 +154,7 @@ pub enum SMTValueState {
     On,
     Off,
     FalseOptional,
+    FalseOptionalImpl,
 }
 #[derive(Debug, Clone)]
 pub enum SMTModel {
@@ -187,8 +188,7 @@ async fn find_fixed(
     cancel: CancellationToken,
 ) -> Result<HashMap<ModuleSymbol, SMTValueState>> {
     let mut state = HashMap::new();
-    let x = initial_model;
-    for (s, v) in x {
+    for (s, v) in initial_model {
         match v {
             ConfigValue::Bool(true) => {
                 state.insert(s, SMTValueState::On);
@@ -205,7 +205,7 @@ async fn find_fixed(
             SMTValueState::Any => {
                 continue;
             }
-            SMTValueState::On | SMTValueState::FalseOptional => {
+            SMTValueState::On | SMTValueState::FalseOptional | SMTValueState::FalseOptionalImpl => {
                 solve
                     .push(format!(
                         "(push 1)(assert (not {}))",
@@ -249,8 +249,12 @@ async fn find_fixed(
                                         .unwrap_or(Symbol::Root),
                                 )
                             {
+                                info!("false optional: {:?}", s);
+
                                 state.insert(s, SMTValueState::FalseOptional);
                             } else {
+                                info!("core: {:?}", s);
+
                                 state.insert(s, SMTValueState::On);
                             }
                         }
@@ -275,6 +279,21 @@ async fn find_fixed(
     //create SMTSolver for the constraints
     let mut solver_constraint = SmtSolver::new(source_variable, &cancel).await?;
     for (i, Assert(info, expr)) in smt_module_constraint.asserts.iter().enumerate() {
+        //get the negated constraint source
+        let constraint_assert = smt_module_constraint.assert_to_source(i, info, expr, true);
+        //push negated constraint
+        solver_constraint
+            .push(format!("(push 1) {}", constraint_assert))
+            .await?;
+        //check if negated constraint is unsat
+        let sat = solver_constraint.check_sat().await?;
+        if !sat {
+            let module_symbol = info.clone().unwrap().0;
+            state.insert(module_symbol, SMTValueState::On);
+        }
+        //pop negated constraint
+        solver_constraint.push("(pop 1)".into()).await?;
+
         //find implied constraints for core/falseOptional analysis
         match expr {
             smt_lib::Expr::Implies(x) => match x[0] {
@@ -306,7 +325,35 @@ async fn find_fixed(
                                     }
                                     _ => (),
                                 },
-                                _ => (),
+                                _ => match x[1] {
+                                    smt_lib::Expr::Var(y) => {
+                                        for target in state.clone() {
+                                            if y == module.var(target.0) {
+                                                let k = base_module
+                                                    .file(source.0.instance)
+                                                    .parent(target.0.sym, false);
+                                                if let Some(GroupMode::Optional) =
+                                                    base_module.file(target.0.instance).group_mode(
+                                                        base_module
+                                                            .file(target.0.instance)
+                                                            .parent(target.0.sym, false)
+                                                            .unwrap_or(Symbol::Root),
+                                                    )
+                                                {
+                                                    if let Some(kk) = k {
+                                                        base_module
+                                                            .file(target.0.instance)
+                                                            .parent(kk, false)
+                                                            .map(|f| if source.0.sym == f {
+                                                                state.insert(target.0, SMTValueState::FalseOptionalImpl);
+                                                            });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => (),
+                                },
                             }
                         }
                     }
@@ -315,21 +362,6 @@ async fn find_fixed(
             },
             _ => (),
         }
-
-        //get the negated constraint source
-        let constraint_assert = smt_module_constraint.assert_to_source(i, info, expr, true);
-        //push negated constraint
-        solver_constraint
-            .push(format!("(push 1) {}", constraint_assert))
-            .await?;
-        //check if negated constraint is unsat
-        let sat = solver_constraint.check_sat().await?;
-        if !sat {
-            let module_symbol = info.clone().unwrap().0;
-            state.insert(module_symbol, SMTValueState::On);
-        }
-        //pop negated constraint
-        solver_constraint.push("(pop 1)".into()).await?;
     }
 
     Ok(state)
@@ -432,7 +464,8 @@ async fn check_base_sat(
                                         }
                                         false
                                     }
-                                    SMTValueState::FalseOptional => {
+                                    SMTValueState::FalseOptional
+                                    | SMTValueState::FalseOptionalImpl => {
                                         if visited.insert((sym, file.id)) {
                                             e.sym_info(sym, file.id, 10, "false optional");
                                         }
