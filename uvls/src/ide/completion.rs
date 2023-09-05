@@ -977,7 +977,12 @@ fn compute_completions_impl(
                             &ctx.postfix,
                             &mut top,
                             2.0,
-                            ["Integer ".into(), "String ".into(), "Real ".into()],
+                            [
+                                "Integer ".into(),
+                                "String ".into(),
+                                "Real ".into(),
+                                "Boolean".into(),
+                            ],
                         );
                         completion_symbol(&snapshot, origin, &ctx, &mut top);
                     }
