@@ -95,12 +95,9 @@ pub fn make_path<T: AsRef<str>, I: Iterator<Item = T>>(i: I) -> CompactString {
 //What kind of value is likely required to complete the expression
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum CompletionEnv {
-    NumericConstraint,
-    StringConstraint,
     Numeric,
     String,
     Constraint,
-    ConstraintOperator,
     GroupMode,
     Feature,
     Any,
@@ -191,19 +188,13 @@ pub fn contains(range: Range, pos: &Position) -> bool {
 pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv {
     if node.is_error() && node.start_position().row == node.end_position().row {
         let err_raw: String = source.byte_slice(node.byte_range()).into();
-        if err_raw.contains("==") && err_raw.contains("\'") {
-            return CompletionEnv::StringConstraint;
-        }
         if err_raw.contains('+')
             || err_raw.contains('-')
             || err_raw.contains('*')
             || err_raw.contains('/')
             || err_raw.contains('>')
             || err_raw.contains('<')
-        {
-            return CompletionEnv::NumericConstraint;
-        }
-        if err_raw.contains("=>")
+            || err_raw.contains("=>")
             || err_raw.contains("<=>")
             || err_raw.contains('&')
             || err_raw.contains('|')
@@ -212,9 +203,7 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
             return CompletionEnv::Constraint;
         }
     }
-    info!("test {:?}", node.kind());
     match node.kind() {
-        "number" => CompletionEnv::Numeric,
         "function" => {
             let mut cursor = node.walk();
             cursor.goto_first_child();
@@ -233,12 +222,10 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
                 if cursor.field_name().map(|i| i == "arg").unwrap_or(false) {
                     args.push(parse::parse_path(cursor.node(), source));
                 }
-                info!("{:?}", cursor.node().kind());
                 if !cursor.goto_next_sibling() {
                     break;
                 }
             }
-            info!("args {:?} offset {}", &args, arg_offset);
             match node
                 .child_by_field_name("op")
                 .map(|op| source.slice_raw(op.byte_range()))
@@ -266,12 +253,11 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
                 .into();
             match op.as_str() {
                 "=>" | "&" | "|" | "<=>" => CompletionEnv::Constraint,
-                _ => CompletionEnv::NumericConstraint,
+                _ => CompletionEnv::Constraint,
             }
         }
         "nested_expr" | "path" => estimate_expr(node.parent().unwrap(), pos, source),
-        "string_content" | "string" => CompletionEnv::String,
-        _ => CompletionEnv::ConstraintOperator,
+        _ => CompletionEnv::Constraint,
     }
 }
 
@@ -513,6 +499,189 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
         }
     }
 }
+
+fn compute_constraint_completion(
+    pos: &TextDocumentPositionParams,
+    draft: &Draft,
+    snapshot: &Snapshot,
+    top: &mut TopN<CompletionOpt>,
+    ctx: &CompletionQuery,
+    origin: FileID,
+) {
+    match draft {
+        Draft::JSON { .. } => {}
+        Draft::UVL { source, tree, .. } => {
+            let (_offset, edit_node) = position_to_node(source, tree, &pos.position);
+
+            let node = longest_path(edit_node, source)
+                .unwrap_or((Path::default(), edit_node))
+                .1;
+
+            // checks if node is constraint
+            if !(0..node.start_position().row)
+                .into_iter()
+                .map(|line| {
+                    source
+                        .get_line(line)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .contains("constraints")
+                })
+                .contains(&true)
+            {
+                add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into()]);
+                add_function_keywords(&ctx.postfix, top, 2.0);
+                completion_symbol(&snapshot, origin, &ctx, top, vec![]);
+                return;
+            }
+
+            let start_idx = source.line_to_byte(node.start_position().row);
+            let mut cursor = node;
+            if cursor.kind() == "ERROR" {
+                cursor = cursor.child(cursor.child_count() - 1).unwrap();
+            }
+
+            let mut childs: Vec<Node> = vec![];
+            while cursor.start_byte() >= start_idx {
+                if source
+                    .get_byte_slice(cursor.byte_range())
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .contains("\n")
+                {
+                    cursor = cursor.child(cursor.child_count() - 2).unwrap();
+                    continue;
+                }
+                childs.push(cursor);
+
+                match cursor.prev_sibling() {
+                    Some(node) => cursor = node,
+                    _ => break,
+                }
+            }
+
+            match (childs.len(), ctx.offset) {
+                (1, CompletionOffset::Continuous) => {
+                    add_function_keywords(&ctx.postfix, top, 2.0);
+                    completion_symbol(&snapshot, origin, &ctx, top, vec![]);
+                }
+                (1, _) => {
+                    let child = childs[0];
+                    match child.kind() {
+                        "name" | "path" => {
+                            let found = resolve_name(&snapshot, origin, &source, child);
+                            if found.len() == 0 {
+                                add_logic_op(&ctx.postfix, top, 6.1);
+                                add_numeric_op(&ctx.postfix, top, 6.1);
+                                add_string_op(&ctx.postfix, top, 6.1);
+                            }
+                            for ty in found {
+                                match ty {
+                                    Type::Bool => add_logic_op(&ctx.postfix, top, 6.1),
+                                    Type::Real => add_numeric_op(&ctx.postfix, top, 6.1),
+                                    Type::String => add_string_op(&ctx.postfix, top, 6.1),
+                                    _ => {
+                                        add_logic_op(&ctx.postfix, top, 6.1);
+                                        add_numeric_op(&ctx.postfix, top, 6.1);
+                                        add_string_op(&ctx.postfix, top, 6.1);
+                                    }
+                                }
+                            }
+                        }
+                        "number" | "function" => add_numeric_op(&ctx.postfix, top, 6.1),
+                        "string" => add_string_op(&ctx.postfix, top, 6.1),
+                        _ => (),
+                    }
+                }
+                (2, _) | (3, CompletionOffset::Continuous) => {
+                    let child = if childs.len() == 3 {
+                        childs[2]
+                    } else {
+                        childs[1]
+                    };
+                    match child.kind() {
+                        "name" | "path" => {
+                            let tys = resolve_name(&snapshot, origin, &source, child);
+                            if tys.len() == 0 {
+                                completion_symbol(&snapshot, origin, &ctx, top, vec![])
+                            }
+                            for ty in tys {
+                                match ty {
+                                    Type::Bool | Type::Real => {
+                                        completion_symbol(&snapshot, origin, &ctx, top, vec![ty])
+                                    }
+                                    Type::String => {
+                                        completion_symbol(
+                                            &snapshot,
+                                            origin,
+                                            &ctx,
+                                            top,
+                                            vec![Type::String],
+                                        );
+                                        add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into()]);
+                                    }
+                                    _ => completion_symbol(&snapshot, origin, &ctx, top, vec![]),
+                                }
+                            }
+                        }
+                        "number" => {
+                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Real])
+                        }
+                        "string" => {
+                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::String]);
+                            add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into()]);
+                        }
+                        "binary_expr" => {
+                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Bool])
+                        }
+                        _ => (),
+                    }
+                }
+                (3, _) => {
+                    add_logic_op(&ctx.postfix, top, 6.1);
+                    return;
+                }
+                _ => (),
+            }
+        }
+    }
+}
+
+fn resolve_name(snapshot: &Snapshot, origin: FileID, source: &Rope, child: Node) -> Vec<Type> {
+    let entries = snapshot.file(origin).get_symbols(Ustr::from(
+        source
+            .get_byte_slice(child.byte_range())
+            .unwrap()
+            .as_str()
+            .unwrap(),
+    ));
+    let mut result: Vec<Type> = vec![];
+    for entry in entries.clone() {
+        match entry {
+            Symbol::Feature(i) => result.push(snapshot.file(origin).get_feature(i).unwrap().ty),
+            Symbol::Attribute(i) => {
+                match snapshot
+                    .file(origin)
+                    .get_attribute(i)
+                    .unwrap()
+                    .value
+                    .value
+                    .clone()
+                {
+                    Value::Number(_) => result.push(Type::Real),
+                    Value::String(_) => result.push(Type::String),
+                    Value::Bool(_) => result.push(Type::Bool),
+                    _ => (),
+                }
+            }
+            _ => (),
+        }
+    }
+    return result;
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum CompletionKind {
     Feature,
@@ -587,7 +756,7 @@ fn add_keywords<const I: usize>(
     w: f32,
     words: [CompactString; I],
 ) {
-    let regex = Regex::new(r"(\s*\[)(\$\d+)\]").unwrap();
+    let regex = Regex::new(r"(\s*\[)(\$\d+)\]|\$\d+").unwrap();
     for word in words {
         top.push(CompletionOpt {
             op: TextOP::Put(word.clone()),
@@ -672,15 +841,7 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         query,
         top,
         w,
-        [
-            "&".into(),
-            "|".into(),
-            "=>".into(),
-            "<=>".into(),
-            ">".into(),
-            "<".into(),
-            "==".into(),
-        ],
+        ["& ".into(), "| ".into(), "=> ".into(), "<=> ".into()],
     );
 }
 
@@ -790,6 +951,7 @@ fn completion_symbol_local(
     prefix: &[Ustr],
     query: &CompletionQuery,
     top: &mut TopN<CompletionOpt>,
+    filter_types: Vec<Type>,
 ) {
     let file = snapshot.file(root.file);
     info!("Module {:?} under {:?}", root, prefix);
@@ -810,6 +972,9 @@ fn completion_symbol_local(
             && root.file == origin
             && matches!(sym, Symbol::Feature(..))
         {
+            return true;
+        }
+        if filter_types.len() > 0 && !filter_types.contains(&ty) {
             return true;
         }
         let text = make_path(prefix.iter().chain(sym_prefix.iter()));
@@ -833,6 +998,7 @@ fn completion_symbol(
     origin: FileID,
     query: &CompletionQuery,
     top: &mut TopN<CompletionOpt>,
+    filter_types: Vec<Type>,
 ) {
     let mut modules: HashMap<_, Vec<Ustr>> = HashMap::new(); //Store reachable documents under the
                                                              //search perfix under a secondary prefix
@@ -869,7 +1035,9 @@ fn completion_symbol(
                     _ => false,
                 });
             }
-            _ => completion_symbol_local(snapshot, origin, i, &[], query, top),
+            _ => {
+                completion_symbol_local(snapshot, origin, i, &[], query, top, filter_types.clone())
+            }
         }
     }
     let root = FileID::max(); //Perform nn from all reachable documents to all other
@@ -931,6 +1099,7 @@ fn completion_symbol(
             &path,
             query,
             top,
+            filter_types.clone(),
         );
     }
     //info!("{:#?}", pred);
@@ -969,50 +1138,10 @@ fn compute_completions_impl(
                 .resolve(origin, &ctx.prefix)
                 .filter(|f| f.file == origin)
             {
-                completion_symbol_local(&snapshot, origin, i, &[], ctx, &mut top)
+                completion_symbol_local(&snapshot, origin, i, &[], ctx, &mut top, vec![])
             }
         }
-        CompletionEnv::Numeric | CompletionEnv::String => match (&ctx.env, &ctx.offset) {
-            (CompletionEnv::Numeric, CompletionOffset::SameLine) => {
-                add_numeric_op(&ctx.postfix, &mut top, 6.1);
-            }
-            (CompletionEnv::String, CompletionOffset::SameLine) => {
-                add_string_op(&ctx.postfix, &mut top, 6.1);
-            }
-            _ => {
-                completion_symbol(&snapshot, origin, &ctx, &mut top);
-            }
-        },
-
-        CompletionEnv::StringConstraint
-        | CompletionEnv::NumericConstraint
-        | CompletionEnv::ConstraintOperator => match (&ctx.env, &ctx.offset) {
-            (CompletionEnv::NumericConstraint, CompletionOffset::SameLine) => {
-                add_function_keywords(&ctx.postfix, &mut top, 2.0);
-                completion_symbol(&snapshot, origin, &ctx, &mut top);
-            }
-            (CompletionEnv::StringConstraint, CompletionOffset::SameLine) => {
-                completion_symbol(&snapshot, origin, &ctx, &mut top);
-            }
-            (
-                CompletionEnv::ConstraintOperator,
-                CompletionOffset::Continuous | CompletionOffset::Cut,
-            ) => {
-                completion_symbol(&snapshot, origin, &ctx, &mut top);
-                add_function_keywords(&ctx.postfix, &mut top, 2.0);
-            }
-            (CompletionEnv::ConstraintOperator, CompletionOffset::SameLine) => {
-                add_logic_op(&ctx.postfix, &mut top, 6.1);
-            }
-            (CompletionEnv::ConstraintOperator, CompletionOffset::Dot) => {
-                completion_symbol(&snapshot, origin, &ctx, &mut top);
-            }
-            _ => {
-                completion_symbol(&snapshot, origin, &ctx, &mut top);
-            }
-        },
-
-        CompletionEnv::Constraint | CompletionEnv::Feature => {
+        CompletionEnv::Feature => {
             match (&ctx.env, &ctx.offset) {
                 //heuristic to provide nearly correct predictions, to
                 //make it more accurate we need to respect
@@ -1031,7 +1160,7 @@ fn compute_completions_impl(
                             2.0,
                             ["Integer".into(), "String".into(), "Real".into()],
                         );
-                        completion_symbol(&snapshot, origin, &ctx, &mut top);
+                        completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
                     }
                 }
                 (
@@ -1041,10 +1170,10 @@ fn compute_completions_impl(
                     | CompletionOffset::SameLine,
                 ) => {
                     add_function_keywords(&ctx.postfix, &mut top, 2.0);
-                    completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
                 }
                 _ => {
-                    completion_symbol(&snapshot, origin, &ctx, &mut top);
+                    completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
                 }
             }
             is_incomplete = true
@@ -1107,7 +1236,7 @@ fn compute_completions_impl(
                 },
             );
             if context.is_none() {
-                completion_symbol(&snapshot, origin, &ctx, &mut top);
+                completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
             }
         }
         CompletionEnv::ConfigRootKey => add_keywords(
@@ -1140,7 +1269,16 @@ pub fn compute_completions(
     };
     info!("Stat completion in  {:?} {:#?}", origin, ctx);
     if let (Some(ctx), Some(origin)) = (ctx, origin) {
-        let (top, is_incomplete) = compute_completions_impl(snapshot, draft, pos, &ctx, origin);
+        let (mut top, is_incomplete) =
+            compute_completions_impl(snapshot.clone(), draft, pos.clone(), &ctx, origin);
+        if matches!(
+            ctx.env,
+            CompletionEnv::Constraint
+                | CompletionEnv::Numeric
+                | CompletionEnv::Aggregate { context: _ }
+        ) {
+            compute_constraint_completion(&pos, draft, &snapshot, &mut top, &ctx, origin);
+        }
         let items = top
             .into_sorted_vec()
             .into_iter()
