@@ -123,3 +123,17 @@ pub fn is_config(uri: &Url) -> bool {
         })
         .unwrap_or(false)
 }
+
+pub fn create_new_uvl(old_uri: String, path: String) -> Option<Url> {
+    if let Some(name) = old_uri.split("/").collect::<Vec<&str>>().last() {
+        if let Some(dir) = old_uri.strip_suffix(name) {
+            let mut new_uri = dir.to_string();
+            new_uri.push_str(path.as_str());
+            if let Ok(url) = Url::parse(new_uri.as_str()) {
+                return Some(url);
+            }
+        }
+    }
+
+    None
+}
