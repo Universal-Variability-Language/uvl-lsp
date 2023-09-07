@@ -388,7 +388,7 @@ impl FileState {
                         token_modifiers_bitset: 0,
                     })
                 }
-                if i.range.start.line - i.range.end.line > 2 {
+                if i.range.end.line - i.range.start.line > 1 {
                     for l in i.range.start.line + 1..i.range.end.line {
                         filtered.push(SemanticToken {
                             delta_line: 1,
