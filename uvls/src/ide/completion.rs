@@ -565,8 +565,14 @@ fn compute_constraint_completion(
 
             // Depending on the length of the list give recomendations
             match (childs.len(), ctx.offset) {
-                (1, CompletionOffset::Continuous) | (1, CompletionOffset::Dot) => {
-                    add_function_keywords(&ctx.postfix, top, 2.0);
+                (1, CompletionOffset::Continuous) => match ctx.env {
+                    CompletionEnv::Aggregate { context: _ } => (),
+                    _ => {
+                        add_function_keywords(&ctx.postfix, top, 2.0);
+                        completion_symbol(&snapshot, origin, &ctx, top, vec![]);
+                    }
+                },
+                (1, CompletionOffset::Dot) => {
                     completion_symbol(&snapshot, origin, &ctx, top, vec![]);
                 }
                 (1, _) => {
@@ -646,7 +652,7 @@ fn compute_constraint_completion(
                                 }
                             }
                         }
-                        "number" => {
+                        "number" | "function" => {
                             completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Real])
                         }
                         "string" => {
@@ -1277,35 +1283,37 @@ fn compute_completions_impl(
             }
         }
         CompletionEnv::Aggregate { context } => {
-            snapshot.resolve_attributes(
-                origin,
-                context.as_ref().map(|p| p.names.as_slice()).unwrap_or(&[]),
-                |attrib, prefix| {
-                    let common = prefix
-                        .iter()
-                        .zip(ctx.prefix.iter())
-                        .take_while(|(i, k)| i == k)
-                        .count();
-                    if common < ctx.prefix.len() {
-                        return;
-                    }
-                    let file = snapshot.file(attrib.file);
-                    let prefix_str = make_path(prefix[common..].iter());
-                    let kind = file.type_of(attrib.sym).unwrap().into();
-                    if kind != CompletionKind::DontCare {
-                        top.push(CompletionOpt::new(
-                            kind,
-                            *prefix.last().unwrap(),
-                            prefix_str.clone(),
-                            prefix.len(),
-                            TextOP::Put(prefix_str),
-                            &ctx,
-                        ));
-                    }
-                },
-            );
-            if context.is_none() {
-                completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
+            if ctx.offset != CompletionOffset::SameLine {
+                snapshot.resolve_attributes(
+                    origin,
+                    context.as_ref().map(|p| p.names.as_slice()).unwrap_or(&[]),
+                    |attrib, prefix| {
+                        let common = prefix
+                            .iter()
+                            .zip(ctx.prefix.iter())
+                            .take_while(|(i, k)| i == k)
+                            .count();
+                        if common < ctx.prefix.len() {
+                            return;
+                        }
+                        let file = snapshot.file(attrib.file);
+                        let prefix_str = make_path(prefix[common..].iter());
+                        let kind = file.type_of(attrib.sym).unwrap().into();
+                        if kind != CompletionKind::DontCare {
+                            top.push(CompletionOpt::new(
+                                kind,
+                                *prefix.last().unwrap(),
+                                prefix_str.clone(),
+                                prefix.len(),
+                                TextOP::Put(prefix_str),
+                                &ctx,
+                            ));
+                        }
+                    },
+                );
+            }
+            if context.is_none() && ctx.offset == CompletionOffset::Continuous {
+                completion_symbol(&snapshot, origin, &ctx, &mut top, vec![Type::Real]);
             }
         }
         CompletionEnv::ConfigRootKey => add_keywords(
