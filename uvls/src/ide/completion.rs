@@ -536,12 +536,13 @@ fn compute_constraint_completion(
                 return;
             }
 
+            // set cursor to childs.
             let start_idx = source.line_to_byte(node.start_position().row);
             let mut cursor = node;
             if cursor.kind() == "ERROR" {
                 cursor = cursor.child(cursor.child_count() - 1).unwrap();
             }
-
+            // Add individual Childs to list
             let mut childs: Vec<Node> = vec![];
             while cursor.start_byte() >= start_idx {
                 if source
@@ -562,8 +563,9 @@ fn compute_constraint_completion(
                 }
             }
 
+            // Depending on the length of the list give recomendations
             match (childs.len(), ctx.offset) {
-                (1, CompletionOffset::Continuous) => {
+                (1, CompletionOffset::Continuous) | (1, CompletionOffset::Dot) => {
                     add_function_keywords(&ctx.postfix, top, 2.0);
                     completion_symbol(&snapshot, origin, &ctx, top, vec![]);
                 }
@@ -571,7 +573,16 @@ fn compute_constraint_completion(
                     let child = childs[0];
                     match child.kind() {
                         "name" | "path" => {
-                            let found = resolve_name(&snapshot, origin, &source, child);
+                            let found = resolve_name(
+                                &snapshot,
+                                origin,
+                                &source,
+                                source
+                                    .get_byte_slice(child.byte_range())
+                                    .unwrap()
+                                    .as_str()
+                                    .unwrap(),
+                            );
                             if found.len() == 0 {
                                 add_logic_op(&ctx.postfix, top, 6.1);
                                 add_numeric_op(&ctx.postfix, top, 6.1);
@@ -603,7 +614,16 @@ fn compute_constraint_completion(
                     };
                     match child.kind() {
                         "name" | "path" => {
-                            let tys = resolve_name(&snapshot, origin, &source, child);
+                            let tys = resolve_name(
+                                &snapshot,
+                                origin,
+                                &source,
+                                source
+                                    .get_byte_slice(child.byte_range())
+                                    .unwrap()
+                                    .as_str()
+                                    .unwrap(),
+                            );
                             if tys.len() == 0 {
                                 completion_symbol(&snapshot, origin, &ctx, top, vec![])
                             }
@@ -649,18 +669,67 @@ fn compute_constraint_completion(
     }
 }
 
-fn resolve_name(snapshot: &Snapshot, origin: FileID, source: &Rope, child: Node) -> Vec<Type> {
-    let entries = snapshot.file(origin).get_symbols(Ustr::from(
-        source
-            .get_byte_slice(child.byte_range())
-            .unwrap()
-            .as_str()
-            .unwrap(),
-    ));
+fn resolve_name(snapshot: &Snapshot, origin: FileID, _source: &Rope, child: &str) -> Vec<Type> {
     let mut result: Vec<Type> = vec![];
+    let file = snapshot.file(origin);
+    let child_prefix = child.split(".").map(|s| Ustr::from(s)).collect_vec();
+
+    // go through imports and check if child is imported
+    for import in file.all_imports() {
+        // check if child is imported from this import
+        let import_prefix = file.import_prefix(import);
+        if import_prefix.len() > child_prefix.len() {
+            continue;
+        }
+
+        let mut is_import = true;
+        for i in 0..import_prefix.len() {
+            if is_import && import_prefix[i] != child_prefix[i] {
+                is_import = false;
+            }
+        }
+
+        if !is_import {
+            continue;
+        }
+
+        // Child is imported from this import!
+        // generate new_child string with removed import statements (import.feature -> feature)
+
+        let mut child_prefix_copy = child_prefix.clone();
+        child_prefix_copy.drain(0..import_prefix.len());
+
+        let new_child = child_prefix_copy
+            .into_iter()
+            .map(|ustr| ustr.as_str())
+            .fold(String::new(), |a, b| {
+                if a.len() > 0 {
+                    return a + "." + b;
+                }
+                a + b
+            });
+
+        // Generate FileID from import
+        let mut new_path = origin.filepath().clone();
+        new_path.pop(); // remove own file.uvl
+        for i in 0..(import_prefix.len() - 1) {
+            new_path.push(import_prefix[i].as_str());
+        }
+        new_path.push(import_prefix.last().unwrap().to_string() + ".uvl");
+
+        // If successfull call recursively
+        if let Some(new_origin) = snapshot.file_id(&Url::from_file_path(new_path).unwrap()) {
+            result.append(resolve_name(snapshot, new_origin, _source, &new_child).as_mut());
+        }
+    }
+
+    // Get symbols in local file that match the child
+    let entries = file.get_symbols(Ustr::from(child));
+
+    // map entries to their Type
     for entry in entries.clone() {
         match entry {
-            Symbol::Feature(i) => result.push(snapshot.file(origin).get_feature(i).unwrap().ty),
+            Symbol::Feature(i) => result.push(file.get_feature(i).unwrap().ty),
             Symbol::Attribute(i) => {
                 match snapshot
                     .file(origin)
