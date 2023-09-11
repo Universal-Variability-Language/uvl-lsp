@@ -635,8 +635,12 @@ fn compute_constraint_completion(
                             }
                             for ty in tys {
                                 match ty {
-                                    Type::Bool | Type::Real => {
+                                    Type::Bool => {
                                         completion_symbol(&snapshot, origin, &ctx, top, vec![ty])
+                                    }
+                                    Type::Real => {
+                                        completion_symbol(&snapshot, origin, &ctx, top, vec![ty]);
+                                        add_function_keywords(&ctx.postfix, top, 1.0);
                                     }
                                     Type::String => {
                                         completion_symbol(
@@ -653,7 +657,8 @@ fn compute_constraint_completion(
                             }
                         }
                         "number" | "function" => {
-                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Real])
+                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Real]);
+                            add_function_keywords(&ctx.postfix, top, 1.0);
                         }
                         "string" => {
                             completion_symbol(&snapshot, origin, &ctx, top, vec![Type::String]);
