@@ -439,7 +439,9 @@ impl ConfigModule {
     //Turns a the set of linear configuration values of this module into theire recusive from
     //used in json
     pub fn serialize(&self) -> Vec<ConfigEntry> {
-        let ConfigEntry::Import(_,v) = self.serialize_rec(&[],InstanceID(0)) else {unreachable!()};
+        let ConfigEntry::Import(_, v) = self.serialize_rec(&[], InstanceID(0)) else {
+            unreachable!()
+        };
         v
     }
 }
