@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tree_sitter::{Node, QueryCursor, Tree};
+use ustr::Ustr;
 //Syntax highlight happens in here
 //we mainly use tree-sitter queries to extract token and serialize them
 //according to the lsp spec
@@ -153,9 +154,9 @@ impl FileState {
     }
     fn color_section(
         origin: Node,
-        _root: &Snapshot,
+        root: &Snapshot,
         source: &Rope,
-        _file: &AstDocument,
+        file: &AstDocument,
         utf16_line: &HashSet<usize>,
         token: &mut Vec<AbsToken>,
     ) {
@@ -165,14 +166,129 @@ impl FileState {
         let captures = TS.queries.highlight.capture_names();
         for i in cursor.matches(&TS.queries.highlight, origin, node_source(source)) {
             for c in i.captures {
-                let kind = captures[c.index as usize].as_str();
-                let range = fast_lsp_range(c.node, source, utf16_line);
-                token.push(AbsToken {
-                    range,
-                    kind: token_index(kind),
-                });
+                let path = Self::create_path(c.node, source);
+                if c.node.kind() == "path"
+                    && path != None
+                    && Self::handle_path(root, file, path.unwrap().clone())
+                {
+                    //document slice gets two colors
+                    let kind = captures[7].as_str();
+                    let range = node_range(c.node.child(c.node.child_count() - 1).unwrap(), source);
+                    token.push(AbsToken {
+                        range,
+                        kind: token_index(kind),
+                    });
+                    let feat_kind = captures[c.index as usize].as_str();
+                    let mut feat_range = fast_lsp_range(c.node, source, utf16_line);
+                    feat_range.end = Position {
+                        line: range.start.line,
+                        character: range.start.character - 1,
+                    };
+                    token.push(AbsToken {
+                        range: feat_range,
+                        kind: token_index(feat_kind),
+                    });
+                } else {
+                    let kind = captures[c.index as usize].as_str();
+                    let range = fast_lsp_range(c.node, source, utf16_line);
+                    token.push(AbsToken {
+                        range,
+                        kind: token_index(kind),
+                    });
+                }
             }
         }
+    }
+    /**
+     * if node is a path create a Path
+     */
+    fn create_path(node: Node, source: &Rope) -> Option<Path> {
+        if node.kind() != "path" {
+            return None;
+        }
+        let mut path = Path::default();
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                if child.kind() == "name" {
+                    if let Some(name) = source.byte_slice(child.byte_range()).as_str() {
+                        path.names.push(Ustr::from(name));
+                        path.spans.push(child.byte_range());
+                    } else {
+                        return None;
+                    }
+                }
+            } else {
+                return None;
+            }
+        }
+        Some(path)
+    }
+    /**
+     * if it is a attribute path return true
+     * otherwise false
+     */
+    fn handle_path(root: &Snapshot, file: &AstDocument, mut path: Path) -> bool {
+        if path.len() == 0 {
+            return false;
+        } else if path.len() == 1 {
+            if file.containe_attribute(path.names.get(0).unwrap().clone()) {
+                return true;
+            }
+        } else if path.len() == 2 {
+            // check if path prefix is a feature if not it couldn't be a attribute path
+            if file.containe_feature(path.names.remove(0).clone()) {
+                let _ = path.spans.remove(0);
+                return Self::handle_path(root, file, path);
+            }
+            return false;
+        } else {
+            //check if path start with an import or and import alias
+            for import in file.imports() {
+                //check import alias
+                if let Some(alias) = import.clone().alias {
+                    if path.names.get(0).unwrap().clone() == alias.name {
+                        let _ = path.spans.remove(0);
+                        let _ = path.names.remove(0);
+                        if let Some(url) =
+                            create_new_uvl(file.uri.to_string(), import.path.relative_path())
+                        {
+                            if let Some(child_ast) = root.file_by_uri(&url) {
+                                return Self::handle_path(root, child_ast, path);
+                            }
+                        }
+                        return false;
+                    }
+                } else {
+                    //check normal import
+                    let mut same = true;
+                    for i in 0..import.path.len() {
+                        if let Some(name) = path.names.get(i) {
+                            if name != import.path.names.get(i).unwrap() {
+                                same = false;
+                            }
+                        } else {
+                            same = false;
+                        }
+                    }
+                    if same {
+                        for _ in 0..import.path.len() {
+                            let _ = path.spans.remove(0);
+                            let _ = path.names.remove(0);
+                        }
+                        if let Some(url) =
+                            create_new_uvl(file.uri.to_string(), import.path.relative_path())
+                        {
+                            info!("{}", url);
+                            if let Some(child_ast) = root.file_by_uri(&url) {
+                                return Self::handle_path(root, child_ast, path);
+                            }
+                        }
+                        return false;
+                    }
+                }
+            }
+        }
+        return false;
     }
     fn new(origin: &Url, tree: Tree, source: &ropey::Rope, root: &Snapshot) -> Self {
         let mut token = vec![];
@@ -272,7 +388,7 @@ impl FileState {
                         token_modifiers_bitset: 0,
                     })
                 }
-                if i.range.start.line - i.range.end.line > 2 {
+                if i.range.end.line - i.range.start.line > 1 {
                     for l in i.range.start.line + 1..i.range.end.line {
                         filtered.push(SemanticToken {
                             delta_line: 1,

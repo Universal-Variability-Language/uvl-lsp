@@ -39,7 +39,7 @@ module.exports = grammar({
         blk: $ => seq(
             field("header", $._header),
             optional(seq("cardinality", field("cardinality", $.cardinality))),
-            choice(field("attribs", $.attributes),$._newline),
+            choice(field("attribs", $.attributes), $._newline),
             optional(
                 field("child",
                     seq($._indent,
@@ -55,7 +55,7 @@ module.exports = grammar({
         ),
 
         _header: $ => choice(
-            prec(2,$._any_name),
+            prec(2, $._any_name),
             $.typed_feature,
             $.group_mode,
             $.imports,
@@ -67,12 +67,11 @@ module.exports = grammar({
             $.lang_lvl,
             $.namespace,
             $.cardinality,
-            $.typed_feature,
             $.incomplete_namespace,
             $.incomplete_ref,
 
         ),
-        typed_feature:$=> seq( field("type",$._any_name), field("name", $._any_name)),
+        typed_feature: $ => seq(field("type", $.type), field("name", $._any_name)),
         ref: $ => prec(2, seq(
             field("path", $.path),
             optional(seq("as", field("alias", $._any_name)))
@@ -126,7 +125,7 @@ module.exports = grammar({
         ),
         unary_expr: $ => choice(
             prec(PREC.not, seq(
-                field("op",'!'),
+                field("op", '!'),
                 field("lhs", $._expr),
             )),
         ),
@@ -147,8 +146,8 @@ module.exports = grammar({
             seq('(', $._expr, ')'),
 
         function: $ =>
-            seq(field("op", $.name),"(" , 
-                sep1(field("arg", $._expr),",") ,")"),
+            seq(field("op", $.name), "(",
+                sep1(field("arg", $._expr), ","), ")"),
 
         vector: $ => seq(
             '[',
@@ -205,19 +204,20 @@ module.exports = grammar({
             'numeric-constraints',
             '*'
         ),
-        type: _=>choice(
+        type: $ => choice(
             "Boolean",
             "Real",
             "Integer",
             "String",
+            $._any_name,
         ),
         string: $ => seq(
             "'", $.string_content, "'"
         ),
         string_name: $ => seq(
-            '"',/[^\\"\n]*/, '"'
+            '"', /[^\\"\n]*/, '"'
         ),
-        string_content: $ =>   token.immediate(prec(1,/[^\n\\']*/)),       
+        string_content: $ => token.immediate(prec(1, /[^\n\\']*/)),
         imports: _ => "imports",
         features: _ => "features",
         constraints: _ => "constraints",
@@ -228,9 +228,9 @@ module.exports = grammar({
     }
 })
 function op2(op, p, $) {
-    return prec.left(p, seq(field("lhs", $._expr),  field("op",op), field("rhs", $._expr)))
+    return prec.left(p, seq(field("lhs", $._expr), field("op", op), field("rhs", $._expr)))
 }
 function sep1(rule, separator, $) {
     return seq(rule, repeat(seq(separator, rule)),
-        optional(field("tail", separator )))
+        optional(field("tail", separator)))
 }

@@ -685,6 +685,7 @@ fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
             "len($1) ".into(),
             "floor($1) ".into(),
             "ceil($1) ".into(),
+            "!".into(),
         ],
     );
 }
@@ -976,7 +977,12 @@ fn compute_completions_impl(
                             &ctx.postfix,
                             &mut top,
                             2.0,
-                            ["Integer ".into(), "String ".into(), "Real ".into()],
+                            [
+                                "Integer ".into(),
+                                "String ".into(),
+                                "Real ".into(),
+                                "Boolean".into(),
+                            ],
                         );
                         completion_symbol(&snapshot, origin, &ctx, &mut top);
                     }

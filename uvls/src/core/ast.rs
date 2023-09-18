@@ -181,11 +181,29 @@ impl Ast {
     fn get_feature(&self, index: usize) -> Option<&Feature> {
         self.features.get(index)
     }
+    fn containe_feature(&self, name: Ustr) -> bool {
+        for feature in self.features.clone() {
+            if feature.name.name == name {
+                return true;
+            }
+        }
+
+        false
+    }
     fn get_attribute(&self, index: usize) -> Option<&Attribute> {
         self.attributes.get(index)
     }
     fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
         (0..self.attributes.len()).map(Symbol::Attribute)
+    }
+    fn containe_attribute(&self, name: Ustr) -> bool {
+        for attribute in self.attributes.clone() {
+            if attribute.name.name == name {
+                return true;
+            }
+        }
+
+        false
     }
     fn all_references(&self) -> impl Iterator<Item = Symbol> {
         (0..self.references.len()).map(Symbol::Reference)
@@ -281,11 +299,17 @@ impl AstDocument {
     pub fn get_feature(&self, index: usize) -> Option<&Feature> {
         self.ast.get_feature(index)
     }
+    pub fn containe_feature(&self, name: Ustr) -> bool {
+        self.ast.containe_feature(name)
+    }
     pub fn get_attribute(&self, index: usize) -> Option<&Attribute> {
         self.ast.get_attribute(index)
     }
     pub fn all_attributes(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_attributes()
+    }
+    pub fn containe_attribute(&self, name: Ustr) -> bool {
+        self.ast.containe_attribute(name)
     }
     pub fn all_references(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_references()

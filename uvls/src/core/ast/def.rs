@@ -41,6 +41,11 @@ impl Path {
     pub fn to_string(&self) -> String {
         self.names.iter().map(|i| i.as_str()).join(".")
     }
+    pub fn relative_path(&self) -> String {
+        let mut path = self.names.iter().map(|i| i.as_str()).join("/");
+        path.push_str(".uvl");
+        path
+    }
 
     //creates from root_path and the path an absolute path
     pub fn to_file(&self, root_path: &str) -> String {
