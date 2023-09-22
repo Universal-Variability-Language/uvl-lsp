@@ -30,16 +30,29 @@ ext install caradhras.uvls-code
 
 
 ## Z3 Support
-To enable feature analysis, z3 has to be in PATH.
-Just install it via your favorite package manager.
+To enable feature analysis, z3 has to be in PATH. Install it via your favorite package manager or directly from [sources](https://github.com/Z3Prover/z3). Find instructions for some popular operating systems below.
+
 ### Windows
 Download [Chocolatey via Powershell](https://www.liquidweb.com/kb/how-to-install-chocolatey-on-windows/) and run the command below. The PATH will be set automatically after a restart.
 ```
 choco install z3
 ```
 
+### macOS
+
+```
+brew install z3
+```
+
+### Debian/Ubuntu
+
+```
+sudo apt-get update
+sudo apt-get install z3
+```
+
 ## Configuration Editor
-![alt text](img/show_editor.gif)
+![Short VSCode UVLS Demo](img/show_editor.gif)
 ## Why tree-sitter
 We use tree-sitter as an initial parser to create a loose syntax tree of UVL code fragments.
 Because the tree-sitter grammar is more relaxed than the original UVL-grammar and has great error recovery,

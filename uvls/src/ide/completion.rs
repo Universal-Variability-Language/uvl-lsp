@@ -530,7 +530,7 @@ fn compute_constraint_completion(
                 })
                 .contains(&true)
             {
-                add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into()]);
+                add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into(), "!".into()]);
                 add_function_keywords(&ctx.postfix, top, 2.0);
                 completion_symbol(&snapshot, origin, &ctx, top, vec![]);
                 return;
@@ -563,15 +563,51 @@ fn compute_constraint_completion(
                 }
             }
 
+            if childs.len() > 1 {
+                childs = childs.into_iter().filter(|c| c.kind() != "!").collect();
+            }
+
+            let mut complete_function = |node: &Node| {
+                if node.kind() != "function" {
+                    return;
+                }
+                match source.get_byte_slice(node.byte_range()).unwrap().as_str() {
+                    Some(str) => {
+                        if str.contains("len") {
+                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::String]);
+                            add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into()]);
+                        }
+                        if str.contains("avg")
+                            | str.contains("ceil")
+                            | str.contains("floor")
+                            | str.contains("sum")
+                        {
+                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Real]);
+                        }
+                    }
+                    _ => (),
+                }
+            };
+
             // Depending on the length of the list give recomendations
             match (childs.len(), ctx.offset) {
-                (1, CompletionOffset::Continuous) => match ctx.env {
-                    CompletionEnv::Aggregate { context: _ } => (),
-                    _ => {
-                        add_function_keywords(&ctx.postfix, top, 2.0);
-                        completion_symbol(&snapshot, origin, &ctx, top, vec![]);
+                (1, CompletionOffset::Continuous) => {
+                    if childs[0].kind() == "!" {
+                        completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Bool]);
+                        return;
                     }
-                },
+                    if childs[0].kind() == "function" {
+                        complete_function(&childs[0]);
+                        return;
+                    }
+                    match ctx.env {
+                        CompletionEnv::Aggregate { context: _ } => (),
+                        _ => {
+                            add_function_keywords(&ctx.postfix, top, 2.0);
+                            completion_symbol(&snapshot, origin, &ctx, top, vec![]);
+                        }
+                    }
+                }
                 (1, CompletionOffset::Dot) => {
                     completion_symbol(&snapshot, origin, &ctx, top, vec![]);
                 }
@@ -614,7 +650,11 @@ fn compute_constraint_completion(
                 }
                 (2, _) | (3, CompletionOffset::Continuous) => {
                     let child = if childs.len() == 3 {
-                        childs[2]
+                        if childs[0].kind() == "function" {
+                            childs[0]
+                        } else {
+                            childs[2]
+                        }
                     } else {
                         childs[1]
                     };
@@ -656,16 +696,25 @@ fn compute_constraint_completion(
                                 }
                             }
                         }
-                        "number" | "function" => {
+                        "number" => {
                             completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Real]);
                             add_function_keywords(&ctx.postfix, top, 1.0);
+                        }
+                        "function" => {
+                            if ctx.offset == CompletionOffset::SameLine {
+                                completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Real]);
+                                add_function_keywords(&ctx.postfix, top, 1.0);
+                            } else {
+                                complete_function(&child);
+                            }
                         }
                         "string" => {
                             completion_symbol(&snapshot, origin, &ctx, top, vec![Type::String]);
                             add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into()]);
                         }
-                        "binary_expr" => {
-                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Bool])
+                        "binary_expr" | "unary_expr" => {
+                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Bool]);
+                            add_keywords(&ctx.postfix, top, 4.2, ["!".into()]);
                         }
                         _ => (),
                     }
@@ -836,7 +885,7 @@ fn add_keywords<const I: usize>(
     w: f32,
     words: [CompactString; I],
 ) {
-    let regex = Regex::new(r"(\s*\[)(\$\d+)\]|\$\d+").unwrap();
+    let regex = Regex::new(r"\$\d+|\$\{\d+:.+}").unwrap();
     for word in words {
         top.push(CompletionOpt {
             op: TextOP::Put(word.clone()),
@@ -858,10 +907,10 @@ fn add_top_lvl_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         w,
         [
             "namespace".into(),
-            "features".into(),
-            "imports".into(),
-            "constraints".into(),
-            "include".into(),
+            "features\n\t".into(),
+            "imports\n\t".into(),
+            "constraints\n\t".into(),
+            "include\n\t".into(),
         ],
     );
 }
@@ -872,10 +921,10 @@ fn add_group_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         top,
         w,
         [
-            "or".into(),
-            "optional".into(),
-            "mandatory".into(),
-            "alternative".into(),
+            "or\n\t".into(),
+            "optional\n\t".into(),
+            "mandatory\n\t".into(),
+            "alternative\n\t".into(),
         ],
     );
 }
@@ -939,11 +988,11 @@ fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         top,
         w,
         [
-            "sum".into(),
-            "avg".into(),
-            "len".into(),
-            "floor".into(),
-            "ceil".into(),
+            "sum($1) ".into(),
+            "avg($1) ".into(),
+            "len($1) ".into(),
+            "floor($1) ".into(),
+            "ceil($1) ".into(),
         ],
     );
 }
@@ -1231,15 +1280,28 @@ fn compute_completions_impl(
                         offset,
                         CompletionOffset::SameLine | CompletionOffset::Continuous
                     ) {
-                        add_keywords(&ctx.postfix, &mut top, 2.0, ["cardinality [$1]".into()]);
+                        add_keywords(
+                            &ctx.postfix,
+                            &mut top,
+                            2.0,
+                            ["cardinality [${1:0..1}] ".into()],
+                        );
                     }
                     if matches!(offset, CompletionOffset::Continuous | CompletionOffset::Cut) {
                         add_keywords(
                             &ctx.postfix,
                             &mut top,
                             2.0,
-                            ["Integer".into(), "String".into(), "Real".into()],
+                            [
+                                "Integer ".into(),
+                                "String ".into(),
+                                "Real ".into(),
+                                "Boolean".into(),
+                            ],
                         );
+                        completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
+                    }
+                    if matches!(offset, CompletionOffset::Dot) {
                         completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
                     }
                 }

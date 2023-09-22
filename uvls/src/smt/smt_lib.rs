@@ -34,7 +34,7 @@ impl Display for AssertName {
             Self::GroupMin => write!(f, "lower bound"),
             Self::GroupMax => write!(f, "upper bound"),
             Self::GroupMember => write!(f, "group member"),
-            Self::RootFeature => write!(f, "root feature ar always required"),
+            Self::RootFeature => write!(f, "root feature are always required"),
         }
     }
 }

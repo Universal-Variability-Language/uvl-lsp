@@ -41,6 +41,11 @@ impl Path {
     pub fn to_string(&self) -> String {
         self.names.iter().map(|i| i.as_str()).join(".")
     }
+    pub fn relative_path(&self) -> String {
+        let mut path = self.names.iter().map(|i| i.as_str()).join("/");
+        path.push_str(".uvl");
+        path
+    }
 }
 
 //Type definitions for symbols

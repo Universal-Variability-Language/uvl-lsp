@@ -257,13 +257,15 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        let document = root_graph.files.get(&root_fileid).unwrap();
-        let c = ast::collapse::Collapse::new(
-            document.source.clone(),
-            document.tree.clone(),
-            uri.clone(),
-        );
-        Ok(Some(c.ranges))
+        if let Some(document) = root_graph.files.get(&root_fileid) {
+            let c = ast::collapse::Collapse::new(
+                document.source.clone(),
+                document.tree.clone(),
+                uri.clone(),
+            );
+            return Ok(Some(c.ranges));
+        }
+        Ok(None)
     }
     async fn goto_definition(
         &self,
@@ -514,24 +516,6 @@ impl LanguageServer for Backend {
                         title: "configure".into(),
                         command: "uvls/load_config".into(),
                         arguments: Some(vec![uri_json.clone()]),
-                    }),
-                    data: None,
-                },
-                CodeLens {
-                    range: Range {
-                        start: Position {
-                            line: 0,
-                            character: 0,
-                        },
-                        end: Position {
-                            line: 0,
-                            character: 0,
-                        },
-                    },
-                    command: Some(Command {
-                        title: "generate graph".into(),
-                        command: "uvls/generate_diagram".into(),
-                        arguments: Some(vec![uri_json]),
                     }),
                     data: None,
                 },

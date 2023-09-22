@@ -744,6 +744,21 @@
     }
   },
   {
+    "type": "type",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "name",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "typed_feature",
     "named": true,
     "fields": {
@@ -762,7 +777,7 @@
         "required": true,
         "types": [
           {
-            "type": "name",
+            "type": "type",
             "named": true
           }
         ]
