@@ -164,6 +164,7 @@ async fn link_handler(
     tx_err: mpsc::Sender<DiagnosticUpdate>,
     tx_ast: watch::Sender<Arc<(Ast, String)>>,
     tx_root_imports: watch::Sender<Arc<RootGraph>>,
+    mut rx_sync: mpsc::Receiver<bool>,
 ) {
     //First we gather changes to avoid redundant recomputation
     let mut latest_configs: HashMap<FileID, Arc<config::ConfigDocument>> = HashMap::new();
@@ -200,6 +201,7 @@ async fn link_handler(
 
                         revision +=1;
                         dirty=true;
+                        let _= rx_sync.recv().await;
                         let _ = tx_ast.send(Arc::new((ast_clone,uri_str)));
 
                     }
@@ -279,6 +281,7 @@ async fn import_handler(pipeline: AsyncPipeline) {
     let mut rx = pipeline.rx_ast.clone();
     let rx_root = pipeline.rx_root_imports.clone();
     loop {
+        let _ = pipeline.tx_sync.send(true).await;
         //wait that Ast Document is updated
         if rx.changed().await.is_err() {
             break;
@@ -324,10 +327,13 @@ pub struct AsyncPipeline {
     inlay_handler: InlayHandler,
     //fires when astDocument get updated
     rx_ast: watch::Receiver<Arc<(Ast, String)>>,
+    //fires to inform rx_ast Receiver that it can send
+    tx_sync: mpsc::Sender<bool>,
 }
 impl AsyncPipeline {
     pub fn new(client: tower_lsp::Client) -> Self {
         let (tx_ast, rx_ast) = watch::channel(Arc::new((Ast::default(), "".to_string())));
+        let (tx_sync, rx_sync) = mpsc::channel(1);
         let (tx_link, rx_link) = mpsc::channel(1024);
         let (tx_root, rx_root) = watch::channel(Arc::new(RootGraph::default()));
         let (tx_root_imports, rx_root_imports) = watch::channel(Arc::new(RootGraph::default()));
@@ -341,6 +347,7 @@ impl AsyncPipeline {
             tx_err.clone(),
             tx_ast,
             tx_root_imports,
+            rx_sync,
         ));
         spawn(check::diagnostic_handler(rx_err, client.clone()));
         spawn(smt::check_handler(
@@ -360,6 +367,7 @@ impl AsyncPipeline {
             rx_root,
             rx_root_imports,
             rx_ast,
+            tx_sync,
         }
     }
     pub fn touch(&self, uri: &Url) {
@@ -575,7 +583,7 @@ impl AsyncPipeline {
                             tokio::task::spawn_blocking(move || {
                                 load_blocking(url_file, &pipeline);
                                 //update modified so uvl.json can be loaded
-                                let e = set_file_mtime(
+                                let _ = set_file_mtime(
                                     open_url.to_file_path().unwrap(),
                                     FileTime::now(),
                                 );
