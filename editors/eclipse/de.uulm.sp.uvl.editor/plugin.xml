@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <extension
+         point="org.eclipse.core.contenttype.contentTypes">
+      <content-type
+            file-extensions="uvl"
+            id="de.uulm.sp.uvl.contenttype"
+            name="Universal Variability Language"
+            priority="high">
+      </content-type>
+   </extension>
+   <extension
+         point="org.eclipse.ui.editors">
+      <editorContentTypeBinding
+            contentTypeId="de.uulm.sp.uvl.contenttype"
+            editorId="org.eclipse.ui.genericeditor.GenericEditor">
+      </editorContentTypeBinding>
+   </extension>
+   <extension
+       point="org.eclipse.ui.genericeditor.icons">
+    <icon
+          contentType="de.uulm.sp.uvl.contenttype"
+          icon="icons/uvl.png">
+    </icon>
+ </extension>
+ <extension
+      point="org.eclipse.ui.genericeditor.presentationReconcilers">
+    <presentationReconciler
+         class="de.uulm.sp.uvl.editor.PropertiesReconciler"
+         contentType="de.uulm.sp.uvl.contenttype">
+   </presentationReconciler>
+</extension>
+
+</plugin>
