@@ -342,7 +342,6 @@ async fn check_base_sat(
     });
     let models = join_all(active.map(|(_, v)| {
         let module = v.clone();
-        info!("module {:?}", module);
         async move {
             let smt_module = uvl2smt(&module, &HashMap::new());
             let source = smt_module.to_source(&module);

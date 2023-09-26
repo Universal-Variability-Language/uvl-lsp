@@ -281,6 +281,9 @@ async fn import_handler(pipeline: AsyncPipeline) {
     let mut rx = pipeline.rx_ast.clone();
     let rx_root = pipeline.rx_root_imports.clone();
     loop {
+        // Send message to notify rx sender to send the last edited file URI.
+        // This synchronization is important to ensure that rx sender does not send
+        //  two or more messages and the import handler gets only one processed
         let _ = pipeline.tx_sync.send(true).await;
         //wait that Ast Document is updated
         if rx.changed().await.is_err() {
