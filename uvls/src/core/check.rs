@@ -15,11 +15,13 @@ pub enum ErrorType {
     Any = 0,
     FeatureNameContainsDashes,
     ReferenceToString,
+    AddIndentation,
 }
 
 impl ErrorType {
     pub fn from_u32(value: u32) -> ErrorType {
         match value {
+            3 => ErrorType::AddIndentation,
             2 => ErrorType::ReferenceToString,
             1 => ErrorType::FeatureNameContainsDashes,
             _ => ErrorType::Any,
