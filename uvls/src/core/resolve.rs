@@ -259,7 +259,13 @@ fn resolve_constraint(
             }
             match state {
                 ResolveState::Unresolved => {
-                    err.sym(*sym, file, 30, "unresolved reference");
+                    err.sym_with_type(
+                        *sym,
+                        file,
+                        30,
+                        "unresolved reference",
+                        ErrorType::ReferenceToString,
+                    );
                 }
                 ResolveState::WrongType { expected, found } => {
                     err.sym(

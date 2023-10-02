@@ -908,7 +908,11 @@ fn opt_attrib_expr(state: &mut VisitorState) -> Option<Value> {
         "bool" => Some(Value::Bool(visit_children(state, opt_bool))),
         "string" => Some(Value::String(opt_string(state)?)),
         "path" => {
-            state.push_error(30, "attribute references are not supported");
+            state.push_error_with_type(
+                30,
+                "attribute references are not supported",
+                ErrorType::ReferenceToString,
+            );
             None
         }
         "binary_expr" | "nested_expr" | "aggregate" | "unary_expr" => {

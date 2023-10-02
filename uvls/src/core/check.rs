@@ -14,11 +14,13 @@ use tree_sitter::{Node, QueryCursor, Tree};
 pub enum ErrorType {
     Any = 0,
     FeatureNameContainsDashes,
+    ReferenceToString,
 }
 
 impl ErrorType {
     pub fn from_u32(value: u32) -> ErrorType {
         match value {
+            2 => ErrorType::ReferenceToString,
             1 => ErrorType::FeatureNameContainsDashes,
             _ => ErrorType::Any,
         }
@@ -323,6 +325,27 @@ impl<'a> ErrorsAcc<'a> {
                 weight,
                 msg: s.into(),
                 error_type: ErrorType::Any,
+            },
+        );
+    }
+
+    pub fn sym_with_type<S: Into<String>>(
+        &mut self,
+        sym: Symbol,
+        file: FileID,
+        weight: u32,
+        s: S,
+        error_type: ErrorType,
+    ) {
+        insert_multi(
+            &mut self.errors,
+            file,
+            ErrorInfo {
+                location: self.files[&file].lsp_range(sym).unwrap(),
+                severity: DiagnosticSeverity::ERROR,
+                weight,
+                msg: s.into(),
+                error_type,
             },
         );
     }

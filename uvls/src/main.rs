@@ -576,6 +576,13 @@ impl LanguageServer for Backend {
                                 self.snapshot(&params.text_document.uri, false).await,
                             )
                         }
+                        ErrorType::ReferenceToString => {
+                            return actions::reference_to_string(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
                     }
                 }
                 _ => (),
