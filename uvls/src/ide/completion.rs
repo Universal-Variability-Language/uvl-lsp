@@ -1012,19 +1012,26 @@ fn compute_completions_impl(
             is_incomplete = true
         }
         CompletionEnv::Import => {
-            for (path, name, node) in snapshot.fs().sub_files(origin, &ctx.prefix) {
-                let len = path.as_str().chars().filter(|c| c == &'.').count();
-                top.push(CompletionOpt::new(
-                    match node {
-                        FSNode::Dir => CompletionKind::Folder,
-                        _ => CompletionKind::File,
-                    },
-                    name,
-                    path.clone(),
-                    len,
-                    TextOP::Put(path),
-                    &ctx,
-                ))
+            match &ctx.offset {
+                CompletionOffset::SameLine => {
+                    add_keywords(&ctx.postfix, &mut top, 2.0, ["as ".into()])
+                }
+                _ => {
+                    for (path, name, node) in snapshot.fs().sub_files(origin, &ctx.prefix) {
+                        let len = path.as_str().chars().filter(|c| c == &'.').count();
+                        top.push(CompletionOpt::new(
+                            match node {
+                                FSNode::Dir => CompletionKind::Folder,
+                                _ => CompletionKind::File,
+                            },
+                            name,
+                            path.clone(),
+                            len,
+                            TextOP::Put(path),
+                            &ctx,
+                        ))
+                    }
+                }
             }
             is_incomplete = true
         }
