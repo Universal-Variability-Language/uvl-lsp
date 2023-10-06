@@ -176,17 +176,29 @@ mod tests {
                 _ => Type::Real,
             },
         };
-        let (i,(_,ConfigValue::Number(n))) = parser.parse(i).unwrap() else {panic!()};
+        let (i, (_, ConfigValue::Number(n))) = parser.parse(i).unwrap() else {
+            panic!()
+        };
         assert_approx_eq!(n, -1.0);
-        let (i,(_,ConfigValue::Number(n))) = parser.parse(i).unwrap() else {panic!()};
+        let (i, (_, ConfigValue::Number(n))) = parser.parse(i).unwrap() else {
+            panic!()
+        };
         assert_approx_eq!(n, -1.0 / 103.0);
-        let (i,(_,ConfigValue::Number(n))) = parser.parse(i).unwrap() else {panic!()};
+        let (i, (_, ConfigValue::Number(n))) = parser.parse(i).unwrap() else {
+            panic!()
+        };
         assert_approx_eq!(n, 100.0 - 1.333 / 102.0);
-        let (i,(_,ConfigValue::String(n))) = parser.parse(i).unwrap() else {panic!()};
+        let (i, (_, ConfigValue::String(n))) = parser.parse(i).unwrap() else {
+            panic!()
+        };
         assert_eq!(n, "test");
-        let (i,(_,ConfigValue::Bool(n))) = parser.parse(i).unwrap() else {panic!()};
+        let (i, (_, ConfigValue::Bool(n))) = parser.parse(i).unwrap() else {
+            panic!()
+        };
         assert_eq!(n, true);
-        let (_i,(_,ConfigValue::Number(n))) = parser.parse(i).unwrap() else {panic!()};
+        let (_i, (_, ConfigValue::Number(n))) = parser.parse(i).unwrap() else {
+            panic!()
+        };
         assert_approx_eq!(n, 1.0);
     }
 }
