@@ -590,6 +590,13 @@ impl LanguageServer for Backend {
                                 self.snapshot(&params.text_document.uri, false).await,
                             )
                         }
+                        ErrorType::StartsWithNumber => {
+                            return actions::starts_with_number(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
                     }
                 }
                 _ => (),

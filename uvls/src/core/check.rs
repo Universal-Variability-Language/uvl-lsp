@@ -2,6 +2,7 @@ use crate::core::*;
 use ast::insert_multi;
 use hashbrown::HashMap;
 use log::info;
+use regex::Regex;
 use ropey::Rope;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -16,11 +17,13 @@ pub enum ErrorType {
     FeatureNameContainsDashes,
     ReferenceToString,
     AddIndentation,
+    StartsWithNumber,
 }
 
 impl ErrorType {
     pub fn from_u32(value: u32) -> ErrorType {
         match value {
+            4 => ErrorType::StartsWithNumber,
             3 => ErrorType::AddIndentation,
             2 => ErrorType::ReferenceToString,
             1 => ErrorType::FeatureNameContainsDashes,
@@ -165,13 +168,46 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
                 });
             }
             if lines.insert(node.start_position().row, node).is_some() {
-                error.push(ErrorInfo {
-                    weight: 100,
-                    location: node_range(node, source),
-                    severity: DiagnosticSeverity::ERROR,
-                    msg: "features have to be in different lines".to_string(),
-                    error_type: ErrorType::Any,
-                });
+                let re = Regex::new(r"^\d\S*$").unwrap();
+                let line = source
+                    .get_line(node.start_position().row)
+                    .unwrap()
+                    .to_string()
+                    .trim()
+                    .to_owned();
+                if re.is_match(&line) {
+                    error.push(ErrorInfo {
+                        weight: 100,
+                        location: Range::new(
+                            Position {
+                                line: node.start_position().row as u32,
+                                character: (node.start_position().column
+                                    - (line.len()
+                                        - source
+                                            .byte_slice(node.byte_range())
+                                            .as_str()
+                                            .unwrap()
+                                            .len()))
+                                    as u32,
+                            },
+                            Position {
+                                line: node.end_position().row as u32,
+                                character: node.end_position().column as u32,
+                            },
+                        ),
+                        severity: DiagnosticSeverity::ERROR,
+                        msg: "features are not allowed to start with a number".to_string(),
+                        error_type: ErrorType::StartsWithNumber,
+                    });
+                } else {
+                    error.push(ErrorInfo {
+                        weight: 100,
+                        location: node_range(node, source),
+                        severity: DiagnosticSeverity::ERROR,
+                        msg: "features have to be in different lines".to_string(),
+                        error_type: ErrorType::Any,
+                    });
+                }
             }
         } else {
             //check name or string since quoted names allow line breaks in ts but should not
