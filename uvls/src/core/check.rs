@@ -18,11 +18,13 @@ pub enum ErrorType {
     ReferenceToString,
     AddIndentation,
     StartsWithNumber,
+    WrongLanguageLevel,
 }
 
 impl ErrorType {
     pub fn from_u32(value: u32) -> ErrorType {
         match value {
+            5 => ErrorType::WrongLanguageLevel,
             4 => ErrorType::StartsWithNumber,
             3 => ErrorType::AddIndentation,
             2 => ErrorType::ReferenceToString,
