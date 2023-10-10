@@ -422,8 +422,15 @@ where
                 .map(|(_, vn)| vn.depth <= v.depth)
                 .unwrap_or(true);
             //Resolve link
-            if let UIEntryValue::Link{name,tgt,..} = &v.value{
-                let UIEntryValue::Feature {  config, smt_value, ty, unsat,.. }  = &state.entries[tgt].value else{
+            if let UIEntryValue::Link { name, tgt, .. } = &v.value {
+                let UIEntryValue::Feature {
+                    config,
+                    smt_value,
+                    ty,
+                    unsat,
+                    ..
+                } = &state.entries[tgt].value
+                else {
                     panic!()
                 };
 
@@ -441,8 +448,7 @@ where
                         }
                     },leaf:leaf,sym:*tgt,key:"{k:?}",tag:tag}
                 }
-            }
-            else{
+            } else {
                 rsx! {
                     FileEntry{node:v.clone(),leaf:leaf,sym:*k,key:"{k:?}",tag:tag}
                 }

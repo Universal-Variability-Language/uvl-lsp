@@ -570,29 +570,37 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
                     return true;
                 }
                 let ms = m.sym(a);
-                let Some((val, n)) = config.get(&ms).map(|v|( v.clone().into()  ,AssertName::Config )).or_else(|| {
-                    file.value(a)
-                        .and_then(|v| match v {
-                            ast::Value::Bool(x) => Some(Expr::Bool(*x)),
-                            ast::Value::Number(x) => Some(Expr::Real(*x)),
-                            ast::Value::String(x) => Some(Expr::String(x.clone())),
-                            _ => None,
-                        })
-                        .map(|v| (v, AssertName::Attribute))
-                }) else {return true} ;
+                let Some((val, n)) = config
+                    .get(&ms)
+                    .map(|v| (v.clone().into(), AssertName::Config))
+                    .or_else(|| {
+                        file.value(a)
+                            .and_then(|v| match v {
+                                ast::Value::Bool(x) => Some(Expr::Bool(*x)),
+                                ast::Value::Number(x) => Some(Expr::Real(*x)),
+                                ast::Value::String(x) => Some(Expr::String(x.clone())),
+                                _ => None,
+                            })
+                            .map(|v| (v, AssertName::Attribute))
+                    })
+                else {
+                    return true;
+                };
                 let zero = match val {
                     Expr::Bool(..) => Expr::Bool(false),
                     Expr::Real(..) => Expr::Real(0.0),
                     Expr::String(..) => Expr::String("".into()),
-                    _=>unreachable!()
+                    _ => unreachable!(),
                 };
                 let attrib_var = builder.push_var(ms);
                 let feat_var = builder.pseudo_bool(m.sym(f));
-                builder.assert.push(Assert(Some(AssertInfo(ms, n)),Expr::Equal(vec![
-                                                                               Expr::Ite(feat_var.into(),
-                                                                               val.into(),
-                                                                               zero.into()),
-                                                                               attrib_var] ) ));
+                builder.assert.push(Assert(
+                    Some(AssertInfo(ms, n)),
+                    Expr::Equal(vec![
+                        Expr::Ite(feat_var.into(), val.into(), zero.into()),
+                        attrib_var,
+                    ]),
+                ));
                 true
             });
         }
