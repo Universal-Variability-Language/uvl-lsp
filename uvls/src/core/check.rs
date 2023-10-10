@@ -253,6 +253,35 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
             };
         }
     }
+    if Regex::new(r"^\d+")
+        .unwrap()
+        .is_match(err_source.as_str().unwrap_or(""))
+    {
+        let name = source
+            .get_line(root.start_position().row)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .trim()
+            .replace("\n", "");
+
+        return ErrorInfo {
+            location: Range {
+                start: Position {
+                    line: root.start_position().row as u32,
+                    character: root.start_position().column as u32,
+                },
+                end: Position {
+                    line: root.start_position().row as u32,
+                    character: root.start_position().column as u32 + name.len() as u32,
+                },
+            },
+            severity: DiagnosticSeverity::ERROR,
+            weight: 100,
+            msg: "features are not allowed to start with a number".into(),
+            error_type: ErrorType::StartsWithNumber,
+        };
+    }
     ErrorInfo {
         location: node_range(root, source),
         severity: DiagnosticSeverity::ERROR,
