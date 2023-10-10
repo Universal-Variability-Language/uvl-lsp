@@ -580,13 +580,28 @@ fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
         return ();
     }
 
-    let includes: Vec<LanguageLevel> = state
+    let mut includes: Vec<LanguageLevel> = state
         .ast
         .includes
         .clone()
         .into_iter()
         .map(|x| x.lang_lvl)
         .collect();
+
+    // Add lower Core Language Levels
+    if includes
+        .iter()
+        .any(|x: &LanguageLevel| matches!(x, LanguageLevel::Arithmetic(_)))
+    {
+        includes.push(LanguageLevel::Boolean(vec![]))
+    }
+    if includes
+        .iter()
+        .any(|x: &LanguageLevel| matches!(x, LanguageLevel::Type(_)))
+    {
+        includes.push(LanguageLevel::Boolean(vec![]));
+        includes.push(LanguageLevel::Arithmetic(vec![]));
+    }
 
     fn check_sub_lang_lvls<'a, F, G, L: PartialEq>(
         mut m: F,
@@ -720,12 +735,13 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
         "number" => Some(Expr::Number(opt_number(state)?)),
         "string" => Some(Expr::String(opt_string(state)?)),
         "binary_expr" => {
-            check_langlvls(state, LanguageLevel::Arithmetic(vec![]));
             let op = state.child_by_name("op").unwrap();
             visit_children(state, |state| {
                 if let Some(op) = opt_numeric_op(op) {
                     state.goto_field("lhs");
                     let lhs = opt_numeric(state)?;
+                    state.goto_field("op");
+                    check_langlvls(state, LanguageLevel::Arithmetic(vec![]));
                     state.goto_field("rhs");
                     let rhs = opt_numeric(state)?;
                     Some(Expr::Binary {
@@ -834,12 +850,13 @@ fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
         }
         "nested_expr" => visit_children(state, opt_constraint).map(|c| c.content),
         "binary_expr" => {
-            check_langlvls(state, LanguageLevel::Arithmetic(vec![]));
             let op = state.child_by_name("op").unwrap();
             visit_children(state, |state| {
                 if let Some(op) = opt_logic_op(op) {
                     state.goto_field("lhs");
                     let lhs = opt_constraint(state)?;
+                    state.goto_field("op");
+                    check_langlvls(state, LanguageLevel::Boolean(vec![]));
                     state.goto_field("rhs");
                     let rhs = opt_constraint(state)?;
                     Some(Constraint::Logic {
@@ -850,6 +867,8 @@ fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
                 } else if let Some(op) = opt_equation(op) {
                     state.goto_field("lhs");
                     let lhs = opt_numeric(state)?;
+                    state.goto_field("op");
+                    check_langlvls(state, LanguageLevel::Arithmetic(vec![]));
                     state.goto_field("rhs");
                     let rhs = opt_numeric(state)?;
                     Some(Constraint::Equation {
