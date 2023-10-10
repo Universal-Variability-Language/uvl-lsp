@@ -263,7 +263,13 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
             .as_str()
             .unwrap()
             .trim()
-            .replace("\n", "");
+            .replace("\n", " ")
+            .as_str()
+            .split(" ")
+            .collect::<Vec<&str>>()
+            .first()
+            .unwrap_or(&"")
+            .to_string();
 
         return ErrorInfo {
             location: Range {
