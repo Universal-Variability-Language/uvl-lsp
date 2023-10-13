@@ -463,7 +463,13 @@ fn gather_expr_options(
                 .map(|i| ctx.type_of(i).unwrap())
                 .fold(BitFlags::default(), |acc, i: Type| acc | i);
             if ty.is_empty() {
-                err.sym(*sym, file, 30, "unresolved reference");
+                err.sym_with_type(
+                    *sym,
+                    file,
+                    30,
+                    "unresolved reference",
+                    ErrorType::ReferenceToString,
+                );
             }
             ty
         }
