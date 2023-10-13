@@ -75,7 +75,7 @@ fn iterate_instances<'a>(
 //resolution. Since references in diffrent instances have diffrent resolutions, we currently
 //reresolve references to non local symbols, TODO this can be avoided using a static instance
 //encoding scheme?.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Module {
     instance_files: Vec<FileID>,
     instances: IndexSet<(InstanceID, Symbol)>,

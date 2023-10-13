@@ -33,15 +33,20 @@
         "category": "UVLS"
       },
       {
-        "command":"uvls/open_web",
+        "command": "uvls/open_web",
         "title": "open a link",
         "category": "UVLS"
       },
       {
-        "command":"uvls.generate_diagram",
+        "command": "uvls.generate_diagram",
         "title": "Generate a DOT file to visualize with Graphviz",
         "category": "UVLS",
         "icon": "$(repo-forked)"
+      },
+      {
+        "command": "uvls.generate_configurations",
+        "title": "Generate n configurations",
+        "category": "UVLS"
       }
     ],
     "languages": [
@@ -77,38 +82,42 @@
         "description": "color Theme for dead feature",
         "defaults": {
           "dark": "#f34c4c",
-					"light": "#f34c4c"
+          "light": "#f34c4c"
         }
-      }, {
+      },
+      {
         "id": "color.voidfeature",
         "description": "color Theme for void feature feature",
         "defaults": {
           "dark": "#ff3333e5",
-					"light": "#ff3333e5"
+          "light": "#ff3333e5"
         }
-      }, {
+      },
+      {
         "id": "color.yellow",
         "description": "color Theme for redudant Constraint and false-optional feature",
         "defaults": {
           "dark": "#8f8b66",
-					"light": "#ffef93d2"
+          "light": "#ffef93d2"
         }
       }
     ],
     "keybindings": [
-        {
-          "command": "uvls.generate_diagram",
-          "key": "ctrl+G",
-          "mac": "cmd+G",
-          "when": "editorLangId == uvl"
-        }
+      {
+        "command": "uvls.generate_diagram",
+        "key": "ctrl+G",
+        "mac": "cmd+G",
+        "when": "editorLangId == uvl"
+      }
     ],
     "menus": {
-        "editor/title": [{
-            "command": "uvls.generate_diagram",
-            "group": "navigation",
-            "when": "editorLangId == uvl"
-        }]
+      "editor/title": [
+        {
+          "command": "uvls.generate_diagram",
+          "group": "navigation",
+          "when": "editorLangId == uvl"
+        }
+      ]
     }
   },
   "scripts": {
