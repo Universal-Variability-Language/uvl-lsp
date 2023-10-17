@@ -733,18 +733,13 @@ fn translate_constraint(
     match &decl.content {
         ast::Constraint::Ref(sym) => {
             let module_symbol: ModuleSymbol = builder.module.resolve_value(m.sym(*sym));
-            match module_symbol.sym {
-                Symbol::Feature(x) => {
-                    let all_of = ast
-                        .find_all_of(ast.name(Symbol::Feature(x)).unwrap())
-                        .into_iter()
-                        .map(|feature| builder.var(m.sym(feature)))
-                        .collect::<Vec<Expr>>();
-                    return Expr::Or(all_of);
-                }
-                _ => (),
-            }
-            builder.var(m.sym(*sym))
+            let resolved_ast = builder.module.file(module_symbol.instance);
+            let all_of = resolved_ast
+                .find_all_of(resolved_ast.name(module_symbol.sym).unwrap())
+                .into_iter()
+                .map(|feature| builder.var(module_symbol.instance.sym(feature)))
+                .collect::<Vec<Expr>>();
+            return Expr::Or(all_of);
         }
         ast::Constraint::Not(lhs) => stacker::maybe_grow(32 * 1024, 1024 * 1024, || {
             Expr::Not(translate_constraint(lhs, m, builder, ast).into())
