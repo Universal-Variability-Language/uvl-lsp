@@ -338,7 +338,9 @@ fn estimate_env(node: Node, source: &Rope, pos: &Position) -> Option<CompletionE
             } else {
                 match header_kind(blk) {
                     "name" => Some(CompletionEnv::Import),
-                    "ref" if node.kind() == "path" => Some(CompletionEnv::Import),
+                    "ref" if node.kind() == "path" || node.kind() == "name" => {
+                        Some(CompletionEnv::Import)
+                    }
                     _ => None,
                 }
             }
