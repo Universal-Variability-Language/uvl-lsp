@@ -175,6 +175,9 @@ impl Ast {
     pub fn all_imports(&self) -> impl Iterator<Item = Symbol> + DoubleEndedIterator {
         (0..self.import.len()).map(Symbol::Import)
     }
+    fn get_import(&self, index: usize) -> Option<&Import> {
+        self.import.get(index)
+    }
     fn all_features(&self) -> impl Iterator<Item = Symbol> {
         (0..self.features.len()).map(Symbol::Feature)
     }
@@ -292,6 +295,9 @@ impl AstDocument {
     }
     pub fn all_imports(&self) -> impl Iterator<Item = Symbol> + DoubleEndedIterator {
         self.ast.all_imports()
+    }
+    pub fn get_import(&self, index: usize) -> Option<&Import> {
+        self.ast.get_import(index)
     }
     pub fn all_features(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_features()
@@ -482,6 +488,35 @@ impl AstDocument {
         }
         res
     }
+
+    pub fn get_symbols(&self, path: Ustr) -> Vec<Symbol> {
+        let mut res = vec![];
+        for i in 0..self.ast.features.len() {
+            if path == self.get_feature(i).unwrap().name.name {
+                res.push(Symbol::Feature(i));
+            }
+        }
+        if path.contains(".") {
+            let paths = path.split(".").collect_vec();
+            let feature = self.get_symbols(Ustr::from(paths[0]));
+            if let Some(Symbol::Feature(x)) = feature.first() {
+                for child in self.direct_children(Symbol::Feature(x.clone())) {
+                    match child {
+                        Symbol::Attribute(a) => {
+                            if paths[1].to_string()
+                                == self.get_attribute(a).unwrap().name.name.to_string()
+                            {
+                                res.push(Symbol::Attribute(a));
+                            }
+                        }
+                        _ => (),
+                    }
+                }
+            }
+        }
+        res
+    }
+
     //prefix of sym from root
     pub fn prefix(&self, mut sym: Symbol) -> Vec<Ustr> {
         if matches!(sym, Symbol::Import(..)) {
