@@ -385,7 +385,6 @@ impl LanguageServer for Backend {
         &self,
         params: ExecuteCommandParams,
     ) -> Result<Option<serde_json::Value>> {
-        info!("test execute params {:?}", params);
         let uri: Url = serde_json::from_value(params.arguments[0].clone()).unwrap();
         match params.command.as_str() {
             "uvls/load_config" => {
@@ -505,11 +504,6 @@ impl LanguageServer for Backend {
                                         file: String,
                                         config: ConfigEntry,
                                     }
-                                    info!("webview ser {:?}", ser);
-                                    info!(
-                                        "webview conifg {:?}",
-                                        ConfigEntry::Import(Default::default(), ser.clone())
-                                    );
                                     let config = RawConfig {
                                         file: uri
                                             .to_file_path()
@@ -523,8 +517,14 @@ impl LanguageServer for Backend {
                                     };
 
                                     let out = serde_json::to_string_pretty(&config).unwrap();
-                                    let _ =
-                                        std::fs::write(format!("{}-{}.json", uri.path(), i), out);
+                                    let _ = std::fs::write(
+                                        format!(
+                                            "{}-{}.json",
+                                            uri.to_file_path().unwrap().as_path().to_str().unwrap(),
+                                            i
+                                        ),
+                                        out,
+                                    );
                                 });
 
                                 // Generate assertion to make this solution unique
