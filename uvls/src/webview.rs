@@ -1,4 +1,8 @@
-use crate::{core::*, ide, smt};
+use crate::{
+    core::*,
+    ide,
+    smt::{self, uvl2smt, SmtSolver},
+};
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
     response::Html,
@@ -178,6 +182,7 @@ pub enum UIAction {
     ShowSym(ModuleSymbol, u8),
     SolverActive,
     Save,
+    SaveAll,
     Show,
     ExpandAll,
     CollapseAll,
@@ -505,6 +510,66 @@ async fn ui_event_loop(
                         entrie.open = false;
                     })
                 });
+            }
+            UIAction::SaveAll => {
+                let output_name = ui_state.read().file_name.clone();
+                let tgt_path = tgt_path.clone();
+
+                let config_module = tx_config.borrow().module.clone();
+                let smt_module = uvl2smt(&config_module.module, &config_module.values);
+                let solver = SmtSolver::new(
+                    smt_module.to_source(&config_module),
+                    &CancellationToken::new(),
+                )
+                .await;
+
+                match solver {
+                    Ok(mut smt_solver) => match smt_solver.check_sat().await {
+                        Ok(true) => {
+                            let query = smt_module
+                                .variables
+                                .iter()
+                                .enumerate()
+                                .fold(String::new(), |acc, (i, _)| format!("{acc} v{i}"));
+
+                            let values = smt_solver
+                                .values(query.clone())
+                                .await
+                                .unwrap_or(String::from(""));
+
+                            let values_parsed: HashMap<ModuleSymbol, ConfigValue> = smt_module
+                                .parse_values(&values, &config_module.module)
+                                .collect();
+
+                            // Store solution in file
+                            tokio::task::spawn_blocking(move || {
+                                let config_module = ConfigModule {
+                                    module: config_module.module.clone(),
+                                    values: values_parsed.clone(),
+                                    source_map: Default::default(),
+                                };
+
+                                if !config_module.ok {
+                                    return;
+                                }
+                                let ser = config_module.serialize();
+                                #[derive(Serialize)]
+                                struct RawConfig {
+                                    file: String,
+                                    config: ConfigEntry,
+                                }
+                                let config = RawConfig {
+                                    file: tgt_path,
+                                    config: ConfigEntry::Import(Default::default(), ser),
+                                };
+                                let out = serde_json::to_string_pretty(&config).unwrap();
+                                let _ = std::fs::write(output_name, out);
+                            });
+                        }
+                        _ => {}
+                    },
+                    _ => (),
+                }
             }
             UIAction::Save => {
                 let module = tx_config.borrow().module.clone();

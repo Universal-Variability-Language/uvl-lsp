@@ -538,6 +538,16 @@ pub fn App(cx: Scope<AppProps>) -> Element {
                             button{
                                 class:"btn-save",
                                 onclick: move |_|{
+                                    ui_tx.send(UIAction::SaveAll);
+                                },
+                                "Save All"
+
+                            }
+                        }
+                        li{
+                            button{
+                                class:"btn-save",
+                                onclick: move |_|{
                                     ui_tx.send(UIAction::Save);
                                 },
                                 "Save"
