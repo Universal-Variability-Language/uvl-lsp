@@ -148,7 +148,11 @@ pub fn surround_with_double_quotes(
     if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot {
         let start_byte = byte_offset(&diagnostic.range.start, &source);
         let end_byte = byte_offset(&diagnostic.range.end, &source);
-        let name = source.slice(start_byte..end_byte).as_str().unwrap();
+        let name = source
+            .slice(start_byte..end_byte)
+            .as_str()
+            .unwrap()
+            .replace("\n", "");
         let new_name = format!("\"{}\"", name);
 
         let code_action_replace = CodeAction {
@@ -185,7 +189,11 @@ pub fn starts_with_number(
     if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot.clone() {
         let start_byte = byte_offset(&diagnostic.range.start, &source);
         let end_byte = byte_offset(&diagnostic.range.end, &source);
-        let name = source.slice(start_byte..end_byte).as_str().unwrap();
+        let name = &source
+            .slice(start_byte..end_byte)
+            .as_str()
+            .unwrap()
+            .replace("\n", "to");
 
         let re = Regex::new(r"^\d+").unwrap();
         let number = re.find(name).unwrap().as_str();
@@ -258,7 +266,7 @@ pub fn add_language_level(
                 Range::new(
                     Position {
                         line: 0,
-                        character: 0, // TODO
+                        character: 0,
                     },
                     Position {
                         line: code[0..n].matches("\n").count() as u32,
