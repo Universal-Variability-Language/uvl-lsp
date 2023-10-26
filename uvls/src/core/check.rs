@@ -257,19 +257,16 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
         .unwrap()
         .is_match(err_source.as_str().unwrap_or(""))
     {
-        let name = source
+        let source_uvl = source
             .get_line(root.start_position().row)
             .unwrap()
-            .as_str()
-            .unwrap()
-            .trim()
-            .replace("\n", " ")
-            .as_str()
-            .split(" ")
-            .collect::<Vec<&str>>()
-            .first()
-            .unwrap_or(&"")
-            .to_string();
+            .to_string()
+            .replace("\n", " ");
+        let line = source_uvl.trim().split(" ").collect::<Vec<&str>>();
+        let name = match line.first().unwrap_or(&"") {
+            &"Real" | &"String" | &"Boolean" | &"Integer" => line[1].to_string(),
+            _ => line.first().unwrap_or(&"").to_string(),
+        };
 
         return ErrorInfo {
             location: Range {
@@ -284,7 +281,7 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
             },
             severity: DiagnosticSeverity::ERROR,
             weight: 100,
-            msg: "features are not allowed to start with a number".into(),
+            msg: "features are not allowed to start with a number here".into(),
             error_type: ErrorType::StartsWithNumber,
         };
     }

@@ -193,10 +193,12 @@ pub fn starts_with_number(
             .slice(start_byte..end_byte)
             .as_str()
             .unwrap()
-            .replace("\n", "to");
-
+            .replace("\n", "");
         let re = Regex::new(r"^\d+").unwrap();
-        let number = re.find(name).unwrap().as_str();
+        let number = match re.find(name) {
+            Some(x) => x.as_str(),
+            None => "",
+        };
         let new_name = format!("{}_{}", &name[number.len()..], number);
 
         let code_action_number_to_back = CodeAction {
