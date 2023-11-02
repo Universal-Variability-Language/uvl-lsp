@@ -4,6 +4,7 @@
 use flexi_logger::FileSpec;
 use get_port::Ops;
 
+use hashbrown::HashMap;
 use log::info;
 use percent_encoding::percent_decode_str;
 use serde::Serialize;
@@ -20,6 +21,7 @@ mod ide;
 mod smt;
 mod webview;
 use crate::core::*;
+use crate::smt::{smt_lib::Expr, uvl2smt, SmtSolver};
 struct Settings {
     //can the client show websites on its own
     //ie client==vscode
@@ -187,6 +189,7 @@ impl LanguageServer for Backend {
                         "uvls/open_config".into(),
                         "uvls/load_config".into(),
                         "uvls/generate_diagram".into(),
+                        "uvls/generate_configurations".into(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,
@@ -382,7 +385,6 @@ impl LanguageServer for Backend {
         &self,
         params: ExecuteCommandParams,
     ) -> Result<Option<serde_json::Value>> {
-        info!("{:?}", params);
         let uri: Url = serde_json::from_value(params.arguments[0].clone()).unwrap();
         match params.command.as_str() {
             "uvls/load_config" => {
@@ -446,7 +448,129 @@ impl LanguageServer for Backend {
                     return Ok(Some(serde_json::to_value(g.dot).unwrap()));
                 }
             }
-            _ => {}
+            "uvls/generate_configurations" => {
+                let n: u32 = serde_json::from_value(params.arguments[1].clone()).unwrap_or(0);
+
+                let root_fileid = FileID::from_uri(&Url::parse(uri.as_str()).unwrap());
+                let root_graph = self.pipeline.root().borrow_and_update().clone();
+                if !root_graph.contains_id(root_fileid) {
+                    return Ok(None);
+                }
+                let module = Module::new(root_fileid, root_graph.fs(), &root_graph.cache().ast);
+
+                let smt_module = uvl2smt(&module, &HashMap::new());
+
+                let solver = SmtSolver::new(
+                    smt_module.to_source(&module),
+                    &root_graph.cancellation_token(),
+                )
+                .await;
+
+                match solver {
+                    Ok(mut smt_solver) => match smt_solver.check_sat().await {
+                        Ok(true) => {
+                            let query = smt_module
+                                .variables
+                                .iter()
+                                .enumerate()
+                                .fold(String::new(), |acc, (i, _)| format!("{acc} v{i}"));
+                            // generate the unique n solutions
+                            for i in 1..=n {
+                                if !smt_solver.check_sat().await.unwrap_or(false) {
+                                    break; // no more solutions
+                                }
+                                let values = smt_solver
+                                    .values(query.clone())
+                                    .await
+                                    .unwrap_or(String::from(""));
+
+                                let values_parsed: HashMap<ModuleSymbol, ConfigValue> =
+                                    smt_module.parse_values(&values, &module).collect();
+
+                                // Store solution in file
+                                let config_module = ConfigModule {
+                                    module: Arc::new(module.clone()),
+                                    values: values_parsed.clone(),
+                                    source_map: Default::default(),
+                                };
+                                let uri = uri.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    if !config_module.ok {
+                                        return;
+                                    }
+                                    let ser = config_module.serialize();
+                                    #[derive(Serialize)]
+                                    struct RawConfig {
+                                        file: String,
+                                        config: ConfigEntry,
+                                    }
+                                    let config = RawConfig {
+                                        file: uri
+                                            .to_file_path()
+                                            .unwrap()
+                                            .file_name()
+                                            .unwrap()
+                                            .to_str()
+                                            .unwrap_or("-")
+                                            .to_string(),
+                                        config: ConfigEntry::Import(Default::default(), ser),
+                                    };
+
+                                    let out = serde_json::to_string_pretty(&config).unwrap();
+                                    let _ = std::fs::write(
+                                        format!(
+                                            "{}-{}.json",
+                                            uri.to_file_path()
+                                                .unwrap()
+                                                .file_name()
+                                                .unwrap()
+                                                .to_str()
+                                                .unwrap(),
+                                            i
+                                        ),
+                                        out,
+                                    );
+                                });
+
+                                // Generate assertion to make this solution unique
+                                if i < n {
+                                    let mut assertion: Vec<Expr> = vec![];
+                                    values_parsed.into_iter().for_each(
+                                        |(sym, config)| match config {
+                                            ConfigValue::Bool(bool) => {
+                                                assertion.push(Expr::Equal(vec![
+                                                    Expr::Var(
+                                                        smt_module
+                                                            .variables
+                                                            .get_index_of(&sym)
+                                                            .unwrap_or(0),
+                                                    ),
+                                                    Expr::Bool(!bool),
+                                                ]))
+                                            }
+                                            _ => (),
+                                        },
+                                    );
+
+                                    let assertion_string = smt_module.assert_to_source(
+                                        0,
+                                        &None,
+                                        &Expr::Or(assertion.clone()),
+                                        false,
+                                    );
+                                    let _ = smt_solver.push(assertion_string).await;
+                                }
+                            }
+                        }
+                        _ => {
+                            info!("No SAT solution for file");
+                        }
+                    },
+                    _ => (),
+                }
+                return Ok(None);
+            }
+            _ => (),
         }
         Ok(None)
     }
