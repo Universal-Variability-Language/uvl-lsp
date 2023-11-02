@@ -344,12 +344,6 @@ export async function activate(context: vscode.ExtensionContext) {
             quickPick.dispose();
         });
         quickPick.show();
-        console.log(value);
-        // const content = await client.sendRequest(ExecuteCommandRequest.method, {
-        //     command: "uvls/generate_configurations",
-        //     arguments: [],
-        //   });
-
     });
     vscode.commands.registerCommand("uvls.open_web", async (args) => {
         const uri = args[0].uri;

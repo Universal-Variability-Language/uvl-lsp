@@ -520,7 +520,12 @@ impl LanguageServer for Backend {
                                     let _ = std::fs::write(
                                         format!(
                                             "{}-{}.json",
-                                            uri.to_file_path().unwrap().as_path().to_str().unwrap(),
+                                            uri.to_file_path()
+                                                .unwrap()
+                                                .file_name()
+                                                .unwrap()
+                                                .to_str()
+                                                .unwrap(),
                                             i
                                         ),
                                         out,
