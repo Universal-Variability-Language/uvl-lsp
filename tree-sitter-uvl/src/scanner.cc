@@ -59,7 +59,7 @@ struct Scanner {
     int32_t first_comment_indent_lenght = -1;
     lexer->mark_end(lexer);
     auto skip = [&]() { lexer->advance(lexer, false); };
-    auto advance = [&]() { lexer->advance(lexer, true); };
+    // auto advance = [&]() { lexer->advance(lexer, true); };
     bool scan_ident = 1, eof = 0;
 
     // std::cout<<"scanning:";
