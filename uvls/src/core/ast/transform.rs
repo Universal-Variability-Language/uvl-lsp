@@ -147,7 +147,7 @@ impl<'a> VisitorState<'a> {
                                 error_type: ErrorType::Any,
                             });
                         }
-                        self.ast.attributes[i].depth = depth;
+                        self.ast.attributes[i].depth = depth + 1;
                         node
                     }
                     _ => scope,
@@ -156,7 +156,12 @@ impl<'a> VisitorState<'a> {
                 scope
             };
             for i in self.ast.children(node) {
-                stack.push((i, new_scope, depth + 1));
+                match i {
+                    Symbol::Feature(_) | Symbol::Constraint(_) | Symbol::Group(_) => {
+                        stack.push((i, new_scope, depth))
+                    }
+                    _ => stack.push((i, new_scope, depth + 1)),
+                }
             }
         }
         //find alias for different symbols and report them
