@@ -8,6 +8,7 @@ use parse::*;
 use ropey::Rope;
 use semantic::FileID;
 use std::borrow::{Borrow, Cow};
+use std::collections::HashSet;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 use tree_sitter::{Node, Tree, TreeCursor};
@@ -683,6 +684,30 @@ fn opt_aggregate(state: &mut VisitorState) -> Option<Expr> {
         state.push_error(10, "tailing comma not allowed");
     }
     let args = opt_function_args(state)?;
+
+    let argnames: HashSet<ustr::Ustr> =
+        HashSet::from_iter(args.iter().flat_map(|p| p.names.clone()).into_iter());
+    let check_arg_type_number = || -> bool {
+        state
+            .ast
+            .all_attributes()
+            .filter_map(|sym| {
+                if let Symbol::Attribute(aidx) = sym {
+                    Some(state.ast.get_attribute(aidx))
+                } else {
+                    None
+                }
+            })
+            .find(|attr| {
+                argnames.contains(&attr.unwrap().name.name)
+                    && matches!(attr.unwrap().value.value, Value::Number(..))
+            })
+            .is_some()
+    };
+    if !check_arg_type_number() {
+        state.push_error(30, "invalid argument. number attribute expected");
+    }
+
     match args.len() {
         0 => {
             state.push_error(30, "missing arguments");
@@ -699,7 +724,7 @@ fn opt_aggregate(state: &mut VisitorState) -> Option<Expr> {
             context: Some(state.add_ref_direct(args[0].clone())),
         }),
         _ => {
-            state.push_error(30, "to many arguments");
+            state.push_error(30, "too many arguments");
             None
         }
     }
