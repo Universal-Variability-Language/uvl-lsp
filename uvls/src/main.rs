@@ -32,7 +32,7 @@ impl Default for Settings {
         Settings { has_webview: false }
     }
 }
-//The LSP
+/// The LSP
 struct Backend {
     client: Client,
     coloring: Arc<ide::color::State>,
@@ -74,7 +74,7 @@ impl Backend {
         }
     }
 }
-//load a file, this is tricky because the editor can also load it at the same time
+/// load a file, this is tricky because the editor can also load it at the same time
 fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
     if let Err(e) = std::fs::File::open(uri.to_file_path().unwrap()).and_then(|mut f| {
         let meta = f.metadata()?;
@@ -91,7 +91,7 @@ fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
         info!("Failed to load file {} : {}", uri, e);
     }
 }
-//load all files under given a path
+/// load all files under given a path
 fn load_all_blocking(path: &Path, pipeline: AsyncPipeline) {
     for e in walkdir::WalkDir::new(path)
         .into_iter()
@@ -114,7 +114,7 @@ fn shutdown_error() -> tower_lsp::jsonrpc::Error {
         data: None,
     }
 }
-//Handler for different LSP requests
+/// Handler for different LSP requests
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {

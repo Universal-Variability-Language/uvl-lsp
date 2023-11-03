@@ -1,3 +1,18 @@
+/// This web interface allows simple configuration of uvl models within the sever.
+/// The GUI is written as a html-over-wire liveview, via dioxus. The liveview can then be
+/// accessed directly in vs-code or the native browser. Each server instance has its own localhost
+/// TCP port {p}, configuration is possible over two different entries:
+/// localhost:{p}/create/{uvl_base_file} - Create an empty config from a uvl base file
+/// localhost:{p}/load/{uvl_config_file} - Load a configuration from a json file
+///
+///
+/// The actual GUI is implemented as redux style asynchronous event loop. This is
+/// mainly due to the fact that its simple and requires minimal state management.
+/// Currently the whole tree is redrawn when a value changes since there is only one global
+/// configuration and tree state. This should be separated.
+/// To synchronize the webview with the rest of the server two handlers are used:
+/// ui_sync and smt::web_view_handler. The first detects file changes and rebuilds the target module,
+/// the second handler calculates new smt values when things change.
 use crate::{
     core::*,
     ide,
@@ -25,22 +40,6 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use ustr::Ustr;
 mod frontend;
-/* This web interface allows simple configuration of uvl models within the sever.
-The GUI is written as a html-over-wire liveview, via dioxus. The liveview can then be
-accessed directly in vs-code or the native browser. Each server instance has its own localhost
-TCP port {p}, configuration is possible over two different entries:
-localhost:{p}/create/{uvl_base_file} - Create an empty config from a uvl base file
-localhost:{p}/load/{uvl_config_file} - Load a configuration from a json file
-
-
-The actual GUI is implemented as redux style asynchronous event loop. This is
-mainly due to the fact that its simple and requires minimal state management.
-Currently the whole tree is redrawn when a value changes since there is only one global
-configuration and tree state. This should be separated.
-To synchronize the webview with the rest of the server two handlers are used:
-ui_sync and smt::web_view_handler. The first detects file changes and rebuilds the target module,
-the second handler calculates new smt values when things change.
-*/
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum Icon {
@@ -382,7 +381,7 @@ fn rebuild_tree(source: &ConfigSource) -> Option<UIConfigState> {
     })
 }
 
-//Keeps the UI in sync with its context
+/// Keeps the UI in sync with its context
 async fn ui_sync(
     pipeline: AsyncPipeline,
     tx_sync: mpsc::Sender<UIAction>,
@@ -434,7 +433,7 @@ fn rebuild_config(
         }
     });
 }
-//Transfer state from with a new module
+/// Transfer state from with a new module
 fn transfer_config(source: &mut ConfigSource, new: Arc<Module>) {
     if !new.ok {
         source.ok = false;
@@ -447,7 +446,7 @@ fn transfer_config(source: &mut ConfigSource, new: Arc<Module>) {
     source.ok = true;
 }
 
-//redux style state management
+/// redux style state management
 async fn ui_event_loop(
     id: u64,
     tx_config: watch::Sender<ConfigSource>, //The current configuration
@@ -820,7 +819,7 @@ pub async fn ui_main(
     info!("exit main");
     Ok(())
 }
-//HTTP server for the configuration interface
+/// HTTP server for the configuration interface
 pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
     info!("Starting web handler");
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
