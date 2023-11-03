@@ -61,7 +61,7 @@ impl TreeMap {
 }
 //Ast container each symbol kind lives in its own vector
 #[derive(Clone, Debug, Default)]
-struct Ast {
+pub struct Ast {
     keywords: Vec<Keyword>,
     namespace: Option<Path>,
     includes: Vec<LanguageLevelDecl>,
@@ -172,7 +172,7 @@ impl Ast {
             .flat_map(|v| v.iter().cloned())
     }
     //utility iterators over different elements of interest
-    fn all_imports(&self) -> impl Iterator<Item = Symbol> + DoubleEndedIterator {
+    pub fn all_imports(&self) -> impl Iterator<Item = Symbol> + DoubleEndedIterator {
         (0..self.import.len()).map(Symbol::Import)
     }
     fn get_import(&self, index: usize) -> Option<&Import> {
@@ -216,6 +216,9 @@ impl Ast {
     }
     fn all_lang_lvls(&self) -> impl Iterator<Item = Symbol> {
         (0..self.includes.len()).map(Symbol::LangLvl)
+    }
+    pub fn imports(&self) -> &[Import] {
+        &self.import
     }
     //Search a symbol by byte offset in O(N)
     fn find(&self, offset: usize) -> Option<Symbol> {
@@ -262,6 +265,7 @@ pub struct AstDocument {
     pub uri: Url,
     pub id: FileID,
 }
+
 impl AstDocument {
     pub fn parent(&self, sym: Symbol, merge_root_features: bool) -> Option<Symbol> {
         if merge_root_features && matches!(sym, Symbol::Feature(..)) {
@@ -366,6 +370,9 @@ impl AstDocument {
     }
     pub fn get_reference(&self, index: usize) -> Option<&Reference> {
         self.ast.references.get(index)
+    }
+    pub fn get_ast(&self) -> Ast {
+        self.ast.clone()
     }
     pub fn lsp_range(&self, sym: Symbol) -> Option<tower_lsp::lsp_types::Range> {
         self.ast.lsp_range(sym, &self.source)

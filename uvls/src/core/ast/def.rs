@@ -46,6 +46,19 @@ impl Path {
         path.push_str(".uvl");
         path
     }
+
+    //creates from root_path and the path an absolute path
+    pub fn to_file(&self, root_path: &str) -> String {
+        let slash = "/";
+        let mut dir: Vec<&str> = root_path.split(slash).collect();
+        let absoultpath = self.names.iter().map(|i| i.as_str()).join(slash);
+        if let Some(name) = dir.pop() {
+            let root_dir = root_path.replace(name, "");
+            let path = "file://".to_string() + &root_dir + &absoultpath + ".uvl";
+            return path;
+        }
+        absoultpath
+    }
 }
 
 //Type definitions for symbols

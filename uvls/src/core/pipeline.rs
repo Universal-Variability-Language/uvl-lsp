@@ -1,7 +1,8 @@
-use crate::{core::*, ide::inlays::InlayHandler, smt};
+use crate::{core::*, ide::inlays::InlayHandler, load_blocking, smt};
 use check::*;
 use dashmap::DashMap;
 use document::*;
+use filetime::{set_file_mtime, FileTime};
 use hashbrown::HashMap;
 use log::info;
 use ropey::Rope;
@@ -161,6 +162,9 @@ async fn link_handler(
     mut rx: mpsc::Receiver<LinkMsg>,
     tx_cache: watch::Sender<Arc<RootGraph>>,
     tx_err: mpsc::Sender<DiagnosticUpdate>,
+    tx_ast: watch::Sender<Arc<(Ast, String)>>,
+    tx_root_imports: watch::Sender<Arc<RootGraph>>,
+    mut rx_sync: mpsc::Receiver<bool>,
 ) {
     //First we gather changes to avoid redundant recomputation
     let mut latest_configs: HashMap<FileID, Arc<config::ConfigDocument>> = HashMap::new();
@@ -170,7 +174,7 @@ async fn link_handler(
     let mut dirty = false;
     let mut revision = 0; //Each change is one revision
     info!("started link handler");
-    spawn(link_executor(rx_execute, tx_cache, tx_err));
+    spawn(link_executor(rx_execute, tx_cache, tx_err, tx_root_imports));
     let mut timer = tokio::time::interval(tokio::time::Duration::from_millis(100));
     loop {
         select! {
@@ -187,6 +191,8 @@ async fn link_handler(
                         dirty=true;
                     }
                     LinkMsg::UpdateAst(ast)=>{
+                        let ast_clone = ast.get_ast().clone();
+                        let uri_str = ast.uri.clone().to_string();
                         if timestamps.get(&ast.uri).map(|old|old < &ast.timestamp).unwrap_or(true){
                             timestamps.insert(ast.uri.clone(),ast.timestamp);
                             let id = FileID::new(ast.uri.as_str());
@@ -195,6 +201,8 @@ async fn link_handler(
 
                         revision +=1;
                         dirty=true;
+                        let _= rx_sync.recv().await;
+                        let _ = tx_ast.send(Arc::new((ast_clone,uri_str)));
 
                     }
                     LinkMsg::UpdateConfig(conf)=>{
@@ -235,6 +243,7 @@ async fn link_handler(
         )>,
         tx_cache: watch::Sender<Arc<RootGraph>>,
         tx_err: mpsc::Sender<DiagnosticUpdate>,
+        tx_root_imports: watch::Sender<Arc<RootGraph>>,
     ) {
         let mut timestamps: HashMap<FileID, Instant> = HashMap::new();
         info!("started link execute");
@@ -255,13 +264,48 @@ async fn link_handler(
             //link files incrementally
             let root = RootGraph::new(&ast, &configs, revision, &old, &mut err, &mut timestamps);
 
-            let _ = tx_cache.send(Arc::new(root));
+            let _ = tx_cache.send(Arc::new(root.clone()));
             let _ = tx_err
                 .send(DiagnosticUpdate {
                     timestamp: revision,
                     error_state: err.errors,
                 })
                 .await;
+            let _ = tx_root_imports.send(Arc::new(root));
+        }
+    }
+}
+
+//handler which takes care that all imported files are loaded recursively
+async fn import_handler(pipeline: AsyncPipeline) {
+    let mut rx = pipeline.rx_ast.clone();
+    let rx_root = pipeline.rx_root_imports.clone();
+    loop {
+        // Send message to notify rx sender to send the last edited file URI.
+        // This synchronization is important to ensure that rx sender does not send
+        //  two or more messages and the import handler gets only one processed
+        let _ = pipeline.tx_sync.send(true).await;
+        //wait that Ast Document is updated
+        if rx.changed().await.is_err() {
+            break;
+        }
+        let arc = pipeline.rx_ast.borrow().clone();
+        let ast = arc.0.clone();
+        if let Ok(uri) = Url::parse(arc.1.as_str()) {
+            for import in ast.imports() {
+                let relative_path_string = import.path.to_file(uri.path());
+                if let Ok(url_import) = Url::parse(relative_path_string.as_str()) {
+                    //check if import is already loaded, if not, load
+                    let pip = pipeline.clone();
+
+                    //only load import if it isn't loaded yet
+                    if !rx_root.borrow().contains(&url_import) {
+                        tokio::task::spawn_blocking(move || {
+                            load_blocking(url_import, &pip);
+                        });
+                    }
+                }
+            }
         }
     }
 }
@@ -276,22 +320,38 @@ pub struct AsyncPipeline {
     tx_err: mpsc::Sender<DiagnosticUpdate>,
     //latest version of the linked files
     rx_root: watch::Receiver<Arc<RootGraph>>,
+    //latest version of the linkded files, but this receiver is used for loading imported files
+    rx_root_imports: watch::Receiver<Arc<RootGraph>>,
     //fires when a file changed
     tx_dirty_tree: broadcast::Sender<()>,
     revision_counter: Arc<AtomicU64>,
     client: tower_lsp::Client,
     //code inlays are managed globally
     inlay_handler: InlayHandler,
+    //fires when astDocument get updated
+    rx_ast: watch::Receiver<Arc<(Ast, String)>>,
+    //fires to inform rx_ast Receiver that it can send
+    tx_sync: mpsc::Sender<bool>,
 }
 impl AsyncPipeline {
     pub fn new(client: tower_lsp::Client) -> Self {
+        let (tx_ast, rx_ast) = watch::channel(Arc::new((Ast::default(), "".to_string())));
+        let (tx_sync, rx_sync) = mpsc::channel(1);
         let (tx_link, rx_link) = mpsc::channel(1024);
         let (tx_root, rx_root) = watch::channel(Arc::new(RootGraph::default()));
+        let (tx_root_imports, rx_root_imports) = watch::channel(Arc::new(RootGraph::default()));
         let (tx_err, rx_err) = mpsc::channel(1024);
         let revision_counter = Arc::new(AtomicU64::new(0));
         let (tx_dirty, _) = broadcast::channel(1024);
         let inlay_handler = InlayHandler::new(client.clone());
-        spawn(link_handler(rx_link, tx_root, tx_err.clone()));
+        spawn(link_handler(
+            rx_link,
+            tx_root,
+            tx_err.clone(),
+            tx_ast,
+            tx_root_imports,
+            rx_sync,
+        ));
         spawn(check::diagnostic_handler(rx_err, client.clone()));
         spawn(smt::check_handler(
             rx_root.clone(),
@@ -308,6 +368,9 @@ impl AsyncPipeline {
             tx_link,
             tx_err,
             rx_root,
+            rx_root_imports,
+            rx_ast,
+            tx_sync,
         }
     }
     pub fn touch(&self, uri: &Url) {
@@ -430,6 +493,10 @@ impl AsyncPipeline {
     pub fn root(&self) -> watch::Receiver<Arc<RootGraph>> {
         self.rx_root.clone()
     }
+
+    pub fn root_imports(&self) -> watch::Receiver<Arc<RootGraph>> {
+        self.rx_root_imports.clone()
+    }
     //wait until uri newer than timestamp in the root graph
     pub async fn snapshot_root_sync(
         &self,
@@ -487,14 +554,54 @@ impl AsyncPipeline {
         let time = Instant::now();
         if let Some(draft) = self.snapshot_draft(uri).await? {
             info!("waited {:?} for draft", time.elapsed());
-            Ok(Some(if sync {
+            let result = Ok(Some(if sync {
                 let timestamp = draft.timestamp();
                 (draft, self.snapshot_root_sync(uri, timestamp).await?)
             } else {
                 (draft, self.snapshot_root(uri).await?)
-            }))
+            }));
+            self.load_uvl_after_json(uri);
+            result
         } else {
             Ok(None)
         }
+    }
+    // if the file is a uvl.json then load the corresponding uvl file
+    // this method is called after the complete red tree of the uri is created
+    pub fn load_uvl_after_json(&self, uri: &Url) {
+        let root_binding = self.rx_root.borrow();
+        let doc = root_binding.file_by_uri(&uri);
+        match doc {
+            // it is a uvl, can be ignored
+            Some(_) => (),
+            // it is a uvl.json
+            None => {
+                let config = root_binding.config_by_uri(&uri);
+                match config {
+                    Some(config_doc) => {
+                        let url_file = config_doc.config.as_ref().unwrap().file.url();
+                        if !root_binding.contains(&url_file) {
+                            let pipeline = self.clone();
+                            let open_url = uri.clone();
+                            tokio::task::spawn_blocking(move || {
+                                load_blocking(url_file, &pipeline);
+                                //update modified so uvl.json can be loaded
+                                let _ = set_file_mtime(
+                                    open_url.to_file_path().unwrap(),
+                                    FileTime::now(),
+                                );
+                                load_blocking(open_url, &pipeline);
+                            });
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+    //start the import handler
+    pub fn import_handler(&self) {
+        let pipeline = self.clone();
+        spawn(import_handler(pipeline));
     }
 }

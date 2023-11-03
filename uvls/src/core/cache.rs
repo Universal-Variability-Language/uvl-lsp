@@ -1,11 +1,12 @@
 use crate::core::*;
 use check::ErrorsAcc;
-use compact_str::CompactStringExt;
+use compact_str::{CompactString, CompactStringExt};
 use hashbrown::{HashMap, HashSet};
 use log::info;
 use module::{ConfigModule, Module};
 use petgraph::prelude::*;
 use resolve::*;
+use std::path;
 use std::sync::Arc;
 use ustr::Ustr;
 #[derive(Debug, Clone, PartialEq)]
@@ -251,6 +252,7 @@ impl FileSystem {
             .find(|n| matches!(self.graph[*n], FSNode::Dir))
             .unwrap()
     }
+
     //all subfiles from origin under path, returns (prefix,filename,filenode)
     pub fn sub_files<'a>(
         &'a self,
@@ -263,6 +265,136 @@ impl FileSystem {
                 FSNode::File(tgt) => tgt != &origin,
                 _ => true,
             })
+    }
+    /**
+     * find all subfiles, subdirectories and files on the same level as the currently opened file,
+     *  but only those that have not been loaded yet
+     */
+    pub fn all_sub_files<'a>(
+        &self,
+        origin_unc: FileID,
+        prefix: &[Ustr],
+        postfix: CompactString,
+    ) -> impl Iterator<Item = (compact_str::CompactString, Ustr, FSNode)> + 'a {
+        let mut stack: Vec<(compact_str::CompactString, Ustr, FSNode)> = Vec::new();
+        let mut dirs: Vec<String> = Vec::new();
+        //remove "file://"" from uri, because only the path is needed
+        match origin_unc.as_str().strip_prefix("file://") {
+            Some(origin) => {
+                let mut suffix_helper: Vec<&str> = origin.split("/").collect();
+                let suffix = suffix_helper.pop().unwrap();
+                let mut root_dir = origin.strip_suffix(suffix).unwrap();
+                // Handling for Windows systems
+                if std::env::consts::OS == "windows"
+                    && !path::Path::new(root_dir).is_dir()
+                    && root_dir.starts_with("/")
+                {
+                    root_dir = root_dir.strip_prefix("/").unwrap();
+                }
+                let path = path::Path::new(root_dir);
+                //Retrieve all uvl files and subfiles from the current directory
+                for entry in walkdir::WalkDir::new(path)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_file())
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .map(|e| e == std::ffi::OsStr::new("uvl"))
+                            .unwrap_or(false)
+                    })
+                {
+                    match entry.path().to_str() {
+                        Some(path) => {
+                            // check if the file has not been loaded yet and if it is not an open file
+                            if path != origin
+                                && None
+                                    == self.file2node.keys().find(|&&ele| {
+                                        match ele.as_str().strip_prefix("file://") {
+                                            Some(check_path) => check_path.eq(path),
+                                            None => false,
+                                        }
+                                    })
+                            {
+                                let name_op = path.strip_prefix(root_dir);
+                                match name_op {
+                                    Some(name) => {
+                                        // checks if already written text is prefix of the path
+                                        let mut valid_path = true;
+                                        let mut check_path: Vec<&str> =
+                                            name.clone().split("/").collect();
+                                        for i in prefix.iter() {
+                                            let check_prefix = i.as_str();
+
+                                            match check_path
+                                                .iter()
+                                                .position(|&ele| ele == check_prefix)
+                                            {
+                                                Some(0) => {
+                                                    let _ = check_path.remove(0);
+                                                }
+                                                _ => {
+                                                    valid_path = false;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        match check_path
+                                            .iter()
+                                            .position(|&ele| ele.starts_with(postfix.as_str()))
+                                        {
+                                            Some(0) => {}
+                                            _ => valid_path = false,
+                                        }
+                                        let name_up = check_path.join("/");
+                                        if valid_path {
+                                            let new_name = name_up
+                                                .replace("/", ".")
+                                                .replace("\\", ".")
+                                                .replace(".uvl", "");
+                                            // safe file for autoCompletion
+                                            stack.push((
+                                                new_name.as_str().into(),
+                                                Ustr::from(new_name.as_str()),
+                                                FSNode::File(FileID::new(&path)),
+                                            ));
+                                            let mut is_dir = true;
+                                            let mut dir_names: Vec<&str> =
+                                                new_name.split(".").collect();
+                                            if !dir_names.is_empty() {
+                                                let _ = dir_names.pop();
+                                            }
+                                            // add all parent directories, for autocompletion, but only if they are not yet added
+                                            while is_dir {
+                                                let dir_name = dir_names.join(".");
+                                                if dir_name.is_empty() || dirs.contains(&dir_name) {
+                                                    is_dir = false;
+                                                } else {
+                                                    stack.push((
+                                                        dir_name.as_str().into(),
+                                                        Ustr::from(&dir_name.as_str()),
+                                                        FSNode::Dir,
+                                                    ));
+                                                    dirs.push(dir_name);
+                                                    let _ = dir_names.pop();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {
+                info!("uri has wrong form: {} ", origin_unc.as_str());
+            }
+        }
+
+        std::iter::from_fn(move || stack.pop())
     }
 }
 
@@ -358,13 +490,33 @@ impl Cache {
         for (k, v) in configs.iter() {
             if let Some(content) = v.config.as_ref() {
                 info!("uri {}", content.file.as_str());
-                if files.contains_key(&content.file) {
-                    let dirty = trans_dirty.contains(&content.file)
+                let fileid = if files.contains_key(&content.file) {
+                    content.file
+                } else {
+                    // Windows inconvenience (we now select the files-key which equals out uri):
+                    *files
+                        .keys()
+                        .find(|key| {
+                            key.as_str().strip_prefix("file:///").unwrap_or("")
+                                == content
+                                    .file
+                                    .as_str()
+                                    .strip_prefix("file://")
+                                    .unwrap_or("")
+                                    .replace("\\", "/")
+                        })
+                        .unwrap_or(&FileID::new("X"))
+                };
+                if files.contains_key(&fileid) {
+                    let dirty = trans_dirty.contains(&fileid)
+                        || trans_dirty.contains(&FileID::from_uri(
+                            &tower_lsp::lsp_types::Url::parse(fileid.as_str()).unwrap(),
+                        ))
                         || dirty.contains(k)
                         || !old.config_modules.contains_key(k);
                     if dirty {
                         //recreate
-                        let mut module = Module::new(content.file, &fs, &linked_ast);
+                        let mut module = Module::new(fileid, &fs, &linked_ast);
                         if !module.ok {
                             config_modules.insert(
                                 *k,
@@ -394,7 +546,12 @@ impl Cache {
                         config_modules.insert(*k, old.config_modules[k].clone());
                     }
                 } else {
-                    errors.span(content.file_span.clone(), *k, 100, "file no found");
+                    errors.span(
+                        content.file_span.clone(),
+                        *k,
+                        100,
+                        "File not found, please open it explicitly in your editor",
+                    );
                 }
             }
         }

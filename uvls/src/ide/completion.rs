@@ -96,7 +96,6 @@ pub fn make_path<T: AsRef<str>, I: Iterator<Item = T>>(i: I) -> CompactString {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum CompletionEnv {
     Numeric,
-    String,
     Constraint,
     GroupMode,
     Feature,
@@ -188,22 +187,26 @@ pub fn contains(range: Range, pos: &Position) -> bool {
 pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv {
     if node.is_error() && node.start_position().row == node.end_position().row {
         let err_raw: String = source.byte_slice(node.byte_range()).into();
+        if err_raw.contains("=>")
+            || err_raw.contains("<=>")
+            || err_raw.contains('&')
+            || err_raw.contains('|')
+        {
+            return CompletionEnv::Constraint;
+        }
         if err_raw.contains('+')
             || err_raw.contains('-')
             || err_raw.contains('*')
             || err_raw.contains('/')
             || err_raw.contains('>')
             || err_raw.contains('<')
-            || err_raw.contains("=>")
-            || err_raw.contains("<=>")
-            || err_raw.contains('&')
-            || err_raw.contains('|')
             || err_raw.contains("==")
         {
-            return CompletionEnv::Constraint;
+            return CompletionEnv::Numeric;
         }
     }
     match node.kind() {
+        "number" => CompletionEnv::Numeric,
         "function" => {
             let mut cursor = node.walk();
             cursor.goto_first_child();
@@ -222,10 +225,12 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
                 if cursor.field_name().map(|i| i == "arg").unwrap_or(false) {
                     args.push(parse::parse_path(cursor.node(), source));
                 }
+                info!("{:?}", cursor.node().kind());
                 if !cursor.goto_next_sibling() {
                     break;
                 }
             }
+            info!("args {:?} offset {}", &args, arg_offset);
             match node
                 .child_by_field_name("op")
                 .map(|op| source.slice_raw(op.byte_range()))
@@ -253,7 +258,7 @@ pub fn estimate_expr(node: Node, pos: &Position, source: &Rope) -> CompletionEnv
                 .into();
             match op.as_str() {
                 "=>" | "&" | "|" | "<=>" => CompletionEnv::Constraint,
-                _ => CompletionEnv::Constraint,
+                _ => CompletionEnv::Numeric,
             }
         }
         "nested_expr" | "path" => estimate_expr(node.parent().unwrap(), pos, source),
@@ -501,318 +506,6 @@ fn estimate_context(pos: &Position, draft: &Draft) -> Option<CompletionQuery> {
         }
     }
 }
-
-fn compute_constraint_completion(
-    pos: &TextDocumentPositionParams,
-    draft: &Draft,
-    snapshot: &Snapshot,
-    top: &mut TopN<CompletionOpt>,
-    ctx: &CompletionQuery,
-    origin: FileID,
-) {
-    match draft {
-        Draft::JSON { .. } => {}
-        Draft::UVL { source, tree, .. } => {
-            let (_offset, edit_node) = position_to_node(source, tree, &pos.position);
-
-            let node = longest_path(edit_node, source)
-                .unwrap_or((Path::default(), edit_node))
-                .1;
-
-            // checks if node is constraint
-            if !(0..node.start_position().row)
-                .into_iter()
-                .map(|line| {
-                    source
-                        .get_line(line)
-                        .unwrap()
-                        .as_str()
-                        .unwrap()
-                        .contains("constraints")
-                })
-                .contains(&true)
-            {
-                add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into(), "!".into()]);
-                add_function_keywords(&ctx.postfix, top, 2.0);
-                completion_symbol(&snapshot, origin, &ctx, top, vec![]);
-                return;
-            }
-
-            // set cursor to childs.
-            let start_idx = source.line_to_byte(node.start_position().row);
-            let mut cursor = node;
-            if cursor.kind() == "ERROR" {
-                cursor = cursor.child(cursor.child_count() - 1).unwrap();
-            }
-            // Add individual Childs to list
-            let mut childs: Vec<Node> = vec![];
-            while cursor.start_byte() >= start_idx {
-                if source
-                    .get_byte_slice(cursor.byte_range())
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .contains("\n")
-                {
-                    cursor = cursor.child(cursor.child_count() - 2).unwrap();
-                    continue;
-                }
-                childs.push(cursor);
-
-                match cursor.prev_sibling() {
-                    Some(node) => cursor = node,
-                    _ => break,
-                }
-            }
-
-            if childs.len() > 1 {
-                childs = childs.into_iter().filter(|c| c.kind() != "!").collect();
-            }
-
-            let mut complete_function = |node: &Node| {
-                if node.kind() != "function" {
-                    return;
-                }
-                match source.get_byte_slice(node.byte_range()).unwrap().as_str() {
-                    Some(str) => {
-                        if str.contains("len") {
-                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::String]);
-                            add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into()]);
-                        }
-                        if str.contains("avg")
-                            | str.contains("ceil")
-                            | str.contains("floor")
-                            | str.contains("sum")
-                        {
-                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Real]);
-                        }
-                    }
-                    _ => (),
-                }
-            };
-
-            // Depending on the length of the list give recomendations
-            match (childs.len(), ctx.offset) {
-                (1, CompletionOffset::Continuous) => {
-                    if childs[0].kind() == "!" {
-                        completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Bool]);
-                        return;
-                    }
-                    if childs[0].kind() == "function" {
-                        complete_function(&childs[0]);
-                        return;
-                    }
-                    match ctx.env {
-                        CompletionEnv::Aggregate { context: _ } => (),
-                        _ => {
-                            add_function_keywords(&ctx.postfix, top, 2.0);
-                            completion_symbol(&snapshot, origin, &ctx, top, vec![]);
-                        }
-                    }
-                }
-                (1, CompletionOffset::Dot) => {
-                    completion_symbol(&snapshot, origin, &ctx, top, vec![]);
-                }
-                (1, _) => {
-                    let child = childs[0];
-                    match child.kind() {
-                        "name" | "path" => {
-                            let found = resolve_name(
-                                &snapshot,
-                                origin,
-                                &source,
-                                source
-                                    .get_byte_slice(child.byte_range())
-                                    .unwrap()
-                                    .as_str()
-                                    .unwrap(),
-                            );
-                            if found.len() == 0 {
-                                add_logic_op(&ctx.postfix, top, 6.1);
-                                add_numeric_op(&ctx.postfix, top, 6.1);
-                                add_string_op(&ctx.postfix, top, 6.1);
-                            }
-                            for ty in found {
-                                match ty {
-                                    Type::Bool => add_logic_op(&ctx.postfix, top, 6.1),
-                                    Type::Real => add_numeric_op(&ctx.postfix, top, 6.1),
-                                    Type::String => add_string_op(&ctx.postfix, top, 6.1),
-                                    _ => {
-                                        add_logic_op(&ctx.postfix, top, 6.1);
-                                        add_numeric_op(&ctx.postfix, top, 6.1);
-                                        add_string_op(&ctx.postfix, top, 6.1);
-                                    }
-                                }
-                            }
-                        }
-                        "number" | "function" => add_numeric_op(&ctx.postfix, top, 6.1),
-                        "string" => add_string_op(&ctx.postfix, top, 6.1),
-                        _ => (),
-                    }
-                }
-                (2, _) | (3, CompletionOffset::Continuous) => {
-                    let child = if childs.len() == 3 {
-                        if childs[0].kind() == "function" {
-                            childs[0]
-                        } else {
-                            childs[2]
-                        }
-                    } else {
-                        childs[1]
-                    };
-                    match child.kind() {
-                        "name" | "path" => {
-                            let tys = resolve_name(
-                                &snapshot,
-                                origin,
-                                &source,
-                                source
-                                    .get_byte_slice(child.byte_range())
-                                    .unwrap()
-                                    .as_str()
-                                    .unwrap(),
-                            );
-                            if tys.len() == 0 {
-                                completion_symbol(&snapshot, origin, &ctx, top, vec![])
-                            }
-                            for ty in tys {
-                                match ty {
-                                    Type::Bool => {
-                                        completion_symbol(&snapshot, origin, &ctx, top, vec![ty])
-                                    }
-                                    Type::Real => {
-                                        completion_symbol(&snapshot, origin, &ctx, top, vec![ty]);
-                                        add_function_keywords(&ctx.postfix, top, 1.0);
-                                    }
-                                    Type::String => {
-                                        completion_symbol(
-                                            &snapshot,
-                                            origin,
-                                            &ctx,
-                                            top,
-                                            vec![Type::String],
-                                        );
-                                        add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into()]);
-                                    }
-                                    _ => completion_symbol(&snapshot, origin, &ctx, top, vec![]),
-                                }
-                            }
-                        }
-                        "number" => {
-                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Real]);
-                            add_function_keywords(&ctx.postfix, top, 1.0);
-                        }
-                        "function" => {
-                            if ctx.offset == CompletionOffset::SameLine {
-                                completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Real]);
-                                add_function_keywords(&ctx.postfix, top, 1.0);
-                            } else {
-                                complete_function(&child);
-                            }
-                        }
-                        "string" => {
-                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::String]);
-                            add_keywords(&ctx.postfix, top, 2.1, ["\'$1\' ".into()]);
-                        }
-                        "binary_expr" | "unary_expr" => {
-                            completion_symbol(&snapshot, origin, &ctx, top, vec![Type::Bool]);
-                            add_keywords(&ctx.postfix, top, 4.2, ["!".into()]);
-                        }
-                        _ => (),
-                    }
-                }
-                (3, _) => {
-                    add_logic_op(&ctx.postfix, top, 6.1);
-                    return;
-                }
-                _ => (),
-            }
-        }
-    }
-}
-
-fn resolve_name(snapshot: &Snapshot, origin: FileID, _source: &Rope, child: &str) -> Vec<Type> {
-    let mut result: Vec<Type> = vec![];
-    let file = snapshot.file(origin);
-    let child_prefix = child.split(".").map(|s| Ustr::from(s)).collect_vec();
-
-    // go through imports and check if child is imported
-    for import in file.all_imports() {
-        // check if child is imported from this import
-        let import_prefix = file.import_prefix(import);
-        if import_prefix.len() > child_prefix.len() {
-            continue;
-        }
-
-        let mut is_import = true;
-        for i in 0..import_prefix.len() {
-            if is_import && import_prefix[i] != child_prefix[i] {
-                is_import = false;
-            }
-        }
-
-        if !is_import {
-            continue;
-        }
-
-        // Child is imported from this import!
-        // generate new_child string with removed import statements (import.feature -> feature)
-
-        let mut child_prefix_copy = child_prefix.clone();
-        child_prefix_copy.drain(0..import_prefix.len());
-
-        let new_child = child_prefix_copy
-            .into_iter()
-            .map(|ustr| ustr.as_str())
-            .fold(String::new(), |a, b| {
-                if a.len() > 0 {
-                    return a + "." + b;
-                }
-                a + b
-            });
-
-        // Generate FileID from import
-        let mut new_path = origin.filepath().clone();
-        new_path.pop(); // remove own file.uvl
-        for i in 0..(import_prefix.len() - 1) {
-            new_path.push(import_prefix[i].as_str());
-        }
-        new_path.push(import_prefix.last().unwrap().to_string() + ".uvl");
-
-        // If successfull call recursively
-        if let Some(new_origin) = snapshot.file_id(&Url::from_file_path(new_path).unwrap()) {
-            result.append(resolve_name(snapshot, new_origin, _source, &new_child).as_mut());
-        }
-    }
-
-    // Get symbols in local file that match the child
-    let entries = file.get_symbols(Ustr::from(child));
-
-    // map entries to their Type
-    for entry in entries.clone() {
-        match entry {
-            Symbol::Feature(i) => result.push(file.get_feature(i).unwrap().ty),
-            Symbol::Attribute(i) => {
-                match snapshot
-                    .file(origin)
-                    .get_attribute(i)
-                    .unwrap()
-                    .value
-                    .value
-                    .clone()
-                {
-                    Value::Number(_) => result.push(Type::Real),
-                    Value::String(_) => result.push(Type::String),
-                    Value::Bool(_) => result.push(Type::Bool),
-                    _ => (),
-                }
-            }
-            _ => (),
-        }
-    }
-    return result;
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum CompletionKind {
     Feature,
@@ -972,18 +665,17 @@ fn add_logic_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
         query,
         top,
         w,
-        ["& ".into(), "| ".into(), "=> ".into(), "<=> ".into()],
+        [
+            "& ".into(),
+            "| ".into(),
+            "=> ".into(),
+            "<=> ".into(),
+            "> ".into(),
+            "< ".into(),
+            "== ".into(),
+        ],
     );
 }
-
-fn add_numeric_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["> ".into(), "< ".into(), "== ".into()]);
-}
-
-fn add_string_op(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
-    add_keywords(query, top, w, ["== ".into()]);
-}
-
 fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
     add_keywords(
         query,
@@ -995,6 +687,7 @@ fn add_function_keywords(query: &str, top: &mut TopN<CompletionOpt>, w: f32) {
             "len($1) ".into(),
             "floor($1) ".into(),
             "ceil($1) ".into(),
+            "!".into(),
         ],
     );
 }
@@ -1082,7 +775,6 @@ fn completion_symbol_local(
     prefix: &[Ustr],
     query: &CompletionQuery,
     top: &mut TopN<CompletionOpt>,
-    filter_types: Vec<Type>,
 ) {
     let file = snapshot.file(root.file);
     info!("Module {:?} under {:?}", root, prefix);
@@ -1103,9 +795,6 @@ fn completion_symbol_local(
             && root.file == origin
             && matches!(sym, Symbol::Feature(..))
         {
-            return true;
-        }
-        if filter_types.len() > 0 && !filter_types.contains(&ty) {
             return true;
         }
         let text = make_path(prefix.iter().chain(sym_prefix.iter()));
@@ -1129,7 +818,6 @@ fn completion_symbol(
     origin: FileID,
     query: &CompletionQuery,
     top: &mut TopN<CompletionOpt>,
-    filter_types: Vec<Type>,
 ) {
     let mut modules: HashMap<_, Vec<Ustr>> = HashMap::new(); //Store reachable documents under the
                                                              //search perfix under a secondary prefix
@@ -1166,9 +854,7 @@ fn completion_symbol(
                     _ => false,
                 });
             }
-            _ => {
-                completion_symbol_local(snapshot, origin, i, &[], query, top, filter_types.clone())
-            }
+            _ => completion_symbol_local(snapshot, origin, i, &[], query, top),
         }
     }
     let root = FileID::max(); //Perform nn from all reachable documents to all other
@@ -1230,7 +916,6 @@ fn completion_symbol(
             &path,
             query,
             top,
-            filter_types.clone(),
         );
     }
     //info!("{:#?}", pred);
@@ -1269,10 +954,10 @@ fn compute_completions_impl(
                 .resolve(origin, &ctx.prefix)
                 .filter(|f| f.file == origin)
             {
-                completion_symbol_local(&snapshot, origin, i, &[], ctx, &mut top, vec![])
+                completion_symbol_local(&snapshot, origin, i, &[], ctx, &mut top)
             }
         }
-        CompletionEnv::Feature => {
+        CompletionEnv::Constraint | CompletionEnv::Numeric | CompletionEnv::Feature => {
             match (&ctx.env, &ctx.offset) {
                 //heuristic to provide nearly correct predictions, to
                 //make it more accurate we need to respect
@@ -1301,23 +986,29 @@ fn compute_completions_impl(
                                 "Boolean".into(),
                             ],
                         );
-                        completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
                     }
                     if matches!(offset, CompletionOffset::Dot) {
-                        completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
+                        completion_symbol(&snapshot, origin, &ctx, &mut top);
                     }
                 }
                 (
-                    CompletionEnv::Constraint,
-                    CompletionOffset::Cut
-                    | CompletionOffset::Continuous
-                    | CompletionOffset::SameLine,
+                    CompletionEnv::Constraint | CompletionEnv::Numeric,
+                    CompletionOffset::SameLine,
+                ) => {
+                    add_logic_op(&ctx.postfix, &mut top, 6.1);
+                    add_function_keywords(&ctx.postfix, &mut top, 2.0);
+                    completion_symbol(&snapshot, origin, &ctx, &mut top);
+                }
+                (
+                    CompletionEnv::Constraint | CompletionEnv::Numeric,
+                    CompletionOffset::Cut | CompletionOffset::Continuous,
                 ) => {
                     add_function_keywords(&ctx.postfix, &mut top, 2.0);
-                    completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
+                    completion_symbol(&snapshot, origin, &ctx, &mut top);
                 }
                 _ => {
-                    completion_symbol(&snapshot, origin, &ctx, &mut top, vec![]);
+                    completion_symbol(&snapshot, origin, &ctx, &mut top);
                 }
             }
             is_incomplete = true
@@ -1328,7 +1019,27 @@ fn compute_completions_impl(
                     add_keywords(&ctx.postfix, &mut top, 2.0, ["as ".into()])
                 }
                 _ => {
+                    // complete all files and dic which are already loaded
                     for (path, name, node) in snapshot.fs().sub_files(origin, &ctx.prefix) {
+                        let len = path.as_str().chars().filter(|c| c == &'.').count();
+                        top.push(CompletionOpt::new(
+                            match node {
+                                FSNode::Dir => CompletionKind::Folder,
+                                _ => CompletionKind::File,
+                            },
+                            name,
+                            path.clone(),
+                            len,
+                            TextOP::Put(path),
+                            &ctx,
+                        ))
+                    }
+                    // complete all files and dic which are not loaded
+                    for (path, name, node) in
+                        snapshot
+                            .fs()
+                            .all_sub_files(origin, &ctx.prefix, ctx.postfix.clone())
+                    {
                         let len = path.as_str().chars().filter(|c| c == &'.').count();
                         top.push(CompletionOpt::new(
                             match node {
@@ -1359,37 +1070,35 @@ fn compute_completions_impl(
             }
         }
         CompletionEnv::Aggregate { context } => {
-            if ctx.offset != CompletionOffset::SameLine {
-                snapshot.resolve_attributes(
-                    origin,
-                    context.as_ref().map(|p| p.names.as_slice()).unwrap_or(&[]),
-                    |attrib, prefix| {
-                        let common = prefix
-                            .iter()
-                            .zip(ctx.prefix.iter())
-                            .take_while(|(i, k)| i == k)
-                            .count();
-                        if common < ctx.prefix.len() {
-                            return;
-                        }
-                        let file = snapshot.file(attrib.file);
-                        let prefix_str = make_path(prefix[common..].iter());
-                        let kind = file.type_of(attrib.sym).unwrap().into();
-                        if kind != CompletionKind::DontCare {
-                            top.push(CompletionOpt::new(
-                                kind,
-                                *prefix.last().unwrap(),
-                                prefix_str.clone(),
-                                prefix.len(),
-                                TextOP::Put(prefix_str),
-                                &ctx,
-                            ));
-                        }
-                    },
-                );
-            }
-            if context.is_none() && ctx.offset == CompletionOffset::Continuous {
-                completion_symbol(&snapshot, origin, &ctx, &mut top, vec![Type::Real]);
+            snapshot.resolve_attributes(
+                origin,
+                context.as_ref().map(|p| p.names.as_slice()).unwrap_or(&[]),
+                |attrib, prefix| {
+                    let common = prefix
+                        .iter()
+                        .zip(ctx.prefix.iter())
+                        .take_while(|(i, k)| i == k)
+                        .count();
+                    if common < ctx.prefix.len() {
+                        return;
+                    }
+                    let file = snapshot.file(attrib.file);
+                    let prefix_str = make_path(prefix[common..].iter());
+                    let kind = file.type_of(attrib.sym).unwrap().into();
+                    if kind != CompletionKind::DontCare {
+                        top.push(CompletionOpt::new(
+                            kind,
+                            *prefix.last().unwrap(),
+                            prefix_str.clone(),
+                            prefix.len(),
+                            TextOP::Put(prefix_str),
+                            &ctx,
+                        ));
+                    }
+                },
+            );
+            if context.is_none() {
+                completion_symbol(&snapshot, origin, &ctx, &mut top);
             }
         }
         CompletionEnv::ConfigRootKey => add_keywords(
@@ -1422,16 +1131,7 @@ pub fn compute_completions(
     };
     info!("Stat completion in  {:?} {:#?}", origin, ctx);
     if let (Some(ctx), Some(origin)) = (ctx, origin) {
-        let (mut top, is_incomplete) =
-            compute_completions_impl(snapshot.clone(), draft, pos.clone(), &ctx, origin);
-        if matches!(
-            ctx.env,
-            CompletionEnv::Constraint
-                | CompletionEnv::Numeric
-                | CompletionEnv::Aggregate { context: _ }
-        ) {
-            compute_constraint_completion(&pos, draft, &snapshot, &mut top, &ctx, origin);
-        }
+        let (top, is_incomplete) = compute_completions_impl(snapshot, draft, pos, &ctx, origin);
         let items = top
             .into_sorted_vec()
             .into_iter()

@@ -81,6 +81,7 @@ impl RootGraph {
             .or(self.file_by_uri(uri).map(|i| i.timestamp))
     }
     pub fn contains_id(&self, id: FileID) -> bool {
+        info!("file id: {:?}", id);
         self.files.contains_key(&id) || self.configs.contains_key(&id)
     }
     pub fn type_of(&self, sym: RootSymbol) -> Option<Type> {
@@ -192,8 +193,16 @@ impl RootGraph {
         {
             let mut file_paths = HashSet::new();
             for file in files.values() {
-                if !file_paths.insert(file.path.as_slice()) {
-                    if let Some(ns) = file.namespace() {
+                if let Some(ns) = file.namespace() {
+                    //create path with namespace if namespace exists and check if it is already defined
+                    let mut path: Vec<String> =
+                        file.path.clone().iter().map(|s| s.to_string()).collect();
+                    let ns_path: Vec<String> = ns.names.iter().map(|s| s.to_string()).collect();
+                    let len = file.path.len().saturating_sub(ns.names.len());
+                    path.truncate(len);
+                    path.extend_from_slice(&ns_path);
+                    let path_str = path.join(".");
+                    if !file_paths.insert(path_str) {
                         if err.errors.contains_key(&file.id) {
                             err.span(ns.range(), file.id, 100, "namespace already defined");
                         }

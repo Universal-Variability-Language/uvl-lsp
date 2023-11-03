@@ -9,7 +9,6 @@ use log::info;
 use percent_encoding::percent_decode_str;
 use serde::Serialize;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::{join, spawn};
@@ -32,6 +31,7 @@ impl Default for Settings {
         Settings { has_webview: false }
     }
 }
+
 //The LSP
 struct Backend {
     client: Client,
@@ -75,12 +75,13 @@ impl Backend {
     }
 }
 //load a file, this is tricky because the editor can also load it at the same time
-fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
+pub fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
     if let Err(e) = std::fs::File::open(uri.to_file_path().unwrap()).and_then(|mut f| {
         let meta = f.metadata()?;
         let modified = meta.modified()?;
 
         if !pipeline.should_load(&uri, modified) {
+            info!("load problem");
             return Ok(());
         }
         let mut data = String::new();
@@ -91,22 +92,7 @@ fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
         info!("Failed to load file {} : {}", uri, e);
     }
 }
-//load all files under given a path
-fn load_all_blocking(path: &Path, pipeline: AsyncPipeline) {
-    for e in walkdir::WalkDir::new(path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|e| e == std::ffi::OsStr::new("uvl"))
-                .unwrap_or(false)
-        })
-    {
-        load_blocking(Url::from_file_path(e.path()).unwrap(), &pipeline)
-    }
-}
+
 fn shutdown_error() -> tower_lsp::jsonrpc::Error {
     tower_lsp::jsonrpc::Error {
         code: tower_lsp::jsonrpc::ErrorCode::InternalError,
@@ -119,22 +105,6 @@ fn shutdown_error() -> tower_lsp::jsonrpc::Error {
 impl LanguageServer for Backend {
     async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
         #[allow(deprecated)]
-        let root_folder = init_params
-            .root_path
-            .as_deref()
-            .or_else(|| init_params.root_uri.as_ref().map(|p| p.path()))
-            .map(PathBuf::from);
-        if let Some(root_folder) = root_folder {
-            let semantic = self.pipeline.clone();
-            //cheap fix for better intial load, we should really use priority model to prefer
-            //editor owned files
-            spawn(async move {
-                tokio::task::spawn_blocking(move || {
-                    load_all_blocking(&root_folder, semantic);
-                })
-                .await
-            });
-        }
         if init_params
             .client_info
             .map(|info| matches!(info.name.as_str(), "Visual Studio Code"))
@@ -142,6 +112,8 @@ impl LanguageServer for Backend {
         {
             self.settings.lock().has_webview = true;
         }
+
+        self.pipeline.import_handler();
 
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
@@ -227,11 +199,21 @@ impl LanguageServer for Backend {
     }
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         info!("received did_open {:?}", params.text_document.uri);
-        self.pipeline.open(
-            params.text_document.uri,
-            params.text_document.text,
-            DocumentState::OwnedByEditor,
-        );
+        if self
+            .pipeline
+            .root()
+            .borrow()
+            .contains(&params.text_document.uri)
+        {
+            self.pipeline.open(
+                params.text_document.uri,
+                params.text_document.text,
+                DocumentState::OwnedByEditor,
+            );
+        } else {
+            load_blocking(params.text_document.uri, &self.pipeline);
+        }
+
         info!("done did_open");
     }
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -368,6 +350,7 @@ impl LanguageServer for Backend {
             match i.typ {
                 FileChangeType::CREATED => {
                     self.load(i.uri);
+                    break;
                 }
                 FileChangeType::CHANGED => {
                     self.load(i.uri);
