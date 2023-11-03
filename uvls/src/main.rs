@@ -694,7 +694,7 @@ impl LanguageServer for Backend {
                     match ErrorType::from_u32(number.as_u64().unwrap_or(0) as u32) {
                         ErrorType::Any => info!("No Quickfix for this Error"),
                         ErrorType::FeatureNameContainsDashes => {
-                            return actions::rename_dash(
+                            return ide::actions::rename_dash(
                                 params.clone(),
                                 diagnostic,
                                 self.snapshot(&params.text_document.uri, false).await,
