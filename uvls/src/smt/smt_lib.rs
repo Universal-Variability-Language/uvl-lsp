@@ -74,6 +74,7 @@ pub enum Expr {
     //IfThenElse
     Ite(Box<Expr>, Box<Expr>, Box<Expr>),
 }
+/// This is a helper module, to use SMT (and in that sense Z3) for every UVL Module
 pub struct SMTModule {
     pub variables: IndexSet<ModuleSymbol>,
     pub asserts: Vec<Assert>,
@@ -109,7 +110,7 @@ impl SMTModule {
             )
         })
     }
-    //extract values from a response string
+    /// extract values from a response string
     pub fn parse_values<'a>(
         &'a self,
         values: &'a str,
@@ -159,7 +160,7 @@ impl SMTModule {
             self.asserts[idx].0.clone()
         })
     }
-    // create source to config z3 Solver
+    /// create source to config z3 Solver
     pub fn config_to_source(&self) -> String {
         let out = "(set-option :produce-unsat-cores true)
         (define-fun smooth_div ((x Real) (y Real)) Real(if (not (= y 0.0))(/ x y)0.0))
@@ -169,7 +170,7 @@ impl SMTModule {
             .to_string();
         out
     }
-    // create with all Variable the source for the SMTSolver
+    /// create with all Variable the source for the SMTSolver
     pub fn variable_to_source(&self, module: &Module) -> String {
         let mut out = "".to_string();
         for (i, v) in self.variables.iter().enumerate() {
@@ -179,7 +180,7 @@ impl SMTModule {
         out
     }
 
-    // create the source for an assert, if the assert should be negated the variable neg must be true
+    /// create the source for an assert, if the assert should be negated the variable neg must be true
     pub fn assert_to_source(
         &self,
         i: usize,
@@ -336,7 +337,7 @@ impl SMTModule {
         out
     }
 
-    //tree to source
+    /// tree to source
     pub fn to_source(&self, module: &Module) -> String {
         let time = Instant::now();
         //
@@ -362,8 +363,8 @@ impl SMTModule {
     }
 }
 struct SMTBuilder<'a> {
-    //Each variable is encoded as v{n} where n is an index into sym2var using an IndexSet
-    //enables us to lookup a variable both by index and ModuleSymbol
+    /// Each variable is encoded as v{n} where n is an index into sym2var using an IndexSet
+    /// enables us to lookup a variable both by index and ModuleSymbol
     sym2var: IndexSet<ModuleSymbol>,
     assert: Vec<Assert>,
     module: &'a Module,
@@ -493,7 +494,7 @@ impl Into<Expr> for ConfigValue {
         }
     }
 }
-
+/// Converts a UVL Module into a SMT Module
 pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> SMTModule {
     assert!(module.ok);
     let mut builder = SMTBuilder {
@@ -681,7 +682,7 @@ pub fn uvl2smt(module: &Module, config: &HashMap<ModuleSymbol, ConfigValue>) -> 
     }
 }
 
-//create an SMTModule, but the asserts are only constraints
+/// create an SMTModule, but the asserts are only constraints
 pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
     assert!(module.ok);
     let mut builder = SMTBuilder {
@@ -724,6 +725,7 @@ pub fn uvl2smt_constraints(module: &Module) -> SMTModule {
     }
 }
 
+/// Translates the constraints into Expressions which can be converted to Z3 Statements
 fn translate_constraint(
     decl: &ast::ConstraintDecl,
     m: InstanceID,
@@ -778,7 +780,7 @@ fn translate_constraint(
         }
     }
 }
-
+/// Translates expr into Expressions which can be converted to Z3 Statements
 fn translate_expr(decl: &ast::ExprDecl, m: InstanceID, builder: &mut SMTBuilder) -> (Expr, Type) {
     match &decl.content {
         ast::Expr::Number(n) => (Expr::Real(*n), Type::Real),

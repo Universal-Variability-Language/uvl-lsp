@@ -1,3 +1,7 @@
+/// Handles all sorts of Code actions.
+///
+/// Each function handles a different kind of error. They can also be combined for more flexibility
+pub mod actions;
 /// Handle color highlighting for IDEs
 ///
 /// Syntax highlight happens in here
@@ -31,5 +35,3 @@ pub mod completion;
 pub mod inlays;
 /// handles text jumps, like go to definition etc
 pub mod location;
-
-pub mod actions;

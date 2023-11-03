@@ -25,7 +25,7 @@ impl FSNode {
         matches!(self, Self::Dir)
     }
 }
-//Simple virtual filesystem for fast completions, resolve and namespaces
+/// Simple virtual filesystem for fast completions, resolve and namespaces
 #[derive(Debug, Clone, Default)]
 pub struct FileSystem {
     graph: DiGraph<FSNode, FSEdge>,
@@ -118,7 +118,7 @@ impl FileSystem {
         }
         Self { graph, file2node }
     }
-    //Check an import between a and b
+    /// Check an import between a and b
     pub fn imports_connecting(&self, a: FileID, b: FileID) -> impl Iterator<Item = Symbol> + '_ {
         self.graph
             .edges_connecting(self.file2node[&a], self.file2node[&b])
@@ -127,7 +127,7 @@ impl FileSystem {
                 _ => None,
             })
     }
-    //all imports from a
+    /// all imports from a
     pub fn imports(&self, a: FileID) -> impl Iterator<Item = (Symbol, FileID)> + '_ {
         self.graph.edges(self.file2node[&a]).filter_map(|e| {
             match (e.weight(), &self.graph[e.target()]) {
@@ -171,7 +171,7 @@ impl FileSystem {
         Self::goto_dir(&self.graph, NodeIndex::new(0), path)
     }
 
-    //all imports to a
+    /// all imports to a
     pub fn imported(&self, a: FileID) -> impl Iterator<Item = (Symbol, FileID)> + '_ {
         self.graph
             .edges_directed(self.file2node[&a], Direction::Incoming)
@@ -180,7 +180,7 @@ impl FileSystem {
                 _ => None,
             })
     }
-    //find a file under path from origin
+    /// find a file under path from origin
     pub fn resolve(&self, origin: FileID, path: &[Ustr]) -> Option<FileID> {
         let mut dir = self
             .graph
@@ -251,7 +251,7 @@ impl FileSystem {
             .find(|n| matches!(self.graph[*n], FSNode::Dir))
             .unwrap()
     }
-    //all subfiles from origin under path, returns (prefix,filename,filenode)
+    /// all subfiles from origin under path, returns (prefix,filename,filenode)
     pub fn sub_files<'a>(
         &'a self,
         origin: FileID,
@@ -273,7 +273,7 @@ pub struct LinkedAstDocument {
     pub revision: u64,
     pub ok: bool,
 }
-//A file that is not imported by any other is root file
+/// A file that is not imported by any other is root file
 fn find_root_files<'a>(fs: &FileSystem, files: &'a AstFiles) -> impl Iterator<Item = FileID> + 'a {
     let mut not_root = HashSet::new();
     for i in files.keys().cloned() {

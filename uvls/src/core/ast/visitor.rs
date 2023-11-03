@@ -1,10 +1,10 @@
+//! This trait makes the tree-sitter cursor api easier to use.
 use crate::core::*;
 use log::info;
 use ropey::Rope;
 use tower_lsp::lsp_types::DiagnosticSeverity;
 use tree_sitter::{Node, TreeCursor};
 use util::node_range;
-//This trait makes the tree-sitter cursor api easier to use.
 pub trait Visitor<'a> {
     fn cursor(&self) -> &TreeCursor<'a>;
     fn cursor_mut(&mut self) -> &mut TreeCursor<'a>;
@@ -21,7 +21,7 @@ pub trait Visitor<'a> {
             }
         }
     }
-    //try to go down
+    /// try to go down
     fn goto_first_child(&mut self) -> bool {
         if self.cursor_mut().goto_first_child() {
             if self.skip_extra() {
@@ -34,7 +34,7 @@ pub trait Visitor<'a> {
             false
         }
     }
-    //try to goto a named node on the current layer
+    /// try to goto a named node on the current layer
     fn goto_named(&mut self) -> bool {
         loop {
             if self.node().is_named() {
@@ -60,7 +60,7 @@ pub trait Visitor<'a> {
     fn child_by_name(&self, name: &str) -> Option<Node<'a>> {
         self.node().child_by_field_name(name)
     }
-    //try to go forward at least once until we find a node of kind
+    /// try to go forward at least once until we find a node of kind
     fn goto_next_kind(&mut self, kind: &str) -> bool {
         loop {
             if !self.goto_next_sibling() {
@@ -71,7 +71,7 @@ pub trait Visitor<'a> {
             }
         }
     }
-    //try to go forward until we find a node as a field name
+    /// try to go forward until we find a node as a field name
     fn goto_field(&mut self, name: &str) -> bool {
         loop {
             if self
@@ -87,7 +87,7 @@ pub trait Visitor<'a> {
             }
         }
     }
-    //try to go forward until we find a node of kind name
+    /// try to go forward until we find a node of kind name
     fn goto_kind(&mut self, name: &str) -> bool {
         loop {
             if self.kind() == name {
@@ -126,9 +126,9 @@ pub trait Visitor<'a> {
         });
     }
 }
-//Utility function, tree-sitter uses cursor to traverse trees, this creates a scope that
-//guarantees to "go down", call f and later "go up" one level. It also protects against stack
-//overflow
+/// Utility function, tree-sitter uses cursor to traverse trees, this creates a scope that
+/// guarantees to "go down", call f and later "go up" one level. It also protects against stack
+/// overflow
 pub fn visit_children<'a, F, T, V>(state: &mut V, mut f: F) -> T
 where
     V: Visitor<'a>,
@@ -161,7 +161,7 @@ where
         T::default()
     }
 }
-//loop over all siblings
+/// loop over all siblings
 pub fn visit_siblings<'a, F: FnMut(&mut V), V: Visitor<'a>>(state: &mut V, mut f: F) {
     loop {
         f(state);

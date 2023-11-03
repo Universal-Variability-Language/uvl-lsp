@@ -1,22 +1,22 @@
-/// Configuration is stored in json files like this
-/// ```
-/// {
-///     "file":"file.uvl",
-///     "config":{
-///           "submodels.subfile":{
-///               "subfeature":true
-///           }
-///           "someFeatures":true,
-///           "someOtherFeature":1.0,
-///           "someFeature.attribute1":"test"
-///     }
-///
-/// }
-/// ```
-/// This representation is very compact since it avoids rewriting long import prefixes but slightly
-/// more complex than just using the direct raw path to external symbols.
-/// JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
-/// crate for span information and partial parsing so error reporting becomes impossible.
+//! Configuration is stored in json files like this
+//! ```
+//! {
+//!     "file":"file.uvl",
+//!     "config":{
+//!           "submodels.subfile":{
+//!               "subfeature":true
+//!           }
+//!           "someFeatures":true,
+//!           "someOtherFeature":1.0,
+//!           "someFeature.attribute1":"test"
+//!     }
+//!
+//! }
+//! ```
+//! This representation is very compact since it avoids rewriting long import prefixes but slightly
+//! more complex than just using the direct raw path to external symbols.
+//! JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
+//! crate for span information and partial parsing so error reporting becomes impossible.
 use crate::core::*;
 use crate::ide::completion::*;
 use ast::*;

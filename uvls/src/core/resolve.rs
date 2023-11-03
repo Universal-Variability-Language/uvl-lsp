@@ -1,3 +1,7 @@
+//! Path resolving on file level
+//!
+//! Imports between files allow for multiple possible meanings hence depth first search is required
+//! This also containes functions for attribute aggregates and path-symbol binding and type checking
 use ropey::Rope;
 use ustr::Ustr;
 
@@ -9,9 +13,6 @@ use hashbrown::HashMap;
 use log::info;
 use tree_sitter::Node;
 
-//Path resolving on file level
-//imports between files allow for multiple possible meanings hence depth first serach is required
-//This also containes functions for attribute aggregates and path-symbol binding and type checking
 pub fn common_prefix(a: &[Ustr], b: &[Ustr]) -> usize {
     a.iter().zip(b.iter()).take_while(|(i, k)| i == k).count()
 }
@@ -24,7 +25,7 @@ impl AstContainer for AstFiles {
     }
 }
 
-//Find all symboles from origin under path
+/// Find all symboles from origin under path
 pub fn resolve<'a>(
     files: &'a impl AstContainer,
     fs: &'a FileSystem,
@@ -49,7 +50,7 @@ pub fn resolve<'a>(
     .flatten()
 }
 
-//Find all symboles from origin under path while keeping track of what sections path are bound to what symbol
+/// Find all symboles from origin under path while keeping track of what sections path are bound to what symbol
 pub fn resolve_with_bind<'a>(
     files: &'a impl AstContainer,
     fs: &'a FileSystem,
@@ -108,7 +109,7 @@ pub fn resolve_attributes<'a, F: FnMut(RootSymbol, &[Ustr])>(
         f(attrib, prefix)
     });
 }
-//Find all attributes in orgin under context, allso gives the prefix for each attribut
+/// Find all attributes in orgin under context, allso gives the prefix for each attribut
 pub fn resolve_attributes_with_feature<
     'a,
     F: FnMut(RootSymbol, RootSymbol, &[Ustr], &AstDocument),
@@ -178,7 +179,7 @@ pub enum ResolveState {
     Resolved(RootSymbol),
 }
 
-//Best effort tupe resolving
+/// Best effort tupe resolving
 pub fn resolve_file(file: FileID, fs: &FileSystem, err: &mut ErrorsAcc) -> RefMap {
     let mut ref_map = HashMap::new();
     let ctx = TypeResolveContext {
@@ -228,11 +229,11 @@ fn select_type(flags: BitFlags<Type>) -> Type {
     flags.iter().next().unwrap()
 }
 
-//Since there can be multiple possible interpretations,
-//two pases are used for equations.
-//First pass: Gather a set of all possible types for each equation side.
-//Second pass: Pick a common type and resolve each expression with the choosen type
-//We could simply forbid alias import and feature names but thats boring.
+/// Since there can be multiple possible interpretations,
+/// two pases are used for equations.
+/// First pass: Gather a set of all possible types for each equation side.
+/// Second pass: Pick a common type and resolve each expression with the choosen type
+/// We could simply forbid alias import and feature names but thats boring.
 fn resolve_constraint(
     ctx: &TypeResolveContext,
     file: FileID,
@@ -349,7 +350,7 @@ fn resolve_constraint(
         _ => {}
     }
 }
-//Find possible types
+/// Find possible types
 fn gather_expr_options(
     ctx: &TypeResolveContext,
     file: FileID,
@@ -463,7 +464,7 @@ fn gather_expr_options(
         }
     }
 }
-//Fix types
+/// Fix types
 fn commit_expr(
     ctx: &TypeResolveContext,
     file: FileID,
@@ -501,7 +502,7 @@ fn commit_expr(
     }
 }
 
-//Best effort type resolve for a single tree-sitter expression
+/// Best effort type resolve for a single tree-sitter expression
 pub fn estimate_types(
     node: Node,
     possible: BitFlags<Type>,
