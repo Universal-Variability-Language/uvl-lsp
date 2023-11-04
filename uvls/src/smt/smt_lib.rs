@@ -75,6 +75,7 @@ pub enum Expr {
     Ite(Box<Expr>, Box<Expr>, Box<Expr>),
 }
 /// This is a helper module, to use SMT (and in that sense Z3) for every UVL Module
+/// A smt-lib module equivalent to some UVL source module.
 pub struct SMTModule {
     pub variables: IndexSet<ModuleSymbol>,
     pub asserts: Vec<Assert>,

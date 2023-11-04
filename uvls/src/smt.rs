@@ -1,3 +1,17 @@
+//! Implements the semantic analysis using Z3
+//!
+//! SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
+//! While the performance is worse than linking with Z3, we are solver independent and don't have to interact
+//! with any C-Bindings. UVL is translated directly into SMT-LIB, both attributes and features are treated as
+//! free variables. The rest is encoded in named asserts, this allows to get a accurate unsat core.
+//! Eg. each attribute is restricted with an assert that allows it to either be its defined value or 0 depending
+//! on the parent feature value.
+//! Using functions might be more efficient, but this way we can reconfigure and detect if
+//! an attribute value contributes to the unsat core.
+//! Variables are named as v{n} where n is an index into a lookup table of UVL ModuleSymbols
+//! Asserts are encoded similarly as a{n} where n is and index into a list of naming information
+//! that links uvl expression to asserts.
+
 use crate::{
     core::*,
     ide::inlays::{InlayHandler, InlaySource},
@@ -29,19 +43,9 @@ mod parse;
 pub mod smt_lib;
 pub use smt_lib::*;
 
-/// Implements the semantic analysis using Z3
+/// Z3 process interface(over stdio)
 ///
-/// SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
-/// While the performance is worse than linking with Z3, we are solver independent and don't have to interact
-/// with any C-Bindings. UVL is translated directly into SMT-LIB, both attributes and features are treated as
-/// free variables. The rest is encoded in named asserts, this allows to get a accurate unsat core.
-/// Eg. each attribute is restricted with an assert that allows it to either be its defined value or 0 depending
-/// on the parent feature value.
-/// Using functions might be more efficient, but this way we can reconfigure and detect if
-/// an attribute value contributes to the unsat core.
-/// Variables are named as v{n} where n is an index into a lookup table of UVL ModuleSymbols
-/// Asserts are encoded similarly as a{n} where n is and index into a list of naming information
-/// that links uvl expression to asserts.
+/// A wrapper providing functions to interact with Z3.
 pub struct SmtSolver {
     _proc: Child,
     stdin: BufWriter<ChildStdin>,
@@ -163,6 +167,7 @@ pub enum SMTValueState {
     Off,
 }
 #[derive(Debug, Clone)]
+/// This stores the Z3 solution
 pub enum SMTModel {
     SAT {
         values: HashMap<ModuleSymbol, ConfigValue>,
@@ -578,6 +583,7 @@ pub async fn check_handler(
         }
     }
 }
+/// runs smt-analysis on configurations.
 pub async fn web_view_handler(
     mut state: watch::Receiver<webview::ConfigSource>,
     tx_ui: mpsc::Sender<webview::UIAction>,

@@ -1,3 +1,5 @@
+//! Find files control what files need to be relinked
+
 use crate::core::*;
 use check::ErrorsAcc;
 use compact_str::CompactStringExt;

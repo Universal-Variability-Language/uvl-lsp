@@ -1,3 +1,5 @@
+//! File update logic
+
 use ropey::Rope;
 use std::time::SystemTime;
 use tokio::time::Instant;

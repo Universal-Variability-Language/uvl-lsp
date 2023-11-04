@@ -2,6 +2,8 @@
 //!
 //! Imports between files allow for multiple possible meanings hence depth first search is required
 //! This also containes functions for attribute aggregates and path-symbol binding and type checking
+//! - resolve_file: Type resolving for an AstDocument
+//! - resolve_*: nameresultion under various conditions.
 use ropey::Rope;
 use ustr::Ustr;
 

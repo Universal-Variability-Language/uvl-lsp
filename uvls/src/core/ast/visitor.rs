@@ -1,4 +1,5 @@
 //! This trait makes the tree-sitter cursor api easier to use.
+//! Util functions and traits for the transformer
 use crate::core::*;
 use log::info;
 use ropey::Rope;

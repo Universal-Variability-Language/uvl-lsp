@@ -1,4 +1,3 @@
-//use ropey::Rope;
 use tree_sitter::{Language, Query};
 static CHECK_SANITY: &str = r#"
 (blk

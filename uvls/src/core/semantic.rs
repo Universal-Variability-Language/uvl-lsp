@@ -1,3 +1,5 @@
+//! Contains a central struct RootGraph. This struct includes the latest linked uvl and config files, it can be thought of as a snapshot of all related documents. It can be accessed through the pipeline.
+
 use crate::core::*;
 
 use hashbrown::{HashMap, HashSet};

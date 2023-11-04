@@ -1,3 +1,5 @@
+//! multi-stage compiler, it provides access to files in various compilation stages. Constists of multiple subsystems like: green tree parsing, linking, error reporting, smt checking etc.
+//!
 //! The parsing frontend
 //!
 //! To allow for more nimble and robust parsing, we use 2 stage process to parse 2 different syntax
