@@ -58,7 +58,7 @@
         "configuration": "./language-configuration.json",
         "icon": {
           "dark": "assets/uvl-icon.PNG",
-          "light": "assets/uvl-icon2.PNG"
+          "light": "assets/uvl-icon.PNG"
         }
       }
     ],
