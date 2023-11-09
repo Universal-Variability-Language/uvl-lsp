@@ -129,7 +129,7 @@ fn RealInput(cx: Scope, init_val: f64, sym: ModuleSymbol, tag: u8) -> Element {
             value:"{val}",
             oninput:move |e|{
                 val.set(to_number(&e.value));
-                tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(val.parse().unwrap_or(0.0))));
+                tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(e.value.parse().unwrap_or(0.0))));
 
             }
         }

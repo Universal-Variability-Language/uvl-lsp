@@ -581,12 +581,9 @@ pub async fn web_view_handler(
         tx_ui.send(webview::UIAction::SolverActive).await?;
 
         if module.ok && config_ok {
-            info!("TEST--- module.values {:?}", module.values);
             let smt_module = uvl2smt(&module, &module.values);
             let source = smt_module.to_source(&module);
-            info!("TEST--- source {:?}", source);
             let res = create_model(&module, cancel, smt_module, source, false, true).await;
-            info!("TEST--- res {:?}", res);
             match res {
                 Ok(model) => {
                     inlay_state

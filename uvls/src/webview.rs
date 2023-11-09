@@ -162,6 +162,8 @@ pub struct UIState {
     pub file_name: String,
     pub show: bool,
 }
+
+#[derive(Debug)]
 pub struct ConfigSource {
     pub root: FileID,
     pub module: ConfigModule,
