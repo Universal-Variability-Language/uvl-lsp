@@ -9,6 +9,7 @@ use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tower_lsp::Client;
 use tree_sitter::{Node, QueryCursor, Tree};
+use unicode_segmentation::UnicodeSegmentation;
 
 // This type is used to provide quickactions for a error
 #[derive(Clone, Debug, PartialEq)]
@@ -262,21 +263,26 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
             .unwrap()
             .to_string()
             .replace("\n", " ");
-        let line = source_uvl.trim().split(" ").collect::<Vec<&str>>();
+        let line = source_uvl
+            .trim()
+            .split(" ")
+            .filter(|s| s.len() > 0)
+            .collect::<Vec<&str>>();
         let name = match line.first().unwrap_or(&"") {
             &"Real" | &"String" | &"Boolean" | &"Integer" => line[1].to_string(),
             _ => line.first().unwrap_or(&"").to_string(),
         };
+        let offset = source_uvl.find(&name).unwrap_or(0);
 
         return ErrorInfo {
             location: Range {
                 start: Position {
                     line: root.start_position().row as u32,
-                    character: root.start_position().column as u32,
+                    character: offset as u32,
                 },
                 end: Position {
                     line: root.start_position().row as u32,
-                    character: root.start_position().column as u32 + name.len() as u32,
+                    character: offset as u32 + name.graphemes(true).count() as u32,
                 },
             },
             severity: DiagnosticSeverity::ERROR,

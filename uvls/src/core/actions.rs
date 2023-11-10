@@ -152,7 +152,8 @@ pub fn surround_with_double_quotes(
             .slice(start_byte..end_byte)
             .as_str()
             .unwrap()
-            .replace("\n", "");
+            .replace("\n", "")
+            .replace("\r", "");
         let new_name = format!("\"{}\"", name);
 
         let code_action_replace = CodeAction {
@@ -193,7 +194,10 @@ pub fn starts_with_number(
             .slice(start_byte..end_byte)
             .as_str()
             .unwrap()
-            .replace("\n", "");
+            .trim()
+            .replace("\n", "")
+            .replace("\r", "");
+
         let re = Regex::new(r"^\d+").unwrap();
         let number = match re.find(name) {
             Some(x) => x.as_str(),
