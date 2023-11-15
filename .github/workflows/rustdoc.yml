@@ -1,7 +1,5 @@
 name: rustdoc
 on:
-  push:
-    branches: [ "**" ]
   pull_request:
     branches: [ "master" ]
 
@@ -30,6 +28,7 @@ jobs:
       run: cargo doc --all --no-deps
 
     - name: relink Github pages
+      # Add redirect to uvls doc site as main Page
       run: echo '<meta http-equiv="refresh" content="0; url=./uvls" />' > ./target/doc/index.html
 
     - name: Deploy Docs
