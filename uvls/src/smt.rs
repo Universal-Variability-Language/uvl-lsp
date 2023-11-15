@@ -147,6 +147,10 @@ impl SmtSolver {
         self.read_block().await
     }
 }
+
+/// This function is a helper function which checks if a LSP can run z3.
+///
+/// This mainly focuses on self compiled LSPs
 pub fn can_run_z3() -> bool {
     Command::new("z3")
         .stdin(std::process::Stdio::piped())
@@ -157,6 +161,7 @@ pub fn can_run_z3() -> bool {
 }
 
 lazy_static! {
+    /// A static reference wether a client has z3 installed
     static ref HAS_Z3: bool = can_run_z3();
 }
 
@@ -343,6 +348,7 @@ async fn create_model(
     }
 }
 
+/// This function checks the SAT Level of a FileID
 async fn check_base_sat(
     root: &RootGraph,
     tx_err: &mpsc::Sender<DiagnosticUpdate>,

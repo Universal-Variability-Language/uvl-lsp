@@ -55,8 +55,10 @@ mod webview;
 use crate::core::*;
 use crate::smt::{smt_lib::Expr, uvl2smt, SmtSolver};
 
+/// Settings for some client config.
+///
 /// can the client show websites on its own
-/// ie client==vscode
+/// ie. client==vscode
 struct Settings {
     has_webview: bool,
 }
@@ -754,6 +756,8 @@ fn main() {
         .unwrap();
     runtime.block_on(server_main());
 }
+
+/// Start the backend LSP server
 async fn server_main() {
     std::env::set_var("RUST_BACKTRACE", "1");
 

@@ -1,3 +1,5 @@
+//! This Module handles IDE Specific Logic (eg. Highlights, auto completion, code actions)
+
 /// Handles all sorts of Code actions.
 ///
 /// Each function handles a different kind of error. They can also be combined for more flexibility

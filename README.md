@@ -2,6 +2,10 @@
 [UVL](https://github.com/Universal-Variability-Language) language server based on [tree-sitter](https://github.com/tree-sitter/tree-sitter).
 
 ## Getting started
+
+### Docs
+### <span style="color: #FF0000">TODO!!!! CHANGE DOC LINK</span>
+Basic Documentation for the Codebase: [Docs](https://pascalfoerster.github.io/uvl-lsp/uvls)
 ### Build
 - Requirements
     - Rust 1.65+
@@ -60,9 +64,3 @@ we can capture many incorrect expressions and provide decent error messages in m
 Tree-sitter queries allow for easy symbol extraction and are used to transform the tree-sitter tree into a more compact graph.
 This graph is then used for further analysis.
 Queries are also used for syntax highlighting as tree-sitter was originally intended for that.
-
-
-# Docs
-
-TODO!!!!!!!!
-Link to the [Docs](https://pascalfoerster.github.io/uvl-lsp/uvls)

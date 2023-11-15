@@ -1,3 +1,5 @@
+//! This Module Represents the UVL Language Server (LSP) Logic
+
 pub mod ast;
 pub mod cache;
 pub mod check;
