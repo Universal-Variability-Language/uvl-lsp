@@ -2,41 +2,26 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from "vscode";
-import { workspace, window, ExtensionContext } from "vscode";
+import {ExtensionContext, window, workspace} from "vscode";
 import * as path from "path";
 import * as os from "os";
 import * as which from "which";
 import * as fs from "fs";
-import * as mkdirp from "mkdirp";
-import * as admzip from "adm-zip";
 import * as child_process from "child_process";
 import {
-    DiagnosticSeverity,
-    ExecuteCommandRequest,
-    LanguageClient,
-    LanguageClientOptions,
-    ServerOptions,
-    Trace,
-    TransportKind,
+    ExecuteCommandRequest, LanguageClient, LanguageClientOptions, ServerOptions, Trace,
 } from "vscode-languageclient/node";
 import axios from "axios";
-import { manual } from "mkdirp";
-import { posix } from "path";
 import AdmZip = require("adm-zip");
-import { start } from "repl";
-import { ClientRequest } from "http";
-import { info } from "console";
 
 let client: LanguageClient | null = null;
 let outputChannel: vscode.OutputChannel | null = null;
-const SOURCE_URI =
-    "https://api.github.com/repos/Universal-Variability-Language/uvl-lsp/releases/latest";
+const SOURCE_URI = "https://api.github.com/repos/Universal-Variability-Language/uvl-lsp/releases/latest";
 let rangeOrOptions: Map<String, Array<Array<vscode.Range>>> = new Map();
 const decorators: Array<vscode.TextEditorDecorationType> = new Array(4);
 
 function getDefaultInstallationName(): string | null {
     // NOTE: Not using a JS switch because they're ugly as hell and clunky :(
-
     const plat = process.platform;
     const arch = process.arch;
     if (arch === "x64") {
@@ -55,17 +40,19 @@ function getDefaultInstallationName(): string | null {
             return "aarch64-linux";
         }
     }
-
     return null;
 }
+
 interface Asset {
     name: string;
     browser_download_url: string;
 }
+
 interface Metadata {
     tag_name: string;
     assets: [Asset];
 }
+
 async function fetchInfo(): Promise<Metadata | null> {
     try {
         return (await axios.get<Metadata>(SOURCE_URI)).data;
@@ -79,11 +66,11 @@ async function uvlsPath(context: ExtensionContext) {
     let uvlsPath = configuration.get<string | null>("path", null);
 
     if (!uvlsPath) {
-        uvlsPath = which.sync("uvls", { nothrow: true });
+        uvlsPath = which.sync("uvls", {nothrow: true});
     } else if (uvlsPath.startsWith("~")) {
         uvlsPath = path.join(os.homedir(), uvlsPath.substring(1));
     } else if (!path.isAbsolute(uvlsPath)) {
-        uvlsPath = which.sync(uvlsPath, { nothrow: true });
+        uvlsPath = which.sync(uvlsPath, {nothrow: true});
     }
     const uvlsPathExists = uvlsPath !== null && fs.existsSync(uvlsPath);
     let message: string | null = null;
@@ -100,18 +87,13 @@ async function uvlsPath(context: ExtensionContext) {
     }
     if (message === null) {
         if (!uvlsPath) {
-            message =
-                "Couldn't find UVL Language Server (UVLS) executable, please specify it under `uvls.path`";
+            message = "Couldn't find UVL Language Server (UVLS) executable, please specify it under `uvls.path`";
         } else if (!uvlsPathExists) {
             message = `Couldn't find UVL Language Server (UVLS) executable at ${uvlsPath}`;
         }
     }
     if (message) {
-        const response = await window.showWarningMessage(
-            message,
-            "Install UVLS",
-            "Specify Path"
-        );
+        const response = await window.showWarningMessage(message, "Install UVLS", "Specify Path");
         if (response === "Install UVLS") {
             return await installExecutable(context);
         } else if (response === "Specify Path") {
@@ -132,14 +114,11 @@ async function uvlsPath(context: ExtensionContext) {
 
     return uvlsPath;
 }
-async function installExecutable(
-    context: ExtensionContext
-): Promise<string | null> {
+
+async function installExecutable(context: ExtensionContext): Promise<string | null> {
     const def = getDefaultInstallationName();
     if (!def) {
-        window.showInformationMessage(
-            `Your system isn't built by our CI!\nPlease follow the instructions [here](https://github.com/Caradhrass/uvls) to get started!`
-        );
+        window.showInformationMessage(`Your system isn't built by our CI!\nPlease follow the instructions [here](https://github.com/Caradhrass/uvls) to get started!`);
         return null;
     }
     let archiveName = def.concat(".zip");
@@ -188,6 +167,7 @@ async function installExecutable(
         }
     );
 }
+
 interface Version {
     major: number;
     minor: number;
@@ -211,13 +191,12 @@ function parseVersion(str: string): Version | null {
         patch: parseInt(matches[3]),
     };
 }
+
 async function isUpdateAvailable(uvlsPath: string): Promise<boolean | null> {
     let meta = await fetchInfo();
     if (meta !== null) {
         let remote = parseVersion(meta.tag_name);
-        const current = parseVersion(
-            child_process.execFileSync(uvlsPath, ["-v"]).toString("utf-8")
-        );
+        const current = parseVersion(child_process.execFileSync(uvlsPath, ["-v"]).toString("utf-8"));
         if (!current || !remote) {
             return null;
         }
@@ -242,25 +221,18 @@ async function isUpdateAvailable(uvlsPath: string): Promise<boolean | null> {
     }
     return false;
 }
-async function isUVLSPrebuildBinary(
-    context: ExtensionContext
-): Promise<boolean> {
+
+async function isUVLSPrebuildBinary(context: ExtensionContext): Promise<boolean> {
     const configuration = workspace.getConfiguration("uvls");
     var uvlsPath = configuration.get<string | null>("path", null);
     if (!uvlsPath) {
         return false;
     }
-    const uvlsBinPath = vscode.Uri.joinPath(
-        context.globalStorageUri,
-        "uvls"
-    ).fsPath;
+    const uvlsBinPath = vscode.Uri.joinPath(context.globalStorageUri, "uvls").fsPath;
     return uvlsPath.startsWith(uvlsBinPath);
 }
 
-async function checkUpdate(
-    context: ExtensionContext,
-    autoInstallPrebuild: boolean
-): Promise<void> {
+async function checkUpdate(context: ExtensionContext, autoInstallPrebuild: boolean): Promise<void> {
     const configuration = workspace.getConfiguration("uvls");
 
     const p = await uvlsPath(context);
@@ -277,15 +249,8 @@ async function checkUpdate(
     if (autoInstallPrebuild && isPrebuild) {
         await installExecutable(context);
     } else {
-        const message = `There is a new update available for UVLS. ${!isPrebuild
-            ? "It would replace your installation with a prebuilt binary."
-            : ""
-            }`;
-        const response = await window.showInformationMessage(
-            message,
-            "Install update",
-            "Never ask again"
-        );
+        const message = `There is a new update available for UVLS. ${!isPrebuild ? "It would replace your installation with a prebuilt binary." : ""}`;
+        const response = await window.showInformationMessage(message, "Install update", "Never ask again");
 
         if (response === "Install update") {
             await installExecutable(context);
@@ -294,12 +259,37 @@ async function checkUpdate(
         }
     }
 }
+
 async function checkUpdateMaybe(context: ExtensionContext) {
     const configuration = workspace.getConfiguration("uvls");
     const checkForUpdate = configuration.get<boolean>("auto_update", true);
     if (checkForUpdate) {
         await checkUpdate(context, true);
     }
+}
+
+function openWebview(args: any) {
+    const uri = args.uri;
+    // Create and show a new webview
+    const panel = vscode.window.createWebviewPanel("uvlsConfig", // Identifies the type of the webview. Used internally
+        "UVLS Configure", // Title of the panel displayed to the user
+        vscode.ViewColumn.One, // Editor column to show the new webview panel in.
+        {
+            enableScripts: true, retainContextWhenHidden: true,
+        } // Webview options. More on these later.
+    );
+    outputChannel?.appendLine(`${uri}`);
+    panel.webview.html = panel.webview.html =
+        `<!DOCTYPE html>
+		<html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <title>Preview</title>
+            </head>
+            <body>
+                <iframe src="${uri}" style="position:fixed; top:0; left:0; bottom:0; right:0; width:100%; height:100%; border:none; margin:0; padding:0; overflow:hidden; z-index:999999;"></iframe>
+            </body>
+		</html>`;
 }
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -320,8 +310,7 @@ export async function activate(context: vscode.ExtensionContext) {
         quickPick.title = "How many configurations?";
         let value = 0;
         quickPick.onDidAccept((e) => {
-            value =
-                quickPick.value && !isNaN(+quickPick.value) ? +quickPick.value : 0;
+            value = quickPick.value && !isNaN(+quickPick.value) ? +quickPick.value : 0;
             if (client) {
                 console.log("value", value);
                 const uri = window.activeTextEditor?.document.uri;
@@ -345,30 +334,6 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         quickPick.show();
     });
-    vscode.commands.registerCommand("uvls.open_web", async (args) => {
-        const uri = args[0].uri;
-        // Create and show a new webview
-        const panel = vscode.window.createWebviewPanel(
-            "uvlsConfig", // Identifies the type of the webview. Used internally
-            "UVLS Configure", // Title of the panel displayed to the user
-            vscode.ViewColumn.One, // Editor column to show the new webview panel in.
-            {
-                enableScripts: true,
-                retainContextWhenHidden: true,
-            } // Webview options. More on these later.
-        );
-        outputChannel?.appendLine(`${uri}`);
-        panel.webview.html = panel.webview.html = `<!DOCTYPE html>
-		<html lang="en"">
-		<head>
-			<meta charset="UTF-8">
-			<title>Preview</title>
-		</head>
-		<body>
-			<iframe src="${uri}" style="position:fixed; top:0; left:0; bottom:0; right:0; width:100%; height:100%; border:none; margin:0; padding:0; overflow:hidden; z-index:999999;"></iframe>
-		</body>
-		</html>`;
-    });
     vscode.commands.registerCommand("uvls.generate_diagram", async () => {
         if (!client) {
             return;
@@ -380,8 +345,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         const content = await client.sendRequest(ExecuteCommandRequest.method, {
-            command: "uvls/generate_diagram",
-            arguments: [uri.toString()],
+            command: "uvls/generate_diagram", arguments: [uri.toString()],
         });
 
         const regex = /(.*\.)(.*)/gm;
@@ -393,21 +357,14 @@ export async function activate(context: vscode.ExtensionContext) {
                     });*/
 
         // Open with external extension
-        const graphvizExtension = vscode.extensions.getExtension(
-            "tintinweb.graphviz-interactive-preview"
-        );
+        const graphvizExtension = vscode.extensions.getExtension("tintinweb.graphviz-interactive-preview");
         if (graphvizExtension === undefined) {
-            window.showInformationMessage(
-                "You do not have the recommended [Graphviz Preview Extension](https://marketplace.visualstudio.com/items?itemName=tintinweb.graphviz-interactive-preview) installed.\nActivate it to have the best user experience and be able to see the generated graph!"
-            );
+            window.showInformationMessage("You do not have the recommended [Graphviz Preview Extension](https://marketplace.visualstudio.com/items?itemName=tintinweb.graphviz-interactive-preview) installed.\nActivate it to have the best user experience and be able to see the generated graph!");
             return;
         }
         graphvizExtension.activate();
-        let options = { uri: doturi, title: "Feature Model", content };
-        vscode.commands.executeCommand(
-            "graphviz-interactive-preview.preview.beside",
-            options
-        );
+        let options = {uri: doturi, title: "Feature Model", content};
+        vscode.commands.executeCommand("graphviz-interactive-preview.preview.beside", options);
     });
     await checkUpdateMaybe(context);
     await startClient(context);
@@ -420,12 +377,11 @@ export function deactivate(): Thenable<void> | undefined {
     }
     return client.stop();
 }
+
 async function startClient(context: ExtensionContext) {
     const path = await uvlsPath(context);
     if (!path) {
-        window.showWarningMessage(
-            "Couldn't find Zig Language Server (UVLS) executable"
-        );
+        window.showWarningMessage("Couldn't find Zig Language Server (UVLS) executable");
         return;
     }
     outputChannel = vscode.window.createOutputChannel("UVL Language Server");
@@ -436,27 +392,27 @@ async function startClient(context: ExtensionContext) {
     decorators[0] = vscode.window.createTextEditorDecorationType({
         gutterIconPath: context.asAbsolutePath("assets/deadfeature.svg"),
         gutterIconSize: "90%",
-        backgroundColor: { id: "color.deadfeature" },
+        backgroundColor: {id: "color.deadfeature"},
     });
 
     // Decorator for false-optional features
     decorators[1] = vscode.window.createTextEditorDecorationType({
         gutterIconPath: context.asAbsolutePath("assets/falseoptional.svg"),
         gutterIconSize: "90%",
-        backgroundColor: { id: "color.yellow" },
+        backgroundColor: {id: "color.yellow"},
     });
 
     //Decorator for redundant Constraints
     decorators[2] = vscode.window.createTextEditorDecorationType({
         gutterIconPath: context.asAbsolutePath("assets/redundantconstraint.svg"),
         gutterIconSize: "90%",
-        backgroundColor: { id: "color.yellow" },
+        backgroundColor: {id: "color.yellow"},
     });
     //Decorator for void feature
     decorators[3] = vscode.window.createTextEditorDecorationType({
         gutterIconPath: context.asAbsolutePath("assets/voidfeature.svg"),
         gutterIconSize: "90%",
-        backgroundColor: { id: "color.voidfeature" },
+        backgroundColor: {id: "color.voidfeature"},
     });
     rangeOrOptions = new Map();
 
@@ -465,23 +421,33 @@ async function startClient(context: ExtensionContext) {
         if (editor !== undefined && rangeOrOptions !== null) {
             const range = rangeOrOptions.get(editor.document.fileName);
             if (range !== undefined) {
-                decorators.forEach((decorator, index) =>
-                    editor.setDecorations(decorator, range[index])
-                );
+                decorators.forEach((decorator, index) => editor.setDecorations(decorator, range[index]));
             }
         }
     });
 
     let documentSelector = [
-        { scheme: "file", language: "uvl" },
-        { scheme: "file", pattern: "**/*.uvl.json" },
-        { scheme: "file", pattern: "**/*.uvl-*.json" },
-    ];
+        {scheme: "file", language: "uvl"},
+        {scheme: "file", pattern: "**/*.uvl.json"},
+        {scheme: "file", pattern: "**/*.uvl-*.json"},];
     const clientOptions: LanguageClientOptions = {
-        documentSelector,
-        outputChannel,
-        // middleware implements handleDiagnostic
+        documentSelector, outputChannel, // middleware implements handleDiagnostic
         middleware: {
+            // Intercept editor button command to retrieve the result
+            executeCommand(command, args, next) {
+                const information = {command: command, arguments: args};
+                if(command === "uvls/open_config") {
+                    client?.sendRequest(ExecuteCommandRequest.type, information).then((res) => {
+                        openWebview(res);
+                    });
+                }
+                else if(command === "uvls/load_config") {
+                    client?.sendRequest(ExecuteCommandRequest.type, information).then((res) => {
+                        openWebview(res);
+                    });
+                }
+                next(command, args);
+            },
             // method are called if server send a notification "textDocument/diagnostic"
             handleDiagnostics(uri, diagnostics, next) {
                 // handle anomilies
@@ -515,13 +481,8 @@ async function startClient(context: ExtensionContext) {
                         }
                     }
                 }
-                if (
-                    textEditor !== undefined &&
-                    textEditor.document.fileName === uri.fsPath
-                ) {
-                    decorators.forEach((decorator, index) =>
-                        textEditor.setDecorations(decorator, range![index])
-                    );
+                if (textEditor !== undefined && textEditor.document.fileName === uri.fsPath) {
+                    decorators.forEach((decorator, index) => textEditor.setDecorations(decorator, range![index]));
                 }
 
                 next(uri, diagnostics);
@@ -536,6 +497,7 @@ async function startClient(context: ExtensionContext) {
     client.setTrace(Trace.Verbose);
     client.start();
 }
+
 async function stopClient(): Promise<void> {
     for (const editor of window.visibleTextEditors) {
         let range = rangeOrOptions.get(editor.document.fileName);

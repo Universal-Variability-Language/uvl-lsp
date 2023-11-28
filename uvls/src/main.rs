@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::{join, spawn};
-use tower_lsp::jsonrpc::Result;
+use tower_lsp::jsonrpc::{Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 mod core;
@@ -52,26 +52,6 @@ impl Backend {
             .snapshot(uri, sync)
             .await
             .map_err(|_| shutdown_error())
-    }
-    async fn open_url(&self, uri: String) {
-        if self.settings.lock().has_webview {
-            #[derive(Serialize)]
-            struct OpenArgs {
-                uri: String,
-            }
-            let _ = self
-                .client
-                .send_request::<request::ExecuteCommand>(ExecuteCommandParams {
-                    command: "uvls.open_web".into(),
-                    arguments: vec![serde_json::to_value(OpenArgs { uri }).unwrap()],
-                    work_done_progress_params: WorkDoneProgressParams {
-                        work_done_token: None,
-                    },
-                })
-                .await;
-        } else {
-            let _ = open::that(uri);
-        }
     }
 }
 //load a file, this is tricky because the editor can also load it at the same time
@@ -386,14 +366,20 @@ impl LanguageServer for Backend {
         params: ExecuteCommandParams,
     ) -> Result<Option<serde_json::Value>> {
         let uri: Url = serde_json::from_value(params.arguments[0].clone()).unwrap();
+        #[derive(Serialize)]
+        struct OpenArgs {
+            uri: String,
+        }
         match params.command.as_str() {
             "uvls/load_config" => {
                 let target = format!("{}/load{}", self.web_handler_uri, uri.path());
-                self.open_url(target).await;
+                let response: serde_json::Value = serde_json::to_value(OpenArgs { uri: target }).expect("Stop bitching me Rust!");
+                return Ok(Some(response));
             }
             "uvls/open_config" => {
                 let target = format!("{}/create{}", self.web_handler_uri, uri.path());
-                self.open_url(target).await;
+                let response: serde_json::Value = serde_json::to_value(OpenArgs { uri: target }).expect("Stop bitching me Rust!");
+                return Ok(Some(response));
             }
             "uvls/show_config" => {
                 self.pipeline
