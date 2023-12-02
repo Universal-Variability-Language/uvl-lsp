@@ -5,7 +5,7 @@ use flexi_logger::FileSpec;
 use get_port::Ops;
 
 use hashbrown::HashMap;
-use log::info;
+use log::{error, info};
 use percent_encoding::percent_decode_str;
 use serde::Serialize;
 use std::io::{Read, Write};
@@ -465,60 +465,68 @@ impl LanguageServer for Backend {
                     &root_graph.cancellation_token(),
                 )
                 .await;
-
                 match solver {
-                    Ok(mut smt_solver) => match smt_solver.check_sat().await {
-                        Ok(true) => {
-                            let query = smt_module
-                                .variables
-                                .iter()
-                                .enumerate()
-                                .fold(String::new(), |acc, (i, _)| format!("{acc} v{i}"));
-                            // generate the unique n solutions
-                            for i in 1..=n {
-                                if !smt_solver.check_sat().await.unwrap_or(false) {
-                                    break; // no more solutions
-                                }
-                                let values = smt_solver
-                                    .values(query.clone())
-                                    .await
-                                    .unwrap_or(String::from(""));
-
-                                let values_parsed: HashMap<ModuleSymbol, ConfigValue> =
-                                    smt_module.parse_values(&values, &module).collect();
-
-                                // Store solution in file
-                                let config_module = ConfigModule {
-                                    module: Arc::new(module.clone()),
-                                    values: values_parsed.clone(),
-                                    source_map: Default::default(),
-                                };
-                                let uri = uri.clone();
-                                tokio::task::spawn_blocking(move || {
-                                    if !config_module.ok {
-                                        return;
+                    Ok(mut smt_solver) => {
+                        match smt_solver.check_sat().await {
+                            Ok(true) => {
+                                let query = smt_module
+                                    .variables
+                                    .iter()
+                                    .enumerate()
+                                    .fold(String::new(), |acc, (i, _)| format!("{acc} v{i}"));
+                                // generate the unique n solutions
+                                for i in 1..=n {
+                                    if !smt_solver.check_sat().await.unwrap_or(false) {
+                                        self.pipeline.client()
+                                        .send_notification::<tower_lsp::lsp_types::notification::ShowMessage>(
+                                            ShowMessageParams {
+                                                typ: MessageType::INFO,
+                                                message: format!("Only {} possible solutions found", i - 1).into(),
+                                            },
+                                        )
+                                        .await;
+                                        break; // no more solutions
                                     }
-                                    let ser = config_module.serialize();
-                                    #[derive(Serialize)]
-                                    struct RawConfig {
-                                        file: String,
-                                        config: ConfigEntry,
-                                    }
-                                    let config = RawConfig {
-                                        file: uri
-                                            .to_file_path()
-                                            .unwrap()
-                                            .file_name()
-                                            .unwrap()
-                                            .to_str()
-                                            .unwrap_or("-")
-                                            .to_string(),
-                                        config: ConfigEntry::Import(Default::default(), ser),
+                                    let values = smt_solver
+                                        .values(query.clone())
+                                        .await
+                                        .unwrap_or(String::from(""));
+
+                                    let values_parsed: HashMap<ModuleSymbol, ConfigValue> =
+                                        smt_module.parse_values(&values, &module).collect();
+
+                                    // Store solution in file
+                                    let config_module = ConfigModule {
+                                        module: Arc::new(module.clone()),
+                                        values: values_parsed.clone(),
+                                        source_map: Default::default(),
                                     };
+                                    let uri = uri.clone();
 
-                                    let out = serde_json::to_string_pretty(&config).unwrap();
-                                    let _ = std::fs::write(
-                                        format!(
+                                    tokio::task::spawn_blocking(move || {
+                                        if !config_module.ok {
+                                            return;
+                                        }
+                                        let ser = config_module.serialize();
+                                        #[derive(Serialize)]
+                                        struct RawConfig {
+                                            file: String,
+                                            config: ConfigEntry,
+                                        }
+                                        let config = RawConfig {
+                                            file: uri
+                                                .to_file_path()
+                                                .unwrap()
+                                                .file_name()
+                                                .unwrap()
+                                                .to_str()
+                                                .unwrap_or("-")
+                                                .to_string(),
+                                            config: ConfigEntry::Import(Default::default(), ser),
+                                        };
+
+                                        let out = serde_json::to_string_pretty(&config).unwrap();
+                                        let path = format!(
                                             "{}-{}.json",
                                             uri.to_file_path()
                                                 .unwrap()
@@ -527,45 +535,61 @@ impl LanguageServer for Backend {
                                                 .to_str()
                                                 .unwrap(),
                                             i
-                                        ),
-                                        out,
-                                    );
-                                });
-
-                                // Generate assertion to make this solution unique
-                                if i < n {
-                                    let mut assertion: Vec<Expr> = vec![];
-                                    values_parsed.into_iter().for_each(
-                                        |(sym, config)| match config {
-                                            ConfigValue::Bool(bool) => {
-                                                assertion.push(Expr::Equal(vec![
-                                                    Expr::Var(
-                                                        smt_module
-                                                            .variables
-                                                            .get_index_of(&sym)
-                                                            .unwrap_or(0),
-                                                    ),
-                                                    Expr::Bool(!bool),
-                                                ]))
+                                        );
+                                        match std::fs::write(path.clone(), out) {
+                                            Err(e) => {
+                                                error!("File System Error for {}: {:?}", path, e);
                                             }
                                             _ => (),
-                                        },
-                                    );
+                                        }
+                                        if !Path::new(path.as_str()).exists() {
+                                            error!("File could not be created: {:?}", path)
+                                        }
+                                    });
 
-                                    let assertion_string = smt_module.assert_to_source(
-                                        0,
-                                        &None,
-                                        &Expr::Or(assertion.clone()),
-                                        false,
-                                    );
-                                    let _ = smt_solver.push(assertion_string).await;
+                                    // Generate assertion to make this solution unique
+                                    if i < n {
+                                        let mut assertion: Vec<Expr> = vec![];
+                                        values_parsed.into_iter().for_each(|(sym, config)| {
+                                            match config {
+                                                ConfigValue::Bool(bool) => {
+                                                    assertion.push(Expr::Equal(vec![
+                                                        Expr::Var(
+                                                            smt_module
+                                                                .variables
+                                                                .get_index_of(&sym)
+                                                                .unwrap_or(0),
+                                                        ),
+                                                        Expr::Bool(!bool),
+                                                    ]))
+                                                }
+                                                _ => (),
+                                            }
+                                        });
+
+                                        let assertion_string = smt_module.assert_to_source(
+                                            0,
+                                            &None,
+                                            &Expr::Or(assertion.clone()),
+                                            false,
+                                        );
+                                        let _ = smt_solver.push(assertion_string).await;
+                                    }
                                 }
                             }
+                            _ => {
+                                self.pipeline.client()
+                                .send_notification::<tower_lsp::lsp_types::notification::ShowMessage>(
+                                    ShowMessageParams {
+                                        typ: MessageType::ERROR,
+                                        message: "No SAT solution for this file".into(),
+                                    },
+                                )
+                                .await;
+                                error!("No SAT solution for this file");
+                            }
                         }
-                        _ => {
-                            info!("No SAT solution for file");
-                        }
-                    },
+                    }
                     _ => (),
                 }
                 return Ok(None);
