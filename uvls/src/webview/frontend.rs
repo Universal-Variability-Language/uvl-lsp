@@ -120,16 +120,14 @@ fn to_number(input: &str) -> String {
 #[inline_props]
 fn RealInput(cx: Scope, init_val: f64, sym: ModuleSymbol, tag: u8) -> Element {
     let tx = use_coroutine_handle::<UIAction>(cx).unwrap();
-    let val = use_state(cx, || init_val.to_string());
     cx.render(rsx! {
         input{
             class:"input-value",
             r#type:"number",
             required:true,
-            value:"{val}",
+            value:"{init_val}",
             oninput:move |e|{
-                val.set(to_number(&e.value));
-                tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(val.parse().unwrap_or(0.0))));
+                tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(e.value.parse().unwrap_or(0.0))));
 
             }
         }
