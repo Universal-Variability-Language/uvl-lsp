@@ -4,7 +4,7 @@
   "description": "VSCode frontend for UVLS",
   "version": "0.0.11",
   "publisher": "caradhras",
-  "icon": "assets/uvls-256.png",
+  "icon": "assets/uvl-logo.PNG",
   "engines": {
     "vscode": "^1.73.0"
   },
@@ -55,7 +55,11 @@
         "extensions": [
           ".uvl"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "dark": "assets/uvl-icon.PNG",
+          "light": "assets/uvl-icon.PNG"
+        }
       }
     ],
     "configuration": {
