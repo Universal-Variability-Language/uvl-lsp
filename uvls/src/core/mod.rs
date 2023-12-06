@@ -1,4 +1,5 @@
-pub mod actions;
+//! This Module Represents the UVL Language Server (LSP) Logic
+
 pub mod ast;
 pub mod cache;
 pub mod check;
@@ -12,7 +13,6 @@ pub mod resolve;
 pub mod semantic;
 
 pub mod util;
-pub use actions::*;
 pub use ast::*;
 pub use cache::*;
 pub use check::*;

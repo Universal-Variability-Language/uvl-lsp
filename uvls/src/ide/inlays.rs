@@ -15,10 +15,10 @@ pub enum InlaySource {
     File(FileID), //Inlays come from a config file
     Web(u64),     //Inlays come from some web instance
 }
-//Inlays are managed as a global token state,
-//there can only be 1 inlay source to keep things simple,
-//inlays are computed asynchronously. Both configurations
-//and webview can provide them as a SMT-Model
+/// Inlays are managed as a global token state,
+/// there can only be 1 inlay source to keep things simple,
+/// inlays are computed asynchronously. Both configurations
+/// and webview can provide them as a SMT-Model
 #[derive(Clone)]
 pub struct InlayHandler {
     source: Arc<Mutex<InlaySource>>,

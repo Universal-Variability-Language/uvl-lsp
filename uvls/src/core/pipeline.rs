@@ -1,3 +1,22 @@
+//! multi-stage compiler, it provides access to files in various compilation stages. Constists of multiple subsystems like: green tree parsing, linking, error reporting, smt checking etc.
+//!
+//! The parsing frontend
+//!
+//! To allow for more nimble and robust parsing, we use 2 stage process to parse 2 different syntax
+//! trees with different grammars:
+//!  - Source code is initially parsed with a very relaxed UVL tree-sitter grammar. This results in a
+//!    loose syntax tree of UVL codefragments. We call this tree the 'green tree'
+//!    it's used for all syntax analysis. Its also very cheap to parse and incremental so it can be
+//!    parsed on every keystroke for syntax highlighting and completion context information.
+//!    Furthermore tree-sitter internal error recovery and temporal parsing provide
+//!    good error corrections in many cases so parsing almost never fails.
+//!  - The green tree is translated into the red tree asynchronously. This second tree follows the UVL
+//!    grammar spec and is used for all semantic analysis. During the translation
+//!    from green to red tree very specific syntax errors can be detected and forwarded to the user.
+//!    All red trees are later linked into a single model (the Root Graph).
+//! Green Trees are stored as Drafts while red trees are stored as an AST-ECS like structure
+//! See https://github.com/rust-lang/rust-analyzer/blob/master/docs/dev/syntax.md for inspiration
+
 use crate::{core::*, ide::inlays::InlayHandler, smt};
 use check::*;
 use dashmap::DashMap;
@@ -19,28 +38,14 @@ use tokio::{
 };
 use tower_lsp::lsp_types::*;
 use util::Result;
-//The parsing frontend
-//To allow for more nimble and robust parsing, we use 2 stage process to parse 2 different syntax
-//trees with different grammars:
-// - Source code is initially parsed with a very relaxed UVL tree-sitter grammar. This results in a
-//   loose syntax tree of UVL codefragments. We call this tree the 'green tree'
-//   it's used for all syntax analysis. Its also very cheap to parse and incremental so it can be
-//   parsed on every keystroke for syntax highlighting and completion context information.
-//   Furthermore tree-sitter internal error recovery and temporal parsing provide
-//   good error corrections in many cases so parsing almost never fails.
-// - The green tree is translated into the red tree asynchronously. This second tree follows the UVL
-//   grammar spec and is used for all semantic analysis. During the translation
-//   from green to red tree very specific syntax errors can be detected and forwarded to the user.
-//   All red trees are later linked into a single model (the Root Graph).
-//Green Trees are stored as Drafts while red trees are stored as an AST-ECS like structure
-//See https://github.com/rust-lang/rust-analyzer/blob/master/docs/dev/syntax.md for inspiration
+
 enum DraftMsg {
     Delete(Instant),
     Update(DidChangeTextDocumentParams, Instant),
     Snapshot(oneshot::Sender<Draft>),
     Shutdown, //Not really needed, TODO remove this
 }
-//Turn a tree-sitter trees into a usable rust structure and send it to the linker
+/// Turn a tree-sitter trees into a usable rust structure and send it to the linker
 async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
     info!("update red tree {uri}");
     match draft {
@@ -69,7 +74,7 @@ async fn make_red_tree(draft: Draft, uri: Url, tx_link: mpsc::Sender<LinkMsg>) {
     }
 }
 
-//Handles update for a single draft and parses it incrementally with tree-sitter
+/// Handles update for a single draft and parses it incrementally with tree-sitter
 async fn draft_handler(
     mut rx: mpsc::UnboundedReceiver<DraftMsg>,
     uri: Url,
@@ -156,7 +161,7 @@ enum LinkMsg {
     UpdateAst(Arc<ast::AstDocument>),
     UpdateConfig(Arc<config::ConfigDocument>),
 }
-//This handler links documents together, it also does type checking
+/// This handler links documents together, it also does type checking
 async fn link_handler(
     mut rx: mpsc::Receiver<LinkMsg>,
     tx_cache: watch::Sender<Arc<RootGraph>>,
@@ -265,7 +270,7 @@ async fn link_handler(
         }
     }
 }
-//All the parsing components and their consumers in a central interface
+/// All the parsing components and their consumers in a central interface
 #[derive(Clone)]
 pub struct AsyncPipeline {
     //latest drafts of all known documents, each draft has its own handler process
@@ -401,7 +406,7 @@ impl AsyncPipeline {
             let _ = state.handler.send(DraftMsg::Update(params, Instant::now()));
         }
     }
-    //Wait for latest draft version
+    /// Wait for latest draft version
     pub async fn snapshot_draft(&self, uri: &Url) -> Result<Option<Draft>> {
         if let Some(state) = self.drafts.get(uri) {
             let (tx, rx) = oneshot::channel();
@@ -411,7 +416,7 @@ impl AsyncPipeline {
             Ok(None)
         }
     }
-    //Wait until uri is found in the linked root graph
+    /// Wait until uri is found in the linked root graph
     pub async fn snapshot_root(&self, uri: &Url) -> Result<Arc<RootGraph>> {
         let time = Instant::now();
         let mut rx = self.rx_root.clone();
@@ -430,7 +435,7 @@ impl AsyncPipeline {
     pub fn root(&self) -> watch::Receiver<Arc<RootGraph>> {
         self.rx_root.clone()
     }
-    //wait until uri newer than timestamp in the root graph
+    /// wait until uri newer than timestamp in the root graph
     pub async fn snapshot_root_sync(
         &self,
         uri: &Url,
@@ -464,7 +469,7 @@ impl AsyncPipeline {
             rx.changed().await?;
         }
     }
-    //wait until ALL parsing is done and root is clean
+    /// wait until ALL parsing is done and root is clean
     pub async fn sync_root_global(&self) -> Result<Arc<RootGraph>> {
         let mut rx = self.rx_root.clone();
         loop {
@@ -482,7 +487,7 @@ impl AsyncPipeline {
             rx.changed().await?;
         }
     }
-    //get latest draft and sync root
+    /// get latest draft and sync root
     pub async fn snapshot(&self, uri: &Url, sync: bool) -> Result<Option<(Draft, Arc<RootGraph>)>> {
         let time = Instant::now();
         if let Some(draft) = self.snapshot_draft(uri).await? {

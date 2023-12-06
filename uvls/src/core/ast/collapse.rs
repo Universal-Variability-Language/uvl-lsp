@@ -1,3 +1,6 @@
+//! Transform a tree-sitter tree into the Ast ECS via recursive decent
+//! While parsing we keep a mutable state to store entities and errors
+
 use crate::core::*;
 use ast::visitor::Visitor;
 use ast::visitor::*;
@@ -19,8 +22,6 @@ impl Collapse {
     }
 }
 
-//Transform a tree-sitter tree into the Ast ECS via recursive decent
-//While parsing we keep a mutable state to store entities and errors
 #[derive(Clone)]
 struct VisitorCollapse<'a> {
     cursor: TreeCursor<'a>,
@@ -55,7 +56,7 @@ impl<'a> VisitorCollapse<'a> {
         });
     }
 
-    //get the current block header
+    /// get the current block header
     fn header(&self) -> Option<Node<'a>> {
         self.node().child_by_field_name("header")
     }
@@ -65,7 +66,7 @@ impl<'a> VisitorCollapse<'a> {
         self.levels[line] = self.current_level;
     }
 
-    // Add ranges based on self.levels vec
+    /// Add ranges based on self.levels vec
     fn calculate_ranges(&mut self) -> () {
         // Skip comments
         let first_nonzero_line = self
@@ -181,8 +182,8 @@ fn visit_top_lvl(collapse: &mut VisitorCollapse) {
         }
     }
 }
-//visits all valid children of a tree-sitter (red tree) recursively to translate them into the
-//Collapse struct
+/// visits all valid children of a tree-sitter (red tree) recursively to translate them into the
+/// Collapse struct
 pub fn visit_root(source: Rope, tree: Tree, uri: Url) -> Collapse {
     let mut c = VisitorCollapse {
         cursor: tree.walk(),

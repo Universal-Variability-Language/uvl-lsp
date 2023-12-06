@@ -1,5 +1,6 @@
-use crate::core::*;
+//! green tree parsing (tree-sitter)
 
+use crate::core::*;
 use log::info;
 use ropey::Rope;
 use std::borrow::Cow;

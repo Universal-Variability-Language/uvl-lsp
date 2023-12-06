@@ -1,3 +1,6 @@
+//! Transform a tree-sitter tree into the Ast ECS via recursive decent
+//! While parsing we keep a mutable state to store entities and errors
+
 use crate::core::*;
 use ast::visitor::Visitor;
 use ast::visitor::*;
@@ -13,8 +16,7 @@ use tokio::time::Instant;
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 use tree_sitter::{Node, Tree, TreeCursor};
 use util::node_range;
-//Transform a tree-sitter tree into the Ast ECS via recursive decent
-//While parsing we keep a mutable state to store entities and errors
+
 #[derive(Clone)]
 struct VisitorState<'a> {
     errors: Vec<ErrorInfo>,
@@ -54,7 +56,7 @@ impl<'a> VisitorState<'a> {
 
         Symbol::Reference(self.ast.references.len() - 1)
     }
-    //create the import tree map and the general search index for name resolution
+    /// create the import tree map and the general search index for name resolution
     fn connect(&mut self) {
         //create the import index inside the radix tree
         for i in self.ast.all_imports() {
@@ -198,15 +200,15 @@ impl<'a> VisitorState<'a> {
             }
         }
     }
-    //Add a child to parent
+    /// Add a child to parent
     fn push_child(&mut self, parent: Symbol, child: Symbol) {
         self.ast.structure.insert(parent, child);
     }
-    //get the current block header
+    /// get the current block header
     fn header(&self) -> Option<Node<'a>> {
         self.node().child_by_field_name("header")
     }
-    //Push an error with location of the current block header
+    /// Push an error with location of the current block header
     fn push_error_blk<T: Into<String>>(&mut self, w: u32, error: T) {
         self.errors.push(ErrorInfo {
             location: node_range(self.header().unwrap(), self.source),
@@ -214,6 +216,21 @@ impl<'a> VisitorState<'a> {
             weight: w,
             msg: error.into(),
             error_type: ErrorType::Any,
+        });
+    }
+    //Push an error with location of the current block header
+    fn push_error_blk_with_quickfix<T: Into<String>>(
+        &mut self,
+        w: u32,
+        error: T,
+        error_type: ErrorType,
+    ) {
+        self.errors.push(ErrorInfo {
+            location: node_range(self.header().unwrap(), self.source),
+            severity: DiagnosticSeverity::ERROR,
+            weight: w,
+            msg: error.into(),
+            error_type,
         });
     }
 }
@@ -266,7 +283,7 @@ fn opt_path(state: &mut VisitorState) -> Option<Path> {
         None
     }
 }
-//Report error if a node has children,cardinality or attributes
+/// Report error if a node has children,cardinality or attributes
 fn check_simple_blk(state: &mut VisitorState, kind: &str) {
     match state.cursor.field_name() {
         Some("cardinality") => state.push_error(30, format!("{} may not have a cardinality", kind)),
@@ -276,7 +293,7 @@ fn check_simple_blk(state: &mut VisitorState, kind: &str) {
     }
 }
 
-//report error if a node has cardinality or attributes
+/// report error if a node has cardinality or attributes
 fn check_no_extra_blk(state: &mut VisitorState, kind: &str) {
     match state.cursor.field_name() {
         Some("cardinality") => state.push_error(30, format!("{} may not have a cardinality", kind)),
@@ -284,7 +301,7 @@ fn check_no_extra_blk(state: &mut VisitorState, kind: &str) {
         _ => {}
     }
 }
-//parse a namespace
+/// parse a namespace
 fn visit_namespace(state: &mut VisitorState) {
     loop {
         check_simple_blk(state, "namespace");
@@ -673,12 +690,13 @@ fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
             LanguageLevelType::Any,
         ),
     } {
-        state.push_error(
+        state.push_error_with_type(
             10,
             format!(
                 "Operation does not correspond includes. Please include {:?}",
                 searched_lang_lvl
             ),
+            ErrorType::WrongLanguageLevel,
         )
     }
 }
@@ -957,7 +975,11 @@ fn opt_attrib_expr(state: &mut VisitorState) -> Option<Value> {
         "bool" => Some(Value::Bool(visit_children(state, opt_bool))),
         "string" => Some(Value::String(opt_string(state)?)),
         "path" => {
-            state.push_error(30, "attribute references are not supported");
+            state.push_error_with_type(
+                30,
+                "attribute references are not supported",
+                ErrorType::ReferenceToString,
+            );
             None
         }
         "binary_expr" | "nested_expr" | "aggregate" | "unary_expr" => {
@@ -1303,7 +1325,7 @@ fn visit_top_lvl(state: &mut VisitorState) {
                     top_level_order.pop();
                 }
                 _ => {
-                    state.push_error_blk(60,"only namspaces, imports, includes, features and constraints are allowed here");
+                    state.push_error_blk_with_quickfix(60,"only namspaces, imports, includes, features and constraints are allowed here", ErrorType::AddIndentation);
                     visit_children(state, visit_features);
                     top_level_order.pop();
                 }
@@ -1347,8 +1369,8 @@ fn visit_top_lvl(state: &mut VisitorState) {
         }
     }
 }
-//visits all valid children of a tree-sitter (green tree) recursively to translate them into the
-//AST(red tree)
+/// visits all valid children of a tree-sitter (green tree) recursively to translate them into the
+/// AST(red tree)
 pub fn visit_root(source: Rope, tree: Tree, uri: Url, timestamp: Instant) -> AstDocument {
     let (ast, errors) = {
         let mut state = VisitorState {

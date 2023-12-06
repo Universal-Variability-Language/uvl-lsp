@@ -18,7 +18,7 @@ impl InstanceID {
         }
     }
 }
-//A ast symbole within a module context
+/// A ast symbole within a module context
 #[derive(Hash, PartialEq, Eq, Debug, Clone, Copy)]
 pub struct ModuleSymbol {
     pub instance: InstanceID,
@@ -30,7 +30,7 @@ impl resolve::AstContainer for HashMap<FileID, Arc<LinkedAstDocument>> {
         &*self[&file].content
     }
 }
-//Depth first iteration
+/// Depth first iteration
 fn iterate_instances<'a>(
     root: FileID,
     files: &'a HashMap<FileID, Arc<LinkedAstDocument>>,
@@ -68,13 +68,14 @@ fn iterate_instances<'a>(
     })
 }
 
-//An actual instance of a root file with all subfiles
-//A module is basically a depth first iteration of all features and recusive sub file contents
-//Each import statement creates a new instance of some ast file. So features and attributes can
-//exist multiple times in diffrent instances. This struct allows for easy instance iteration and
-//resolution. Since references in diffrent instances have diffrent resolutions, we currently
-//reresolve references to non local symbols, TODO this can be avoided using a static instance
-//encoding scheme?.
+/// An actual instance of a root file with all subfiles
+///
+/// A module is basically a depth first iteration of all features and recusive sub file contents
+/// Each import statement creates a new instance of some ast file. So features and attributes can
+/// exist multiple times in diffrent instances. This struct allows for easy instance iteration and
+/// resolution. Since references in diffrent instances have diffrent resolutions, we currently
+/// reresolve references to non local symbols, TODO this can be avoided using a static instance
+/// encoding scheme?.
 #[derive(Debug, Clone)]
 pub struct Module {
     instance_files: Vec<FileID>,
@@ -127,7 +128,7 @@ impl Module {
             }
         }
     }
-    //Resolves references inside this module
+    /// Resolves references inside this module
     pub fn resolve_value(&self, src_sym: ModuleSymbol) -> ModuleSymbol {
         assert!(self.ok);
         match src_sym.sym {
@@ -167,8 +168,8 @@ impl Module {
             _ => panic!("{src_sym:?} not a value"),
         }
     }
-    // Bind a recursive configuration doc to a linear set of symbols
-    // Add layer for cardinality
+    /// Bind a recursive configuration doc to a linear set of symbols
+    /// Add layer for cardinality
     pub fn resolve_config<E: FnMut(Span, String)>(
         &self,
         doc: &Vec<ConfigEntry>,
@@ -301,7 +302,7 @@ impl Module {
             .type_of(sym.sym)
             .unwrap()
     }
-    //Visit all instances in the module
+    /// Visit all instances in the module
     pub fn instances<'a>(&'a self) -> impl Iterator<Item = (InstanceID, &'a AstDocument)> {
         assert!(self.ok);
         self.instance_files
@@ -317,7 +318,7 @@ impl Module {
             .map(|(origin, i, file, depth)| (origin, i, &*self.files[&file].content, depth))
     }
 }
-//Configuration with a module and resolved configuration symboles
+/// Configuration with a module and resolved configuration symboles
 #[derive(Debug, Clone)]
 pub struct ConfigModule {
     pub module: Arc<Module>,
@@ -345,7 +346,7 @@ impl ConfigModule {
         )
     }
 
-    // serialize file recursive while accommodate for cardinality
+    /// serialize file recursive while accommodate for cardinality
     fn serialize_rec_file(
         &self,
         sym: Symbol,
@@ -436,8 +437,8 @@ impl ConfigModule {
         return entries;
     }
 
-    //Turns a the set of linear configuration values of this module into theire recusive from
-    //used in json
+    /// Turns a the set of linear configuration values of this module into theire recusive from
+    /// used in json
     pub fn serialize(&self) -> Vec<ConfigEntry> {
         let ConfigEntry::Import(_, v) = self.serialize_rec(&[], InstanceID(0)) else {
             unreachable!()
