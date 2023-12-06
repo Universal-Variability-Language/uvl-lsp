@@ -4,8 +4,7 @@
 ## Getting started
 
 ### Docs
-### <span style="color: #FF0000">TODO!!!! CHANGE DOC LINK</span>
-Basic Documentation for the Codebase: [Docs](https://pascalfoerster.github.io/uvl-lsp/uvls)
+Basic Documentation for the Codebase: [Docs](https://universal-variability-language.github.io/uvl-lsp/uvls/)
 ### Build
 - Requirements
     - Rust 1.65+
