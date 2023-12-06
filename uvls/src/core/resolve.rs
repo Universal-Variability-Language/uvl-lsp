@@ -329,11 +329,12 @@ fn resolve_constraint(
                         || {let s: Vec<Symbol> = ast_document.all_lang_lvls().collect(); s.is_empty()}
                 }
             {
-                err.span(
+                err.span_type(
                     constraint.span.clone(),
                     file,
                     30,
-                    format!("Need to include TYPE-level.string-constraints"),
+                    format!("Operation does not correspond includes. Please include Type([StringConstraints])"),
+                    ErrorType::WrongLanguageLevel,
                 );
             }
             if ty.is_empty() {

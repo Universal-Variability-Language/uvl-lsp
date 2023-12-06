@@ -461,6 +461,33 @@ impl<'a> ErrorsAcc<'a> {
         );
     }
 
+    pub fn span_type<S: Into<String>>(
+        &mut self,
+        span: Span,
+        file: FileID,
+        weight: u32,
+        s: S,
+        error_type: ErrorType,
+    ) {
+        let source = self
+            .configs
+            .get(&file)
+            .map(|i| &i.source)
+            .or_else(|| self.files.get(&file).map(|i| &i.source))
+            .unwrap();
+        insert_multi(
+            &mut self.errors,
+            file,
+            ErrorInfo {
+                location: lsp_range(span, &source).unwrap(),
+                severity: DiagnosticSeverity::ERROR,
+                weight,
+                msg: s.into(),
+                error_type: error_type,
+            },
+        );
+    }
+
     pub fn span_info<S: Into<String>>(&mut self, span: Span, file: FileID, weight: u32, s: S) {
         let source = self
             .configs
