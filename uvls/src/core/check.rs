@@ -2,23 +2,33 @@ use crate::core::*;
 use ast::insert_multi;
 use hashbrown::HashMap;
 use log::info;
+use regex::Regex;
 use ropey::Rope;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tower_lsp::Client;
 use tree_sitter::{Node, QueryCursor, Tree};
+use unicode_segmentation::UnicodeSegmentation;
 
 // This type is used to provide quickactions for a error
 #[derive(Clone, Debug, PartialEq)]
 pub enum ErrorType {
     Any = 0,
     FeatureNameContainsDashes,
+    ReferenceToString,
+    AddIndentation,
+    StartsWithNumber,
+    WrongLanguageLevel,
 }
 
 impl ErrorType {
     pub fn from_u32(value: u32) -> ErrorType {
         match value {
+            5 => ErrorType::WrongLanguageLevel,
+            4 => ErrorType::StartsWithNumber,
+            3 => ErrorType::AddIndentation,
+            2 => ErrorType::ReferenceToString,
             1 => ErrorType::FeatureNameContainsDashes,
             _ => ErrorType::Any,
         }
@@ -161,13 +171,46 @@ pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
                 });
             }
             if lines.insert(node.start_position().row, node).is_some() {
-                error.push(ErrorInfo {
-                    weight: 100,
-                    location: node_range(node, source),
-                    severity: DiagnosticSeverity::ERROR,
-                    msg: "features have to be in different lines".to_string(),
-                    error_type: ErrorType::Any,
-                });
+                let re = Regex::new(r"^\d\S*$").unwrap();
+                let line = source
+                    .get_line(node.start_position().row)
+                    .unwrap()
+                    .to_string()
+                    .trim()
+                    .to_owned();
+                if re.is_match(&line) {
+                    error.push(ErrorInfo {
+                        weight: 100,
+                        location: Range::new(
+                            Position {
+                                line: node.start_position().row as u32,
+                                character: (node.start_position().column
+                                    - (line.len()
+                                        - source
+                                            .byte_slice(node.byte_range())
+                                            .as_str()
+                                            .unwrap()
+                                            .len()))
+                                    as u32,
+                            },
+                            Position {
+                                line: node.end_position().row as u32,
+                                character: node.end_position().column as u32,
+                            },
+                        ),
+                        severity: DiagnosticSeverity::ERROR,
+                        msg: "features are not allowed to start with a number".to_string(),
+                        error_type: ErrorType::StartsWithNumber,
+                    });
+                } else {
+                    error.push(ErrorInfo {
+                        weight: 100,
+                        location: node_range(node, source),
+                        severity: DiagnosticSeverity::ERROR,
+                        msg: "features have to be in different lines".to_string(),
+                        error_type: ErrorType::Any,
+                    });
+                }
             }
         } else {
             //check name or string since quoted names allow line breaks in ts but should not
@@ -210,6 +253,43 @@ pub fn classify_error(root: Node, source: &Rope) -> ErrorInfo {
                 error_type: ErrorType::Any,
             };
         }
+    }
+    if Regex::new(r"^\d+")
+        .unwrap()
+        .is_match(err_source.as_str().unwrap_or(""))
+    {
+        let source_uvl = source
+            .get_line(root.start_position().row)
+            .unwrap()
+            .to_string()
+            .replace("\n", " ");
+        let line = source_uvl
+            .trim()
+            .split(" ")
+            .filter(|s| s.len() > 0)
+            .collect::<Vec<&str>>();
+        let name = match line.first().unwrap_or(&"") {
+            &"Real" | &"String" | &"Boolean" | &"Integer" => line[1].to_string(),
+            _ => line.first().unwrap_or(&"").to_string(),
+        };
+        let offset = source_uvl.find(&name).unwrap_or(0);
+
+        return ErrorInfo {
+            location: Range {
+                start: Position {
+                    line: root.start_position().row as u32,
+                    character: offset as u32,
+                },
+                end: Position {
+                    line: root.start_position().row as u32,
+                    character: offset as u32 + name.graphemes(true).count() as u32,
+                },
+            },
+            severity: DiagnosticSeverity::ERROR,
+            weight: 100,
+            msg: "features are not allowed to start with a number here".into(),
+            error_type: ErrorType::StartsWithNumber,
+        };
     }
     ErrorInfo {
         location: node_range(root, source),
@@ -327,6 +407,27 @@ impl<'a> ErrorsAcc<'a> {
         );
     }
 
+    pub fn sym_with_type<S: Into<String>>(
+        &mut self,
+        sym: Symbol,
+        file: FileID,
+        weight: u32,
+        s: S,
+        error_type: ErrorType,
+    ) {
+        insert_multi(
+            &mut self.errors,
+            file,
+            ErrorInfo {
+                location: self.files[&file].lsp_range(sym).unwrap(),
+                severity: DiagnosticSeverity::ERROR,
+                weight,
+                msg: s.into(),
+                error_type,
+            },
+        );
+    }
+
     pub fn sym_info<S: Into<String>>(&mut self, sym: Symbol, file: FileID, weight: u32, s: S) {
         insert_multi(
             &mut self.errors,
@@ -356,6 +457,33 @@ impl<'a> ErrorsAcc<'a> {
                 weight,
                 msg: s.into(),
                 error_type: ErrorType::Any,
+            },
+        );
+    }
+
+    pub fn span_type<S: Into<String>>(
+        &mut self,
+        span: Span,
+        file: FileID,
+        weight: u32,
+        s: S,
+        error_type: ErrorType,
+    ) {
+        let source = self
+            .configs
+            .get(&file)
+            .map(|i| &i.source)
+            .or_else(|| self.files.get(&file).map(|i| &i.source))
+            .unwrap();
+        insert_multi(
+            &mut self.errors,
+            file,
+            ErrorInfo {
+                location: lsp_range(span, &source).unwrap(),
+                severity: DiagnosticSeverity::ERROR,
+                weight,
+                msg: s.into(),
+                error_type: error_type,
             },
         );
     }

@@ -216,6 +216,21 @@ impl<'a> VisitorState<'a> {
             error_type: ErrorType::Any,
         });
     }
+    //Push an error with location of the current block header
+    fn push_error_blk_with_quickfix<T: Into<String>>(
+        &mut self,
+        w: u32,
+        error: T,
+        error_type: ErrorType,
+    ) {
+        self.errors.push(ErrorInfo {
+            location: node_range(self.header().unwrap(), self.source),
+            severity: DiagnosticSeverity::ERROR,
+            weight: w,
+            msg: error.into(),
+            error_type,
+        });
+    }
 }
 impl<'b> SymbolSlice for VisitorState<'b> {
     fn slice_raw(&self, node: Span) -> Cow<'_, str> {
@@ -673,12 +688,13 @@ fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
             LanguageLevelType::Any,
         ),
     } {
-        state.push_error(
+        state.push_error_with_type(
             10,
             format!(
                 "Operation does not correspond includes. Please include {:?}",
                 searched_lang_lvl
             ),
+            ErrorType::WrongLanguageLevel,
         )
     }
 }
@@ -957,7 +973,11 @@ fn opt_attrib_expr(state: &mut VisitorState) -> Option<Value> {
         "bool" => Some(Value::Bool(visit_children(state, opt_bool))),
         "string" => Some(Value::String(opt_string(state)?)),
         "path" => {
-            state.push_error(30, "attribute references are not supported");
+            state.push_error_with_type(
+                30,
+                "attribute references are not supported",
+                ErrorType::ReferenceToString,
+            );
             None
         }
         "binary_expr" | "nested_expr" | "aggregate" | "unary_expr" => {
@@ -1303,7 +1323,7 @@ fn visit_top_lvl(state: &mut VisitorState) {
                     top_level_order.pop();
                 }
                 _ => {
-                    state.push_error_blk(60,"only namspaces, imports, includes, features and constraints are allowed here");
+                    state.push_error_blk_with_quickfix(60,"only namspaces, imports, includes, features and constraints are allowed here", ErrorType::AddIndentation);
                     visit_children(state, visit_features);
                     top_level_order.pop();
                 }

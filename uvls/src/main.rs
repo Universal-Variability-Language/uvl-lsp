@@ -700,6 +700,34 @@ impl LanguageServer for Backend {
                                 self.snapshot(&params.text_document.uri, false).await,
                             )
                         }
+                        ErrorType::ReferenceToString => {
+                            return actions::reference_to_string(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
+                        ErrorType::AddIndentation => {
+                            return actions::add_indentation(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
+                        ErrorType::StartsWithNumber => {
+                            return actions::starts_with_number(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
+                        ErrorType::WrongLanguageLevel => {
+                            return actions::add_language_level(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            );
+                        }
                     }
                 }
                 _ => (),

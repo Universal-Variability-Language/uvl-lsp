@@ -259,7 +259,13 @@ fn resolve_constraint(
             }
             match state {
                 ResolveState::Unresolved => {
-                    err.sym(*sym, file, 30, "unresolved reference");
+                    err.sym_with_type(
+                        *sym,
+                        file,
+                        30,
+                        "unresolved reference",
+                        ErrorType::ReferenceToString,
+                    );
                 }
                 ResolveState::WrongType { expected, found } => {
                     err.sym(
@@ -323,11 +329,12 @@ fn resolve_constraint(
                         || {let s: Vec<Symbol> = ast_document.all_lang_lvls().collect(); s.is_empty()}
                 }
             {
-                err.span(
+                err.span_type(
                     constraint.span.clone(),
                     file,
                     30,
-                    format!("Need to include TYPE-level.string-constraints"),
+                    format!("Operation does not correspond includes. Please include Type([StringConstraints])"),
+                    ErrorType::WrongLanguageLevel,
                 );
             }
             if ty.is_empty() {
@@ -457,7 +464,13 @@ fn gather_expr_options(
                 .map(|i| ctx.type_of(i).unwrap())
                 .fold(BitFlags::default(), |acc, i: Type| acc | i);
             if ty.is_empty() {
-                err.sym(*sym, file, 30, "unresolved reference");
+                err.sym_with_type(
+                    *sym,
+                    file,
+                    30,
+                    "unresolved reference",
+                    ErrorType::ReferenceToString,
+                );
             }
             ty
         }
