@@ -1,3 +1,17 @@
+//! Implements the semantic analysis using Z3
+//!
+//! SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
+//! While the performance is worse than linking with Z3, we are solver independent and don't have to interact
+//! with any C-Bindings. UVL is translated directly into SMT-LIB, both attributes and features are treated as
+//! free variables. The rest is encoded in named asserts, this allows to get a accurate unsat core.
+//! Eg. each attribute is restricted with an assert that allows it to either be its defined value or 0 depending
+//! on the parent feature value.
+//! Using functions might be more efficient, but this way we can reconfigure and detect if
+//! an attribute value contributes to the unsat core.
+//! Variables are named as v{n} where n is an index into a lookup table of UVL ModuleSymbols
+//! Asserts are encoded similarly as a{n} where n is and index into a list of naming information
+//! that links uvl expression to asserts.
+
 use crate::{
     core::*,
     ide::inlays::{InlayHandler, InlaySource},
@@ -29,17 +43,9 @@ mod parse;
 pub mod smt_lib;
 pub use smt_lib::*;
 
-//SMT semantic analysis with Z3, communication with the solver happens over stdio and SMT-LIB2.
-//While the performance is worse than linking with Z3, we are solver independent and don't have to interact
-//with any C-Bindings. UVL is translated directly into SMT-LIB, both attributes and features are treated as
-//free variables. The rest is encoded in named asserts, this allows to get a accurate unsat core.
-//Eg. each attribute is restricted with an assert that allows it to either be its defined value or 0 depending
-//on the parent feature value.
-//Using functions might be more efficient, but this way we can reconfigure and detect if
-//an attribute value contributes to the unsat core.
-//Variables are named as v{n} where n is an index into a lookup table of UVL ModuleSymbols
-//Asserts are encoded similarly as a{n} where n is and index into a list of naming information
-//that links uvl expression to asserts.
+/// Z3 process interface(over stdio)
+///
+/// A wrapper providing functions to interact with Z3.
 pub struct SmtSolver {
     _proc: Child,
     stdin: BufWriter<ChildStdin>,
@@ -76,6 +82,7 @@ impl SmtSolver {
         })
     }
 
+    /// returns the output of Z3
     pub async fn read_block(&mut self) -> Result<String> {
         let mut out = String::new();
         let mut nesting = 0;
@@ -94,6 +101,8 @@ impl SmtSolver {
         }
         Ok(out)
     }
+
+    /// checks if the current configuration loaded to Z3 is still SAT Solvable
     pub async fn check_sat(&mut self) -> Result<bool> {
         self.stdin.write_all("(check-sat)\n".as_bytes()).await?;
         self.stdin.flush().await?;
@@ -113,18 +122,21 @@ impl SmtSolver {
         self.stdin.flush().await?;
         self.read_block().await
     }
+    /// Pushes new content to the Z3 Solver
     pub async fn push(&mut self, cmd: String) -> Result<()> {
         self.stdin.write_all(cmd.as_bytes()).await?;
         self.stdin.flush().await?;
         Ok(())
     }
 
+    /// **If SAT (must be checked beforehand)** this function returns a valid model
     #[allow(dead_code)]
     pub async fn model(&mut self) -> Result<String> {
         self.stdin.write_all(b"(get-model)\n").await?;
         self.stdin.flush().await?;
         self.read_block().await
     }
+    /// **If SAT (must be checked beforehand)** this function returns the values for the requested variables
     pub async fn values(&mut self, active: String) -> Result<String> {
         if active.is_empty() {
             return Ok(String::new());
@@ -135,6 +147,10 @@ impl SmtSolver {
         self.read_block().await
     }
 }
+
+/// This function is a helper function which checks if a LSP can run z3.
+///
+/// This mainly focuses on self compiled LSPs
 pub fn can_run_z3() -> bool {
     Command::new("z3")
         .stdin(std::process::Stdio::piped())
@@ -145,6 +161,7 @@ pub fn can_run_z3() -> bool {
 }
 
 lazy_static! {
+    /// A static reference wether a client has z3 installed
     static ref HAS_Z3: bool = can_run_z3();
 }
 
@@ -155,6 +172,7 @@ pub enum SMTValueState {
     Off,
 }
 #[derive(Debug, Clone)]
+/// This stores the Z3 solution
 pub enum SMTModel {
     SAT {
         values: HashMap<ModuleSymbol, ConfigValue>,
@@ -176,7 +194,7 @@ impl Default for SMTModel {
         }
     }
 }
-//find constant boolean values for dead features and other cool analysis
+/// find constant boolean values for dead features and other cool analysis
 //this is quite naive and should be improved with a better solver
 async fn find_fixed(
     solve: &mut SmtSolver,
@@ -277,6 +295,8 @@ async fn find_fixed(
 
     Ok(state)
 }
+
+/// Creator for SMTModel
 async fn create_model(
     base_module: &Module,
     cancel: CancellationToken,
@@ -328,6 +348,7 @@ async fn create_model(
     }
 }
 
+/// This function checks the SAT Level of a FileID
 async fn check_base_sat(
     root: &RootGraph,
     tx_err: &mpsc::Sender<DiagnosticUpdate>,
@@ -439,6 +460,7 @@ async fn check_base_sat(
         .collect()
 }
 
+/// checks if config is SAT Solvable
 async fn check_config(
     root: &RootGraph,
     tx_err: &mpsc::Sender<DiagnosticUpdate>,
@@ -567,6 +589,7 @@ pub async fn check_handler(
         }
     }
 }
+/// runs smt-analysis on configurations.
 pub async fn web_view_handler(
     mut state: watch::Receiver<webview::ConfigSource>,
     tx_ui: mpsc::Sender<webview::UIAction>,

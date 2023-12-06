@@ -11,7 +11,7 @@ use tower_lsp::Client;
 use tree_sitter::{Node, QueryCursor, Tree};
 use unicode_segmentation::UnicodeSegmentation;
 
-// This type is used to provide quickactions for a error
+/// This type is used to provide quickactions for a error
 #[derive(Clone, Debug, PartialEq)]
 pub enum ErrorType {
     Any = 0,
@@ -63,6 +63,7 @@ impl ErrorInfo {
         }
     }
 }
+/// Publishes all collected errors and infos to the IDE
 pub async fn publish(client: &Client, uri: &Url, err: &[ErrorInfo]) {
     // reduces cardinality error to one error
     let mut reduced_err = vec![];
@@ -88,7 +89,7 @@ pub async fn publish(client: &Client, uri: &Url, err: &[ErrorInfo]) {
         client.publish_diagnostics(uri.clone(), vec![], None).await;
     }
 }
-//Walk the syntax tree and only go "down" if F is true
+//W/ alk the syntax tree and only go "down" if F is true
 fn ts_filterd_visit<F: FnMut(Node) -> bool>(root: Node, mut f: F) {
     let mut reached_root = false;
     let mut cursor = root.walk();
@@ -117,9 +118,10 @@ fn ts_filterd_visit<F: FnMut(Node) -> bool>(root: Node, mut f: F) {
         }
     }
 }
-//Check if line breaks are correct eg. inside parenthesis
-//This is necessary because the treesitter grammer allows 2 features on the same line under certain
-//conditions.
+/// Check if line breaks are correct eg. inside parenthesis
+///
+/// This is necessary because the treesitter grammer allows 2 features on the same line under certain
+/// conditions.
 pub fn check_sanity(tree: &Tree, source: &Rope) -> Vec<ErrorInfo> {
     let time = Instant::now();
     let mut cursor = QueryCursor::new();
@@ -373,7 +375,7 @@ pub async fn diagnostic_handler(mut rx: mpsc::Receiver<DiagnosticUpdate>, client
 pub fn check_includes(_doc: &AstDocument) -> Vec<ErrorInfo> {
     Default::default()
 }
-//Used to gather errors in compiler stages
+/// Used to gather errors in compiler stages
 pub struct ErrorsAcc<'a> {
     pub errors: HashMap<FileID, Vec<ErrorInfo>>,
     pub files: &'a AstFiles,

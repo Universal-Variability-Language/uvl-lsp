@@ -1,3 +1,5 @@
+//! Contains a central struct RootGraph. This struct includes the latest linked uvl and config files, it can be thought of as a snapshot of all related documents. It can be accessed through the pipeline.
+
 use crate::core::*;
 
 use hashbrown::{HashMap, HashSet};
@@ -62,7 +64,7 @@ impl std::fmt::Display for RootSymbol {
         )
     }
 }
-//A fully linked version of all files, computed asynchronously
+/// A fully linked version of all files, computed asynchronously
 #[derive(Debug, Clone, Default)]
 pub struct RootGraph {
     cache: Cache,
@@ -131,8 +133,8 @@ impl RootGraph {
     pub fn revision(&self) -> u64 {
         self.revision
     }
-    //find all symbols from origin under path, also keep track
-    //of which sections of the search path are bound to which symbols
+    /// find all symbols from origin under path, also keep track
+    /// of which sections of the search path are bound to which symbols
     pub fn resolve_with_binding<'a>(
         &'a self,
         origin: FileID,
@@ -140,7 +142,7 @@ impl RootGraph {
     ) -> impl Iterator<Item = Vec<(RootSymbol, usize)>> + 'a {
         resolve::resolve_with_bind(&self.files, &self.cache.fs, origin, path)
     }
-    //find all attributes from origin under context, useful for aggregates
+    /// find all attributes from origin under context, useful for aggregates
     pub fn resolve_attributes<'a, F: FnMut(RootSymbol, &[Ustr])>(
         &'a self,
         origin: FileID,

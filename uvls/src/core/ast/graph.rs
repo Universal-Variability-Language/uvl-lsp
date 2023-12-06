@@ -1,4 +1,5 @@
-use std::borrow::{Borrow, Cow};
+//! Transform a tree-sitter tree into the Ast ECS via recursive decent
+//! While parsing we keep a mutable state to store entities and errors
 
 use crate::core::*;
 use ast::visitor::Visitor;
@@ -7,6 +8,7 @@ use check::ErrorInfo;
 use html_escape::encode_text;
 use parse::*;
 use ropey::Rope;
+use std::borrow::{Borrow, Cow};
 use tower_lsp::lsp_types::Url;
 use tree_sitter::{Node, Tree, TreeCursor};
 
@@ -61,8 +63,6 @@ impl Default for GraphNode {
     }
 }
 
-//Transform a tree-sitter tree into the Ast ECS via recursive decent
-//While parsing we keep a mutable state to store entities and errors
 #[derive(Clone)]
 struct VisitorGraph<'a> {
     cursor: TreeCursor<'a>,
@@ -84,7 +84,7 @@ impl<'a> Visitor<'a> for VisitorGraph<'a> {
 }
 
 impl<'a> VisitorGraph<'a> {
-    // Generate Graph Code:
+    /// Generate Graph Code:
 
     fn begin(&mut self) {
         self.dot.push_str(&"digraph FeatureModel {\nrankdir=\"TB\"\nnewrank=true\nnode [style=filled fontname=\"Arial Unicode MS, Arial\"];\n\n".to_string());
@@ -205,7 +205,7 @@ impl<'b> SymbolSlice for VisitorGraph<'b> {
     }
 }
 
-//parse a namespace
+/// parse a namespace
 fn visit_namespace(graph: &mut VisitorGraph) {
     loop {
         if graph.kind() == "namespace" {
@@ -317,7 +317,7 @@ fn opt_int(node: Node, state: &mut VisitorGraph) -> Option<usize> {
         None
     }
 }
-// returns cardinality for Node
+/// returns cardinality for Node
 fn opt_cardinality(node: Node, state: &mut VisitorGraph) -> Option<Cardinality> {
     let begin = node.child_by_field_name("begin");
     let end = node.child_by_field_name("end");

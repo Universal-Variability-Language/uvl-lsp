@@ -1,8 +1,12 @@
+//! This Module is used for frontend rendering
+//!
+//! It provides multiple helper functions which convert into *Elements* to display
+
 #![allow(non_snake_case)]
 use crate::ast::Type;
 use crate::module::ModuleSymbol;
 use crate::webview::*;
-//Render UVL content to HTML
+/// Render UVL content to HTML
 fn Spinner(cx: Scope) -> Element {
     cx.render(rsx! {
     svg{
@@ -24,6 +28,7 @@ fn Spinner(cx: Scope) -> Element {
 
     }})
 }
+/// returns the requested Icon Element to display in the frontend
 //Icons taken from https://heroicons.com/ as SVG
 #[inline_props]
 fn Icon(cx: Scope, icon: Icon, class: Option<&'static str>) -> Element {

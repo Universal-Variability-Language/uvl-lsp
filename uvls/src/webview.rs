@@ -1,3 +1,19 @@
+//! This web interface allows simple configuration of uvl models within the sever.
+//!
+//! The GUI is written as a html-over-wire liveview, via dioxus. The liveview can then be
+//! accessed directly in vs-code or the native browser. Each server instance has its own localhost
+//! TCP port {p}, configuration is possible over two different entries:
+//! localhost:{p}/create/{uvl_base_file} - Create an empty config from a uvl base file
+//! localhost:{p}/load/{uvl_config_file} - Load a configuration from a json file
+//!
+//!
+//! The actual GUI is implemented as redux style asynchronous event loop. This is
+//! mainly due to the fact that its simple and requires minimal state management.
+//! Currently the whole tree is redrawn when a value changes since there is only one global
+//! configuration and tree state. This should be separated.
+//! To synchronize the webview with the rest of the server two handlers are used:
+//! ui_sync and smt::web_view_handler. The first detects file changes and rebuilds the target module,
+//! the second handler calculates new smt values when things change.
 use crate::{
     core::*,
     ide,
@@ -25,23 +41,8 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use ustr::Ustr;
 mod frontend;
-/* This web interface allows simple configuration of uvl models within the sever.
-The GUI is written as a html-over-wire liveview, via dioxus. The liveview can then be
-accessed directly in vs-code or the native browser. Each server instance has its own localhost
-TCP port {p}, configuration is possible over two different entries:
-localhost:{p}/create/{uvl_base_file} - Create an empty config from a uvl base file
-localhost:{p}/load/{uvl_config_file} - Load a configuration from a json file
 
-
-The actual GUI is implemented as redux style asynchronous event loop. This is
-mainly due to the fact that its simple and requires minimal state management.
-Currently the whole tree is redrawn when a value changes since there is only one global
-configuration and tree state. This should be separated.
-To synchronize the webview with the rest of the server two handlers are used:
-ui_sync and smt::web_view_handler. The first detects file changes and rebuilds the target module,
-the second handler calculates new smt values when things change.
-*/
-
+/// This Enum stores the different Item types for the configuration View
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum Icon {
     File,
@@ -56,6 +57,8 @@ pub enum Icon {
     CirclePlus,
     Link,
 }
+
+/// Different State for the UVL File displayed in the configuration
 #[derive(Clone, Debug)]
 pub enum SatState {
     UNKNOWN,
@@ -64,6 +67,13 @@ pub enum SatState {
     ERR(String),
 }
 
+/// Data structure to store and display the different elements of UVL in the configuration
+///
+/// - Attributes
+/// - File
+/// - Feature
+/// - Attribute
+/// - Link
 #[derive(Debug, Clone, PartialEq)]
 pub enum UIEntryValue {
     Attributes(Ustr),
@@ -94,10 +104,14 @@ pub enum UIEntryValue {
     },
 }
 
+/// This struct represents a entry in the UVL configuration.
+///
+/// - *depth* decides how far the line should be indented (For nesting)
+/// - *open* decides if this nested parent is extended (children are visible) or closed
+/// - *value* is the actual entry for the element
 #[derive(Debug, Clone, PartialEq)]
 pub struct UIEntry {
     pub depth: u32,
-
     pub open: bool,
     pub value: UIEntryValue,
 }
@@ -136,6 +150,13 @@ impl UIEntry {
     }
 }
 
+/// The UIConfigState stores the frontend entries inside the entries variable and thus can be used to render the frontend
+#[derive(Debug, Clone, Default)]
+pub struct UIConfigState {
+    pub entries: IndexMap<ModuleSymbol, UIEntry>,
+    pub tag: u8,
+}
+
 impl UIConfigState {
     fn unfold(&mut self) {
         let mut is_open = HashSet::new();
@@ -147,12 +168,7 @@ impl UIConfigState {
         }
     }
 }
-#[derive(Debug, Clone, Default)]
-pub struct UIConfigState {
-    pub entries: IndexMap<ModuleSymbol, UIEntry>,
-    pub tag: u8,
-}
-
+/// This stores the state of the configurator of a UVL file.
 #[derive(Debug, Clone)]
 pub struct UIState {
     pub sat: SatState,
@@ -162,6 +178,8 @@ pub struct UIState {
     pub file_name: String,
     pub show: bool,
 }
+
+/// The UVL file source for the configuration
 pub struct ConfigSource {
     pub root: FileID,
     pub module: ConfigModule,
@@ -170,6 +188,7 @@ pub struct ConfigSource {
     pub ok: bool,
 }
 
+/// The different UI Actions executable by the user from the frontend and by some backend tasks
 #[derive(Debug, Clone)]
 pub enum UIAction {
     TreeDirty,
@@ -211,6 +230,7 @@ impl PartialEq for AppProps {
     }
 }
 
+/// goes through the UVL file and stores each entry accordingly in the provided *entries* variable
 fn create_file_tree(
     file: &AstDocument,
     module: &Module,
@@ -382,7 +402,7 @@ fn rebuild_tree(source: &ConfigSource) -> Option<UIConfigState> {
     })
 }
 
-//Keeps the UI in sync with its context
+/// Keeps the UI in sync with its context
 async fn ui_sync(
     pipeline: AsyncPipeline,
     tx_sync: mpsc::Sender<UIAction>,
@@ -434,7 +454,7 @@ fn rebuild_config(
         }
     });
 }
-//Transfer state from with a new module
+/// Transfer state from with a new module
 fn transfer_config(source: &mut ConfigSource, new: Arc<Module>) {
     if !new.ok {
         source.ok = false;
@@ -447,7 +467,16 @@ fn transfer_config(source: &mut ConfigSource, new: Arc<Module>) {
     source.ok = true;
 }
 
-//redux style state management
+/// redux style state management
+///
+/// - *id*
+/// - *tx_config* The current configuration
+/// - *rx_ui* Incoming events from the ui
+/// - *rx_sync* Incoming events from the server
+/// - *ui_config* Displayed configuration tree
+/// - *ui_state* Displayed meta parameters
+/// - *pipeline*
+/// - *tgt_path*
 async fn ui_event_loop(
     id: u64,
     tx_config: watch::Sender<ConfigSource>, //The current configuration
@@ -731,7 +760,7 @@ async fn ui_event_loop(
     info!("exit event");
     Ok(())
 }
-//UI coroutine handles all state managment and creation
+/// UI coroutine handles all state managment and creation
 pub async fn ui_main(
     id: u64,
     pipeline: AsyncPipeline,
@@ -820,7 +849,7 @@ pub async fn ui_main(
     info!("exit main");
     Ok(())
 }
-//HTTP server for the configuration interface
+/// HTTP server for the configuration interface
 pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
     info!("Starting web handler");
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
