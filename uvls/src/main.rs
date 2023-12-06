@@ -542,9 +542,6 @@ impl LanguageServer for Backend {
                                             }
                                             _ => (),
                                         }
-                                        if !Path::new(path.as_str()).exists() {
-                                            error!("File could not be created: {:?}", path)
-                                        }
                                     });
 
                                     // Generate assertion to make this solution unique
