@@ -600,7 +600,7 @@ fn visit_ref(graph: &mut VisitorGraph, _: &mut GraphNode, _: Path) {
         }
     }
 }
-fn visit_group(graph: &mut VisitorGraph, mut parent: &mut GraphNode, mode: GroupMode) {
+fn visit_group(graph: &mut VisitorGraph, parent: &mut GraphNode, mode: GroupMode) {
     //let sym = Symbol::Group(graph.ast.groups.len());
     //graph.push_child(parent, sym);
     parent.group_mode = Some(mode);

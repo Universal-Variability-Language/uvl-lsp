@@ -125,16 +125,14 @@ fn to_number(input: &str) -> String {
 #[inline_props]
 fn RealInput(cx: Scope, init_val: f64, sym: ModuleSymbol, tag: u8) -> Element {
     let tx = use_coroutine_handle::<UIAction>(cx).unwrap();
-    let val = use_state(cx, || init_val.to_string());
     cx.render(rsx! {
         input{
             class:"input-value",
             r#type:"number",
             required:true,
-            value:"{val}",
+            value:"{init_val}",
             oninput:move |e|{
-                val.set(to_number(&e.value));
-                tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(val.parse().unwrap_or(0.0))));
+                tx.send(UIAction::Set(*sym,*tag,ConfigValue::Number(e.value.parse().unwrap_or(0.0))));
 
             }
         }
@@ -515,32 +513,55 @@ pub fn App(cx: Scope<AppProps>) -> Element {
                             input{
                                 r#type:"text",
                                 value:"{state_lock.file_name}",
+                                title: "Enter the file name of the configuration to save",
                                 oninput: |e|{
                                     state.with_mut(|state|state.file_name = e.value.clone())
-                                }
-
+                                },
                             }
                         }
                         li{
                             "SAT State: "
                             a{
+                                title: "Current SAT state",
                                 class: if matches!(&state_lock.sat,SatState::SAT){
                                     "sat"
                                 }
                                 else{
                                     "unsat"
                                 },
-                                "{state_lock.sat:?}"
+                                "{state_lock.sat:?}",
                             }
                         }
                         li{
                             "Solver State: "
                             a{
+                                title: "Current solver state",
                                 "{solver_state}"
                             }
                         }
                         li{
                             button{
+                                title: "Expand complete configuration tree",
+                                class:"btn-tree-config",
+                                onclick: move |_|{
+                                    ui_tx.send(UIAction::ExpandAll);
+                                },
+                                rsx!{"Expand All"}
+                            }
+                        }
+                        li{
+                            button{
+                                title: "Collapse complete configuration tree",
+                                class:"btn-tree-config",
+                                onclick: move |_|{
+                                    ui_tx.send(UIAction::CollapseAll);
+                                },
+                                rsx!{"Collapse All"}
+                            }
+                        }
+                        li{
+                            button{
+                                title: "Save all possible features",
                                 class:"btn-save",
                                 onclick: move |_|{
                                     ui_tx.send(UIAction::SaveAll);
@@ -551,6 +572,7 @@ pub fn App(cx: Scope<AppProps>) -> Element {
                         }
                         li{
                             button{
+                                title: "Only saves self-set features",
                                 class:"btn-save",
                                 onclick: move |_|{
                                     ui_tx.send(UIAction::Save);
@@ -562,6 +584,7 @@ pub fn App(cx: Scope<AppProps>) -> Element {
 
                         li{
                             button{
+                                title: "Toggle showing/hiding values ​​of features in the UVL file",
                                 class:"btn-save",
                                 onclick: move |_|{
                                     ui_tx.send(UIAction::Show);
@@ -573,24 +596,6 @@ pub fn App(cx: Scope<AppProps>) -> Element {
                                     rsx!{"Hide"}
 
                                 }
-                            }
-                        }
-                        li{
-                            button{
-                                class:"btn-save",
-                                onclick: move |_|{
-                                    ui_tx.send(UIAction::ExpandAll);
-                                },
-                                rsx!{"Expand All"}
-                            }
-                        }
-                        li{
-                            button{
-                                class:"btn-save",
-                                onclick: move |_|{
-                                    ui_tx.send(UIAction::CollapseAll);
-                                },
-                                rsx!{"Collapse All"}
                             }
                         }
                     }

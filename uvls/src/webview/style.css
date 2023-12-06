@@ -1,63 +1,67 @@
-
-
-.name-sel:hover{
+.name-sel:hover {
   text-decoration: underline
-  
-}                    
-                           
+}
+
 .btn-save {
   float: right;
-  border: none;
-  color: white;
-  margin-right: 2em;
+  margin-right: 1em;
   padding: 0.4em;
   text-align: center;
-  text-decoration: none;
-  display: inline-block;
   transition-duration: 0.4s;
   cursor: pointer;
   border-radius: 0.1em;
-  background-color: None; 
+  background-color: None;
   color: #aaa;
   border: 2px solid #04AA6D;
-
 }
-                    
+
 .btn-save:hover {
   background-color: #04AA6D;
   color: white;
-
 }
-.value-btn{
-  padding:   0.1em 1em;
+
+.btn-tree-config {
+  padding: 0.4em;
+  text-align: center;
+  transition-duration: 0.4s;
+  cursor: pointer;
+  border-radius: 0.1em;
+  background-color: None;
+  color: #aaa;
+  border: 2px solid #1b1b1b;
+}
+
+.btn-tree-config:hover {
+  background-color: #1b1b1b;
+  color: white;
+}
+
+.value-btn {
+  padding: 0.1em 1em;
 
   background-color: #444;
   border: 1px solid #222;
-
-  
 }
-.value-btn:hover{
-  padding:   0.1em 1em;
+
+.value-btn:hover {
+  padding: 0.1em 1em;
   background-color: #444444;
   border: 1px solid white;
-  
-
-  
 }
 
-.input-value{
+.input-value {
   background: none;
   color: #aaa;
   border: 1px solid white;
   padding: 0.2em
-    
-}       
-.input-value:focus{
-  outline:none!important;
+}
+
+.input-value:focus {
+  outline: none !important;
   background: none;
   border: 1px solid white;
-    
-}                
+
+}
 
 ul {
   padding: 0.3em;
@@ -66,126 +70,136 @@ ul {
   padding: 0.1em;
   overflow: hidden;
   background-color: #333333;
-
-
 }
 
-.sat{
+.sat {
   color: #04AA6D;
-
 }
-.unsat{
+
+.unsat {
   color: #AA0441;
 }
 
 li {
-
   padding: 1em;
-  display:inline;
- 
+  display: inline;
 }
-.value-slot{
+
+.value-slot {
   padding: 0.1em;
   border: 1px solid #222;
 }
-.value-slot:hover{
+
+.value-slot:hover {
   border: 1px solid white;
 }
-.icon{
+
+.icon {
   width: 1.2em;
-  display:inline-block;
+  display: inline-block;
   vertical-align: middle
 }
-.toggle{
-  display:inline-block;
-     vertical-align: middle
+
+.toggle {
+  display: inline-block;
+  vertical-align: middle
 }
-.name{
-  display:inline-block;
+
+.name {
+  display: inline-block;
   vertical-align: middle;
 }
-.entry{
-}
-.value-row{
+
+table {
+  border-collapse: collapse;
 }
 
-table { border-collapse: collapse; }
-tr { border: none; }
+tr {
+  border: none;
+}
+
 td {
-  
-  border-right: solid 1px #aaa; 
+  border-right: solid 1px #aaa;
   padding-left: 1em;
   padding-right: 1em;
-  
-
 }
 
-th{
-   padding-left: 1em;
+th {
+  padding-left: 1em;
   padding-right: 1em;
 }
 
-.loading
-{
+.loading {
   display: flex;
   justify-content: center;
   align-items: center;
   text-align: center;
   min-height: 100vh;
 }
-.spinner{
-  transform-origin:center;
-  animation:spinner 0.75s linear infinite;
-  fill:#aaa;
+
+.spinner {
+  transform-origin: center;
+  animation: spinner 0.75s linear infinite;
+  fill: #aaa;
 }
-.spinner-bg{
-  fill:#333;
+
+.spinner-bg {
+  fill: #333;
 }
-@keyframes spinner{100%{transform:rotate(360deg)}}
+
+@keyframes spinner {
+  100% {
+    transform: rotate(360deg)
+  }
+}
+
 tr:hover {
-    background-color: #222;
+  background-color: #222;
   filter: brightness(160%);
 }
+
 body {
-	font-family: 'Open Sans', sans-serif;
-	line-height: 1.75em;
-	font-size: 16px;
-	background-color: #222;
-	color: #aaa;
+  font-family: 'Open Sans', sans-serif;
+  line-height: 1.75em;
+  font-size: 16px;
+  background-color: #222;
+  color: #aaa;
 }
-.btn-icon{
+
+.btn-icon {
   width: 100%;
   height: 100%;
   color: #aaa;
 }
-.btn-icon:hover{
+
+.btn-icon:hover {
   background-color: #333
 }
 
-.value-btn{
+.value-btn {
   width: 2em;
-  display:inline-block;
+  display: inline-block;
   vertical-align: middle;
 }
-button{
+
+button {
   padding: 0;
   border: none;
   background: none;
 }
-.delete-btn{
+
+.delete-btn {
   width: 2em;
-  display:inline-block;
   vertical-align: middle;
   margin-left: 0.1em;
   float: right
 }
-  
-.create-btn{
+
+.create-btn {
   color: #aaa;
-  padding:  0.4em
+  padding: 0.4em
 }
-.create-btn:hover{
+
+.create-btn:hover {
   background-color: #333
-  
 }
-                
