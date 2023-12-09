@@ -240,7 +240,7 @@ pub fn add_language_level(
     diagnostic: Diagnostic,
     snapshot: std::result::Result<Option<(Draft, Arc<RootGraph>)>, tower_lsp::jsonrpc::Error>,
 ) -> Result<Option<CodeActionResponse>> {
-    if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot {
+    if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot.clone() {
         let reg_sub_lvl = Regex::new(r"\[.*\]").unwrap(); // get position of include
         let reg_sub = Regex::new(r"^[^\(]*").unwrap(); // get position of include
         let reg_indent = Regex::new(r"^[^(n\\)]*").unwrap(); // get position of include
@@ -330,8 +330,57 @@ pub fn add_language_level(
             diagnostics: Some(vec![diagnostic.clone()]),
             ..Default::default()
         };
+
+        let mut result = vec![CodeActionOrCommand::CodeAction(
+            code_action_add_include.clone(),
+        )];
+        match drop_feature(params, diagnostic, snapshot) {
+            Ok(Some(v)) => result.append(v.to_owned().as_mut()),
+            _ => (),
+        }
+
+        return Ok(Some(result));
+    } else {
+        return Ok(None);
+    }
+}
+
+pub fn drop_feature(
+    params: CodeActionParams,
+    diagnostic: Diagnostic,
+    snapshot: std::result::Result<Option<(Draft, Arc<RootGraph>)>, tower_lsp::jsonrpc::Error>,
+) -> Result<Option<CodeActionResponse>> {
+    if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot {
+        let start_byte = byte_offset(&diagnostic.range.start, &source);
+        let end_byte = byte_offset(&diagnostic.range.end, &source);
+        let name = source
+            .slice(start_byte..end_byte)
+            .as_str()
+            .unwrap()
+            .replace("\n", "")
+            .replace("\r", "");
+        let new_name = format!("");
+
+        let code_action_drop = CodeAction {
+            title: format!("drop feature: {}", name),
+            kind: Some(CodeActionKind::QUICKFIX),
+            edit: Some(WorkspaceEdit {
+                changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
+                    params.text_document.uri.clone(),
+                    vec![TextEdit {
+                        range: diagnostic.range,
+                        new_text: new_name.clone(),
+                    }],
+                )])),
+                document_changes: None,
+                change_annotations: None,
+            }),
+            is_preferred: Some(true),
+            diagnostics: Some(vec![diagnostic.clone()]),
+            ..Default::default()
+        };
         return Ok(Some(vec![CodeActionOrCommand::CodeAction(
-            code_action_add_include,
+            code_action_drop,
         )]));
     } else {
         return Ok(None);
