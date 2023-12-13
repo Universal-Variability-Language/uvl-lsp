@@ -373,12 +373,15 @@ impl LanguageServer for Backend {
         match params.command.as_str() {
             "uvls/load_config" => {
                 let target = format!("{}/load{}", self.web_handler_uri, uri.path());
-                let response: serde_json::Value = serde_json::to_value(OpenArgs { uri: target }).expect("Stop bitching me Rust!");
+                let response: serde_json::Value =
+                    serde_json::to_value(OpenArgs { uri: target }).unwrap();
                 return Ok(Some(response));
             }
             "uvls/open_config" => {
                 let target = format!("{}/create{}", self.web_handler_uri, uri.path());
-                let response: serde_json::Value = serde_json::to_value(OpenArgs { uri: target }).expect("Stop bitching me Rust!");
+                info!("{}", target);
+                let response: serde_json::Value =
+                    serde_json::to_value(OpenArgs { uri: target }).unwrap();
                 return Ok(Some(response));
             }
             "uvls/show_config" => {

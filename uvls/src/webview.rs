@@ -823,7 +823,7 @@ pub async fn ui_main(
 //HTTP server for the configuration interface
 pub async fn web_handler(pipeline: AsyncPipeline, port: u16) {
     info!("Starting web handler");
-    let addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
+    let addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
     let view = dioxus_liveview::LiveViewPool::new();
     let style = include_str!("webview/style.css");
 
