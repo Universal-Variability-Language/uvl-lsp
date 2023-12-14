@@ -403,7 +403,6 @@ pub fn add_type_as_attribute(
 
         while !byte.eq("\n") {
             end_byte += 1;
-
             byte = source.slice(end_byte - 1..end_byte).as_str().unwrap();
         }
 
@@ -414,19 +413,70 @@ pub fn add_type_as_attribute(
             .replace("\n", "")
             .replace("\r", "");
         let parts: Vec<&str> = name.split_whitespace().collect();
-        info!("parts: {:#?}", parts);
+
+        //create one part for cardinality
+        let mut has_cardinality = false;
+        let mut last_cardinality = false;
+        let mut cardinality_string: String = String::new();
+
+        for part in parts.iter().skip(2) {
+            if part.contains("cardinality") {
+                has_cardinality = true;
+            }
+
+            if has_cardinality & !last_cardinality {
+                cardinality_string.push_str(part);
+                if cardinality_string.contains("]") {
+                    last_cardinality = true;
+                    break;
+                }
+                cardinality_string.push(' ')
+            }
+        }
+
+        //create one part for attributes
+        let mut has_attributes = false;
+        let mut last_attribute = false;
+        let mut attributes_string: String = String::new();
+
+        for part in parts.iter().skip(2) {
+            if part.contains("{") {
+                has_attributes = true;
+            }
+
+            if has_attributes & !last_attribute {
+                attributes_string.push_str(part);
+                if attributes_string.contains("}") {
+                    last_attribute = true;
+                    break;
+                }
+                attributes_string.push(' ')
+            }
+        }
+
+        let mut grouped_parts: Vec<&str> = Vec::new();
+        grouped_parts.push(parts.get(0).unwrap());
+        grouped_parts.push(parts.get(1).unwrap());
+        grouped_parts.push(&cardinality_string);
+        grouped_parts.push(&attributes_string);
+
+        info!("---TEST---: grouped_parts: {:#?}", grouped_parts);
 
         let mut result: String = format!(
             "{} {{{}}}",
-            parts.last().unwrap().to_string(),
-            parts.first().unwrap().to_string()
+            grouped_parts.get(1).unwrap(),
+            grouped_parts.get(0).unwrap()
         )
         .to_string();
 
-        if parts.len() > 1 {
-            let parts = parts.get(2).unwrap().to_owned();
-            match parts {
-                "cardinality" => info!("is cardinality"),
+        if parts.len() > 2 {
+            let second_part = parts.get(2).unwrap().to_owned();
+            match second_part {
+                "cardinality" => {
+                    if parts.len() > 4 {
+                    } else {
+                    }
+                }
                 _ => {
                     let last_attribute = parts.last().unwrap().to_string();
                 }
