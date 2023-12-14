@@ -83,6 +83,29 @@ pub fn byte_offset(pos: &Position, source: &Rope) -> usize {
     source.char_to_byte(char_offset(pos, source))
 }
 
+pub fn byte_to_line_col(byte: usize, source: &Rope) -> Position {
+    let mut line = 0;
+    let mut col = 0;
+
+    for (index, ch) in source.chars().enumerate() {
+        if index == byte {
+            break;
+        }
+
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+
+    Position {
+        line,
+        character: col,
+    }
+}
+
 pub fn containing_blk(mut node: Node) -> Option<Node> {
     node = node.parent()?;
     while node.kind() != "blk" {

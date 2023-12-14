@@ -366,7 +366,7 @@ pub fn drop_feature(
             .replace("\r", "");
         let parts: Vec<&str> = name.split_whitespace().collect();
         let code_action_drop = CodeAction {
-            title: format!("drop Type: {}", parts.first().unwrap().to_string()),
+            title: format!("drop {:?}", parts.first().unwrap().to_string()),
             kind: Some(CodeActionKind::QUICKFIX),
             edit: Some(WorkspaceEdit {
                 changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
@@ -399,12 +399,15 @@ pub fn add_type_as_attribute(
     if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot {
         let start_byte = byte_offset(&diagnostic.range.start, &source);
         let mut end_byte = byte_offset(&diagnostic.range.end, &source);
-        let mut byte = source.slice(end_byte - 1..end_byte).as_str().unwrap();
 
-        while !byte.eq("\n") {
+        while source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\r" {
             end_byte += 1;
-            byte = source.slice(end_byte - 1..end_byte).as_str().unwrap();
         }
+
+        let new_range: Range = Range {
+            start: (diagnostic.range.start),
+            end: (byte_to_line_col(end_byte, &source)),
+        };
 
         let name = source
             .slice(start_byte..end_byte)
@@ -412,11 +415,11 @@ pub fn add_type_as_attribute(
             .unwrap()
             .replace("\n", "")
             .replace("\r", "");
+
         let parts: Vec<&str> = name.split_whitespace().collect();
 
         //create one part for cardinality
         let mut has_cardinality = false;
-        let mut last_cardinality = false;
         let mut cardinality_string: String = String::new();
 
         for part in parts.iter().skip(2) {
@@ -424,19 +427,18 @@ pub fn add_type_as_attribute(
                 has_cardinality = true;
             }
 
-            if has_cardinality & !last_cardinality {
+            if has_cardinality {
                 cardinality_string.push_str(part);
                 if cardinality_string.contains("]") {
-                    last_cardinality = true;
                     break;
                 }
                 cardinality_string.push(' ')
             }
         }
+        let spaced_cardinality_string: String = format!(" {}", cardinality_string);
 
         //create one part for attributes
         let mut has_attributes = false;
-        let mut last_attribute = false;
         let mut attributes_string: String = String::new();
 
         for part in parts.iter().skip(2) {
@@ -444,63 +446,69 @@ pub fn add_type_as_attribute(
                 has_attributes = true;
             }
 
-            if has_attributes & !last_attribute {
+            if has_attributes {
                 attributes_string.push_str(part);
                 if attributes_string.contains("}") {
-                    last_attribute = true;
                     break;
                 }
                 attributes_string.push(' ')
             }
         }
 
+        //create grouped parts
+        // 0 = Current Type
+        // 1 = Feature name
+        // 2 = cardinality
+        // 3 = attributes
         let mut grouped_parts: Vec<&str> = Vec::new();
         grouped_parts.push(parts.get(0).unwrap());
         grouped_parts.push(parts.get(1).unwrap());
-        grouped_parts.push(&cardinality_string);
+        grouped_parts.push(if cardinality_string.is_empty() {
+            &cardinality_string
+        } else {
+            &spaced_cardinality_string
+        });
         grouped_parts.push(&attributes_string);
 
-        info!("---TEST---: grouped_parts: {:#?}", grouped_parts);
-
+        //the result replaces the current line. here for no attributes
         let mut result: String = format!(
-            "{} {{{}}}",
+            "{}{} {{{}}}",
             grouped_parts.get(1).unwrap(),
+            grouped_parts.get(2).unwrap(),
             grouped_parts.get(0).unwrap()
         )
         .to_string();
 
-        if parts.len() > 2 {
-            let second_part = parts.get(2).unwrap().to_owned();
-            match second_part {
-                "cardinality" => {
-                    if parts.len() > 4 {
-                    } else {
-                    }
-                }
-                _ => {
-                    let last_attribute = parts.last().unwrap().to_string();
-                    let last_attribute_without_bracket =
-                        &last_attribute[0..last_attribute.len() - 1];
-                    info!("bracket: {:#?}", last_attribute_without_bracket);
-                    result.clear();
-                    let mut att: String = "".to_string();
-                    att.push_str(last_attribute_without_bracket);
-                    att.push_str(", ");
-                    att.push_str(parts.first().unwrap());
-                    att.push_str("}");
-                    info!("att: {:#?}", att);
-                }
-            }
+        //here for attributes to append the current Type
+        if !grouped_parts.get(3).unwrap().is_empty() {
+            let attributes = grouped_parts.get(3).unwrap().to_string();
+            let attribute_without_bracket = &attributes[0..attributes.len() - 1];
+            let new_attributes = format!(
+                "{}, {}}}",
+                attribute_without_bracket,
+                grouped_parts.get(0).unwrap()
+            );
+
+            result = format!(
+                "{}{} {}",
+                grouped_parts.get(1).unwrap(),
+                grouped_parts.get(2).unwrap(),
+                new_attributes
+            )
+            .to_string();
         }
 
         let code_action_add_type_as_attribute = CodeAction {
-            title: format!("add {} as attribute", parts.first().unwrap().to_string()),
+            title: format!(
+                "add {:?} as attribute",
+                grouped_parts.get(0).unwrap().to_string()
+            ),
             kind: Some(CodeActionKind::QUICKFIX),
             edit: Some(WorkspaceEdit {
                 changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
                     params.text_document.uri.clone(),
                     vec![TextEdit {
-                        range: diagnostic.range,
+                        range: new_range,
                         new_text: result,
                     }],
                 )])),
