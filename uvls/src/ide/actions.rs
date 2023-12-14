@@ -423,12 +423,22 @@ pub fn add_type_as_attribute(
         )
         .to_string();
 
-        if parts.len() > 1 {
-            let parts = parts.get(2).unwrap().to_owned();
-            match parts {
+        if parts.len() > 2 {
+            let part_after_feature_name = parts.get(2).unwrap().to_owned();
+            match part_after_feature_name {
                 "cardinality" => info!("is cardinality"),
                 _ => {
                     let last_attribute = parts.last().unwrap().to_string();
+                    let last_attribute_without_bracket =
+                        &last_attribute[0..last_attribute.len() - 1];
+                    info!("bracket: {:#?}", last_attribute_without_bracket);
+                    result.clear();
+                    let mut att: String = "".to_string();
+                    att.push_str(last_attribute_without_bracket);
+                    att.push_str(", ");
+                    att.push_str(parts.first().unwrap());
+                    att.push_str("}");
+                    info!("att: {:#?}", att);
                 }
             }
         }
