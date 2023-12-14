@@ -479,6 +479,16 @@ pub fn add_type_as_attribute(
                 }
                 _ => {
                     let last_attribute = parts.last().unwrap().to_string();
+                    let last_attribute_without_bracket =
+                        &last_attribute[0..last_attribute.len() - 1];
+                    info!("bracket: {:#?}", last_attribute_without_bracket);
+                    result.clear();
+                    let mut att: String = "".to_string();
+                    att.push_str(last_attribute_without_bracket);
+                    att.push_str(", ");
+                    att.push_str(parts.first().unwrap());
+                    att.push_str("}");
+                    info!("att: {:#?}", att);
                 }
             }
         }
