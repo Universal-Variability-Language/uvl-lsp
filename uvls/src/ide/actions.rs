@@ -334,7 +334,11 @@ pub fn add_language_level(
         let mut result = vec![CodeActionOrCommand::CodeAction(
             code_action_add_include.clone(),
         )];
-        match drop_feature(params, diagnostic, snapshot) {
+        match drop_feature(params.clone(), diagnostic.clone(), snapshot.clone()) {
+            Ok(Some(v)) => result.append(v.to_owned().as_mut()),
+            _ => (),
+        }
+        match add_type_as_attribute(params.clone(), diagnostic.clone(), snapshot.clone()) {
             Ok(Some(v)) => result.append(v.to_owned().as_mut()),
             _ => (),
         }
@@ -381,6 +385,74 @@ pub fn drop_feature(
         };
         return Ok(Some(vec![CodeActionOrCommand::CodeAction(
             code_action_drop,
+        )]));
+    } else {
+        return Ok(None);
+    }
+}
+
+pub fn add_type_as_attribute(
+    params: CodeActionParams,
+    diagnostic: Diagnostic,
+    snapshot: std::result::Result<Option<(Draft, Arc<RootGraph>)>, tower_lsp::jsonrpc::Error>,
+) -> Result<Option<CodeActionResponse>> {
+    if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot {
+        let start_byte = byte_offset(&diagnostic.range.start, &source);
+        let mut end_byte = byte_offset(&diagnostic.range.end, &source);
+        let mut byte = source.slice(end_byte - 1..end_byte).as_str().unwrap();
+
+        while !byte.eq("\n") {
+            end_byte += 1;
+
+            byte = source.slice(end_byte - 1..end_byte).as_str().unwrap();
+        }
+
+        let name = source
+            .slice(start_byte..end_byte)
+            .as_str()
+            .unwrap()
+            .replace("\n", "")
+            .replace("\r", "");
+        let parts: Vec<&str> = name.split_whitespace().collect();
+        info!("parts: {:#?}", parts);
+
+        let mut result: String = format!(
+            "{} {{{}}}",
+            parts.last().unwrap().to_string(),
+            parts.first().unwrap().to_string()
+        )
+        .to_string();
+
+        if parts.len() > 1 {
+            let parts = parts.get(2).unwrap().to_owned();
+            match parts {
+                "cardinality" => info!("is cardinality"),
+                _ => {
+                    let last_attribute = parts.last().unwrap().to_string();
+                }
+            }
+        }
+
+        let code_action_add_type_as_attribute = CodeAction {
+            title: format!("add {} as attribute", parts.first().unwrap().to_string()),
+            kind: Some(CodeActionKind::QUICKFIX),
+            edit: Some(WorkspaceEdit {
+                changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
+                    params.text_document.uri.clone(),
+                    vec![TextEdit {
+                        range: diagnostic.range,
+                        new_text: result,
+                    }],
+                )])),
+                document_changes: None,
+                change_annotations: None,
+            }),
+            is_preferred: Some(true),
+            diagnostics: Some(vec![diagnostic.clone()]),
+            ..Default::default()
+        };
+        return Ok(Some(vec![CodeActionOrCommand::CodeAction(
+            code_action_add_type_as_attribute,
         )]));
     } else {
         return Ok(None);
