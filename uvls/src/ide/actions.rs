@@ -353,23 +353,23 @@ pub fn drop_feature(
     if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot {
         let start_byte = byte_offset(&diagnostic.range.start, &source);
         let end_byte = byte_offset(&diagnostic.range.end, &source);
+
         let name = source
             .slice(start_byte..end_byte)
             .as_str()
             .unwrap()
             .replace("\n", "")
             .replace("\r", "");
-        let new_name = format!("");
-
+        let parts: Vec<&str> = name.split_whitespace().collect();
         let code_action_drop = CodeAction {
-            title: format!("drop feature: {}", name),
+            title: format!("drop Type: {}", parts.first().unwrap().to_string()),
             kind: Some(CodeActionKind::QUICKFIX),
             edit: Some(WorkspaceEdit {
                 changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
                     params.text_document.uri.clone(),
                     vec![TextEdit {
                         range: diagnostic.range,
-                        new_text: new_name.clone(),
+                        new_text: parts.last().unwrap().to_string(),
                     }],
                 )])),
                 document_changes: None,
