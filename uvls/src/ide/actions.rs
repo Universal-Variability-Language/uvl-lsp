@@ -505,7 +505,7 @@ pub fn add_type_as_attribute(
 
         let code_action_add_type_as_attribute = CodeAction {
             title: format!(
-                "add {:?} as attribute",
+                "convert {:?} to attribute",
                 grouped_parts.get(0).unwrap().to_string()
             ),
             kind: Some(CodeActionKind::QUICKFIX),
