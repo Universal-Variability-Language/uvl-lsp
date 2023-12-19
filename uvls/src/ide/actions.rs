@@ -235,6 +235,28 @@ pub fn starts_with_number(
     }
 }
 
+pub fn wrong_language_level(
+    params: CodeActionParams,
+    diagnostic: Diagnostic,
+    snapshot: std::result::Result<Option<(Draft, Arc<RootGraph>)>, tower_lsp::jsonrpc::Error>,
+) -> Result<Option<CodeActionResponse>> {
+    let mut result: Vec<CodeActionOrCommand> = vec![];
+    match add_language_level(params.clone(), diagnostic.clone(), snapshot.clone()) {
+        Ok(Some(v)) => result.append(v.to_owned().as_mut()),
+        _ => (),
+    }
+    match drop_feature(params.clone(), diagnostic.clone(), snapshot.clone()) {
+        Ok(Some(v)) => result.append(v.to_owned().as_mut()),
+        _ => (),
+    }
+    match add_type_as_attribute(params.clone(), diagnostic.clone(), snapshot.clone()) {
+        Ok(Some(v)) => result.append(v.to_owned().as_mut()),
+        _ => (),
+    }
+
+    return Ok(Some(result));
+}
+
 pub fn add_language_level(
     params: CodeActionParams,
     diagnostic: Diagnostic,
@@ -284,7 +306,11 @@ pub fn add_language_level(
         };
 
         // lvl as stated by the error message
-        let lvl = diagnostic.message.split(" ").last().unwrap();
+        let lvl = diagnostic
+            .message
+            .split_whitespace()
+            .nth(7)
+            .unwrap_or_default();
 
         // retrieve right include from error message
         let new_include = match reg_sub.find(lvl) {
@@ -331,17 +357,9 @@ pub fn add_language_level(
             ..Default::default()
         };
 
-        let mut result = vec![CodeActionOrCommand::CodeAction(
+        let result = vec![CodeActionOrCommand::CodeAction(
             code_action_add_include.clone(),
         )];
-        match drop_feature(params.clone(), diagnostic.clone(), snapshot.clone()) {
-            Ok(Some(v)) => result.append(v.to_owned().as_mut()),
-            _ => (),
-        }
-        match add_type_as_attribute(params.clone(), diagnostic.clone(), snapshot.clone()) {
-            Ok(Some(v)) => result.append(v.to_owned().as_mut()),
-            _ => (),
-        }
 
         return Ok(Some(result));
     } else {
@@ -400,7 +418,9 @@ pub fn add_type_as_attribute(
         let start_byte = byte_offset(&diagnostic.range.start, &source);
         let mut end_byte = byte_offset(&diagnostic.range.end, &source);
 
-        while source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\r" {
+        while end_byte < source.len_chars()
+            && source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\r"
+        {
             end_byte += 1;
         }
 

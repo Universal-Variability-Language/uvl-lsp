@@ -693,7 +693,7 @@ fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
         state.push_error_with_type(
             10,
             format!(
-                "Operation does not correspond includes. Please include {:?}",
+                "Operation does not correspond includes. Please include {:?} or convert to the included language level.",
                 searched_lang_lvl
             ),
             ErrorType::WrongLanguageLevel,

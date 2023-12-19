@@ -758,11 +758,11 @@ impl LanguageServer for Backend {
                             )
                         }
                         ErrorType::WrongLanguageLevel => {
-                            return actions::add_language_level(
+                            return actions::wrong_language_level(
                                 params.clone(),
                                 diagnostic,
                                 self.snapshot(&params.text_document.uri, false).await,
-                            );
+                            )
                         }
                     }
                 }
