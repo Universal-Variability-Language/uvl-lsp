@@ -409,12 +409,17 @@ pub fn add_type_as_attribute(
             end: (byte_to_line_col(end_byte, &source)),
         };
 
-        let name = source
+        let mut name = source
             .slice(start_byte..end_byte)
             .as_str()
             .unwrap()
             .replace("\n", "")
             .replace("\r", "");
+
+        //split cardinality string and attribute string
+        if name.contains("]{") {
+            name = name.replace("]{", "] {");
+        }
 
         let parts: Vec<&str> = name.split_whitespace().collect();
 
