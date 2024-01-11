@@ -6,6 +6,7 @@ use regex::Regex;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
+/// Adds the quickfixes if the feature name contains a dash
 pub fn rename_dash(
     params: CodeActionParams,
     diagnostic: Diagnostic,
@@ -17,6 +18,7 @@ pub fn rename_dash(
         let name = source.slice(start_byte..end_byte).as_str().unwrap();
         let new_name = name.replace("-", "_").to_string();
 
+        // Replaces dash with an underscore
         let code_action_replace = CodeAction {
             title: format!("Rename to: {}", new_name),
             kind: Some(CodeActionKind::QUICKFIX),
@@ -35,6 +37,8 @@ pub fn rename_dash(
             diagnostics: Some(vec![diagnostic.clone()]),
             ..Default::default()
         };
+
+        // Puts the complete feature name in quotes
         let code_action_quotes = CodeAction {
             title: format!("Rename to: {}", format!("\"{}\"", name)),
             kind: Some(CodeActionKind::QUICKFIX),
@@ -103,6 +107,7 @@ pub fn reference_to_string(
     }
 }
 
+/// Adds indentation if the feature is at the same indentation level as keywords
 pub fn add_indentation(
     params: CodeActionParams,
     diagnostic: Diagnostic,
@@ -140,6 +145,7 @@ pub fn add_indentation(
     }
 }
 
+/// Adds the quickfix to write the full name in double quotes if the feature starts with a number
 pub fn surround_with_double_quotes(
     params: CodeActionParams,
     diagnostic: Diagnostic,
@@ -182,6 +188,7 @@ pub fn surround_with_double_quotes(
     }
 }
 
+/// Adds the quickfixes if the feature name starts with a number
 pub fn starts_with_number(
     params: CodeActionParams,
     diagnostic: Diagnostic,
@@ -205,6 +212,7 @@ pub fn starts_with_number(
         };
         let new_name = format!("{}_{}", &name[number.len()..], number);
 
+        // The number at the beginning of the feature name is appended to the end
         let code_action_number_to_back = CodeAction {
             title: format!("move number to the back: {}", new_name),
             kind: Some(CodeActionKind::QUICKFIX),
@@ -225,6 +233,8 @@ pub fn starts_with_number(
         };
 
         let mut result = vec![CodeActionOrCommand::CodeAction(code_action_number_to_back)];
+
+        // The entire feature is placed in double_quotes
         match surround_with_double_quotes(params, diagnostic, snapshot) {
             Ok(Some(v)) => result.append(v.to_owned().as_mut()),
             _ => (),
@@ -235,6 +245,7 @@ pub fn starts_with_number(
     }
 }
 
+/// Checks all possible types of quickfixes for the wrong/missing language_level
 pub fn wrong_language_level(
     params: CodeActionParams,
     diagnostic: Diagnostic,
@@ -257,6 +268,7 @@ pub fn wrong_language_level(
     return Ok(Some(result));
 }
 
+/// Adds the quickfix to include the missing language_level
 pub fn add_language_level(
     params: CodeActionParams,
     diagnostic: Diagnostic,
@@ -367,6 +379,7 @@ pub fn add_language_level(
     }
 }
 
+/// Adds the quickfix to completely delete the corresponding feature
 pub fn drop_feature(
     params: CodeActionParams,
     diagnostic: Diagnostic,
@@ -409,6 +422,7 @@ pub fn drop_feature(
     }
 }
 
+/// Adds the quickfix to append the feature's corresponding Type as an attribute
 pub fn add_type_as_attribute(
     params: CodeActionParams,
     diagnostic: Diagnostic,
