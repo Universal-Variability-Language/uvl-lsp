@@ -268,6 +268,25 @@ pub fn wrong_language_level(
     return Ok(Some(result));
 }
 
+pub fn wrong_language_level_constraint(
+    params: CodeActionParams,
+    diagnostic: Diagnostic,
+    snapshot: std::result::Result<Option<(Draft, Arc<RootGraph>)>, tower_lsp::jsonrpc::Error>,
+) -> Result<Option<CodeActionResponse>> {
+    let mut result: Vec<CodeActionOrCommand> = vec![];
+    info! {"in wrong_language_level_constraint"}
+    match add_language_level(params.clone(), diagnostic.clone(), snapshot.clone()) {
+        Ok(Some(v)) => result.append(v.to_owned().as_mut()),
+        _ => (),
+    }
+    match drop_constraint(params.clone(), diagnostic.clone(), snapshot.clone()) {
+        Ok(Some(v)) => result.append(v.to_owned().as_mut()),
+        _ => (),
+    }
+
+    return Ok(Some(result));
+}
+
 /// Adds the quickfix to include the missing language_level
 pub fn add_language_level(
     params: CodeActionParams,
@@ -378,6 +397,59 @@ pub fn add_language_level(
         return Ok(None);
     }
 }
+/// Adds the quickfix to completely delete the corresponding constraint
+pub fn drop_constraint(
+    params: CodeActionParams,
+    diagnostic: Diagnostic,
+    snapshot: std::result::Result<Option<(Draft, Arc<RootGraph>)>, tower_lsp::jsonrpc::Error>,
+) -> Result<Option<CodeActionResponse>> {
+    if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot {
+        let start_byte = byte_offset(&diagnostic.range.start, &source);
+        let mut end_byte = byte_offset(&diagnostic.range.end, &source);
+
+        while source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\n"
+            && end_byte < source.len_chars()
+        {
+            info! {"end byte: {:?}", source.slice(end_byte - 1..end_byte).as_str().unwrap()}
+            end_byte += 1;
+        }
+
+        let new_range: Range = Range {
+            start: (diagnostic.range.start),
+            end: (byte_to_line_col(end_byte, &source)),
+        };
+
+        let name = source
+            .slice(start_byte..end_byte)
+            .as_str()
+            .unwrap()
+            .replace("\n", "")
+            .replace("\r", "");
+        let code_action_drop = CodeAction {
+            title: format!("drop {:?}", name),
+            kind: Some(CodeActionKind::QUICKFIX),
+            edit: Some(WorkspaceEdit {
+                changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
+                    params.text_document.uri.clone(),
+                    vec![TextEdit {
+                        range: new_range,
+                        new_text: "\n".to_string(),
+                    }],
+                )])),
+                document_changes: None,
+                change_annotations: None,
+            }),
+            is_preferred: Some(true),
+            diagnostics: Some(vec![diagnostic.clone()]),
+            ..Default::default()
+        };
+        return Ok(Some(vec![CodeActionOrCommand::CodeAction(
+            code_action_drop,
+        )]));
+    } else {
+        return Ok(None);
+    }
+}
 
 /// Adds the quickfix to completely delete the corresponding feature
 pub fn drop_feature(
@@ -433,7 +505,7 @@ pub fn add_type_as_attribute(
         let mut end_byte = byte_offset(&diagnostic.range.end, &source);
 
         while end_byte < source.len_chars()
-            && source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\r"
+            && source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\n"
         {
             end_byte += 1;
         }
@@ -455,6 +527,7 @@ pub fn add_type_as_attribute(
             name = name.replace("]{", "] {");
         }
 
+        info!("source: {:?}", source);
         let parts: Vec<&str> = name.split_whitespace().collect();
 
         //create one part for cardinality
@@ -529,10 +602,11 @@ pub fn add_type_as_attribute(
             );
 
             result = format!(
-                "{}{} {}",
+                "{}{} {} {}",
                 grouped_parts.get(1).unwrap(),
                 grouped_parts.get(2).unwrap(),
-                new_attributes
+                new_attributes,
+                "/n"
             )
             .to_string();
         }

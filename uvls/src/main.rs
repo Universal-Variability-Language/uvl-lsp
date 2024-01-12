@@ -764,6 +764,13 @@ impl LanguageServer for Backend {
                                 self.snapshot(&params.text_document.uri, false).await,
                             )
                         }
+                        ErrorType::WrongLanguageLevelConstraint => {
+                            return actions::wrong_language_level_constraint(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
                     }
                 }
                 _ => (),

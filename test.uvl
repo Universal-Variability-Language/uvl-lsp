@@ -1,0 +1,16 @@
+include
+    Arithmetic.feature-cardinality
+    
+features
+    x
+        mandatory
+            z {Integer}            e {String}        
+        optional
+            String aa
+
+            bb
+constraints
+    len(aa) > 5 
+    bb
+
+    
