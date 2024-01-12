@@ -1,4 +1,4 @@
-//Basic Ast components
+//! Basic Ast components
 use enumflags2::bitflags;
 use itertools::Itertools;
 use ustr::Ustr;
@@ -48,7 +48,7 @@ impl Path {
     }
 }
 
-//Type definitions for symbols
+/// Type definitions for symbols
 #[bitflags]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -272,7 +272,7 @@ pub struct ExprDecl {
     pub content: Expr,
     pub span: Span,
 }
-//A symbol represents an entity in some uvl document
+/// A symbol represents an entity in some uvl document
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, enum_kinds::EnumKind)]
 #[enum_kind(SymbolKind, derive(Hash))]
 pub enum Symbol {

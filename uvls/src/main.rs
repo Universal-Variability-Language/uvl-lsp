@@ -1,3 +1,35 @@
+//! LSP json-rpc interface with tower, system initialization etc.
+//!
+//! The server is written as a asynchronous tokio application. The following list shows the different subsystems of the server:
+//!
+//! - LSP lifecycle
+//!     - main.rs - LSP json-rpc interface with tower, system initialization etc.
+//!     - core/cache.rs - Find files control what files need to be relinked
+//!     - core/document.rs - File update logic
+//!     - core/pipeline.rs - Pipeline: multi-stage compiler, it provides access to files in various compilation stages. Constists of multiple subsystems like: green tree parsing, linking, error reporting, smt checking etc.
+//!     - core/semantic.rs - Contains a central struct RootGraph. This struct includes the latest linked uvl and config files, it can be thought of as a snapshot of all related documents. It can be accessed through the pipeline.
+//! - Basic UVL language support
+//!     - green tree parsing (tree-sitter):
+//!         - core/parse.rs
+//!         - core/query.rs
+//!     - green tree to red tree(AST ECS) transformer
+//!         - core/ast/def.rs - Common AST types.
+//!         - core/ast/transform.rs - The transformer implementation
+//!         - core/ast/visitor.rs - Util functions and traits for the transformer
+//!         - core/ast.rs - AstDocument: main interface to the AST ECS.
+//!     - name resolution and type checking
+//!         - core/resolve.rs - resolve_file: Type resolving for an AstDocument, resolve_*: nameresultion under various conditions.
+//! - SMT
+//!     - core/module.rs: Module is a uvl instance containing all sub instances of an arbitrary root file.
+//!     - smt/parse.rs: Turn smt-lib strings to rust. (currently incomplete)
+//!     - smt/smt_lib.rs: SMTModule: A smt-lib module equivalent to some UVL source module. uvl2smt: Turn some uvl module into a SMTModule.
+//!     - smt/smt.rs: SmtSolver: Z3 process interface(over stdio). check_handler: Runs smt-analysis on new files when the Rootgraph changes. web_view_handler runs smt-analysis on configurations.
+//! - Configuration:
+//!     - core/config.rs: Common config parsing and lifecycle utils.
+//!     - webview.rs: Config Webview "backend" (both backend and frontend run on the server have a look at)
+//!     - webview/frontend: Config Webview "frontend".
+//! - IDE features like completion etc. are all in the ide module.
+
 #![allow(dead_code)]
 #![forbid(unsafe_code)]
 
@@ -5,7 +37,8 @@ use flexi_logger::FileSpec;
 use get_port::Ops;
 
 use hashbrown::HashMap;
-use log::info;
+use ide::actions;
+use log::{error, info};
 use percent_encoding::percent_decode_str;
 use serde::Serialize;
 use std::io::{Read, Write};
@@ -22,9 +55,12 @@ mod smt;
 mod webview;
 use crate::core::*;
 use crate::smt::{smt_lib::Expr, uvl2smt, SmtSolver};
+
+/// Settings for some client config.
+///
+/// can the client show websites on its own
+/// ie. client==vscode
 struct Settings {
-    //can the client show websites on its own
-    //ie client==vscode
     has_webview: bool,
 }
 impl Default for Settings {
@@ -32,7 +68,7 @@ impl Default for Settings {
         Settings { has_webview: false }
     }
 }
-//The LSP
+/// The LSP
 struct Backend {
     client: Client,
     coloring: Arc<ide::color::State>,
@@ -54,7 +90,7 @@ impl Backend {
             .map_err(|_| shutdown_error())
     }
 }
-//load a file, this is tricky because the editor can also load it at the same time
+/// load a file, this is tricky because the editor can also load it at the same time
 fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
     if let Err(e) = std::fs::File::open(uri.to_file_path().unwrap()).and_then(|mut f| {
         let meta = f.metadata()?;
@@ -71,7 +107,7 @@ fn load_blocking(uri: Url, pipeline: &AsyncPipeline) {
         info!("Failed to load file {} : {}", uri, e);
     }
 }
-//load all files under given a path
+/// load all files under given a path
 fn load_all_blocking(path: &Path, pipeline: AsyncPipeline) {
     for e in walkdir::WalkDir::new(path)
         .into_iter()
@@ -94,7 +130,7 @@ fn shutdown_error() -> tower_lsp::jsonrpc::Error {
         data: None,
     }
 }
-//Handler for different LSP requests
+/// Handler for different LSP requests
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
@@ -454,60 +490,68 @@ impl LanguageServer for Backend {
                     &root_graph.cancellation_token(),
                 )
                 .await;
-
                 match solver {
-                    Ok(mut smt_solver) => match smt_solver.check_sat().await {
-                        Ok(true) => {
-                            let query = smt_module
-                                .variables
-                                .iter()
-                                .enumerate()
-                                .fold(String::new(), |acc, (i, _)| format!("{acc} v{i}"));
-                            // generate the unique n solutions
-                            for i in 1..=n {
-                                if !smt_solver.check_sat().await.unwrap_or(false) {
-                                    break; // no more solutions
-                                }
-                                let values = smt_solver
-                                    .values(query.clone())
-                                    .await
-                                    .unwrap_or(String::from(""));
-
-                                let values_parsed: HashMap<ModuleSymbol, ConfigValue> =
-                                    smt_module.parse_values(&values, &module).collect();
-
-                                // Store solution in file
-                                let config_module = ConfigModule {
-                                    module: Arc::new(module.clone()),
-                                    values: values_parsed.clone(),
-                                    source_map: Default::default(),
-                                };
-                                let uri = uri.clone();
-                                tokio::task::spawn_blocking(move || {
-                                    if !config_module.ok {
-                                        return;
+                    Ok(mut smt_solver) => {
+                        match smt_solver.check_sat().await {
+                            Ok(true) => {
+                                let query = smt_module
+                                    .variables
+                                    .iter()
+                                    .enumerate()
+                                    .fold(String::new(), |acc, (i, _)| format!("{acc} v{i}"));
+                                // generate the unique n solutions
+                                for i in 1..=n {
+                                    if !smt_solver.check_sat().await.unwrap_or(false) {
+                                        self.pipeline.client()
+                                        .send_notification::<tower_lsp::lsp_types::notification::ShowMessage>(
+                                            ShowMessageParams {
+                                                typ: MessageType::INFO,
+                                                message: format!("Only {} possible solutions found", i - 1).into(),
+                                            },
+                                        )
+                                        .await;
+                                        break; // no more solutions
                                     }
-                                    let ser = config_module.serialize();
-                                    #[derive(Serialize)]
-                                    struct RawConfig {
-                                        file: String,
-                                        config: ConfigEntry,
-                                    }
-                                    let config = RawConfig {
-                                        file: uri
-                                            .to_file_path()
-                                            .unwrap()
-                                            .file_name()
-                                            .unwrap()
-                                            .to_str()
-                                            .unwrap_or("-")
-                                            .to_string(),
-                                        config: ConfigEntry::Import(Default::default(), ser),
+                                    let values = smt_solver
+                                        .values(query.clone())
+                                        .await
+                                        .unwrap_or(String::from(""));
+
+                                    let values_parsed: HashMap<ModuleSymbol, ConfigValue> =
+                                        smt_module.parse_values(&values, &module).collect();
+
+                                    // Store solution in file
+                                    let config_module = ConfigModule {
+                                        module: Arc::new(module.clone()),
+                                        values: values_parsed.clone(),
+                                        source_map: Default::default(),
                                     };
+                                    let uri = uri.clone();
 
-                                    let out = serde_json::to_string_pretty(&config).unwrap();
-                                    let _ = std::fs::write(
-                                        format!(
+                                    tokio::task::spawn_blocking(move || {
+                                        if !config_module.ok {
+                                            return;
+                                        }
+                                        let ser = config_module.serialize();
+                                        #[derive(Serialize)]
+                                        struct RawConfig {
+                                            file: String,
+                                            config: ConfigEntry,
+                                        }
+                                        let config = RawConfig {
+                                            file: uri
+                                                .to_file_path()
+                                                .unwrap()
+                                                .file_name()
+                                                .unwrap()
+                                                .to_str()
+                                                .unwrap_or("-")
+                                                .to_string(),
+                                            config: ConfigEntry::Import(Default::default(), ser),
+                                        };
+
+                                        let out = serde_json::to_string_pretty(&config).unwrap();
+                                        let path = format!(
                                             "{}-{}.json",
                                             uri.to_file_path()
                                                 .unwrap()
@@ -516,45 +560,58 @@ impl LanguageServer for Backend {
                                                 .to_str()
                                                 .unwrap(),
                                             i
-                                        ),
-                                        out,
-                                    );
-                                });
-
-                                // Generate assertion to make this solution unique
-                                if i < n {
-                                    let mut assertion: Vec<Expr> = vec![];
-                                    values_parsed.into_iter().for_each(
-                                        |(sym, config)| match config {
-                                            ConfigValue::Bool(bool) => {
-                                                assertion.push(Expr::Equal(vec![
-                                                    Expr::Var(
-                                                        smt_module
-                                                            .variables
-                                                            .get_index_of(&sym)
-                                                            .unwrap_or(0),
-                                                    ),
-                                                    Expr::Bool(!bool),
-                                                ]))
+                                        );
+                                        match std::fs::write(path.clone(), out) {
+                                            Err(e) => {
+                                                error!("File System Error for {}: {:?}", path, e);
                                             }
                                             _ => (),
-                                        },
-                                    );
+                                        }
+                                    });
 
-                                    let assertion_string = smt_module.assert_to_source(
-                                        0,
-                                        &None,
-                                        &Expr::Or(assertion.clone()),
-                                        false,
-                                    );
-                                    let _ = smt_solver.push(assertion_string).await;
+                                    // Generate assertion to make this solution unique
+                                    if i < n {
+                                        let mut assertion: Vec<Expr> = vec![];
+                                        values_parsed.into_iter().for_each(|(sym, config)| {
+                                            match config {
+                                                ConfigValue::Bool(bool) => {
+                                                    assertion.push(Expr::Equal(vec![
+                                                        Expr::Var(
+                                                            smt_module
+                                                                .variables
+                                                                .get_index_of(&sym)
+                                                                .unwrap_or(0),
+                                                        ),
+                                                        Expr::Bool(!bool),
+                                                    ]))
+                                                }
+                                                _ => (),
+                                            }
+                                        });
+
+                                        let assertion_string = smt_module.assert_to_source(
+                                            0,
+                                            &None,
+                                            &Expr::Or(assertion.clone()),
+                                            false,
+                                        );
+                                        let _ = smt_solver.push(assertion_string).await;
+                                    }
                                 }
                             }
+                            _ => {
+                                self.pipeline.client()
+                                .send_notification::<tower_lsp::lsp_types::notification::ShowMessage>(
+                                    ShowMessageParams {
+                                        typ: MessageType::ERROR,
+                                        message: "No SAT solution for this file".into(),
+                                    },
+                                )
+                                .await;
+                                error!("No SAT solution for this file");
+                            }
                         }
-                        _ => {
-                            info!("No SAT solution for file");
-                        }
-                    },
+                    }
                     _ => (),
                 }
                 return Ok(None);
@@ -683,11 +740,39 @@ impl LanguageServer for Backend {
                     match ErrorType::from_u32(number.as_u64().unwrap_or(0) as u32) {
                         ErrorType::Any => info!("No Quickfix for this Error"),
                         ErrorType::FeatureNameContainsDashes => {
-                            return actions::rename_dash(
+                            return ide::actions::rename_dash(
                                 params.clone(),
                                 diagnostic,
                                 self.snapshot(&params.text_document.uri, false).await,
                             )
+                        }
+                        ErrorType::ReferenceToString => {
+                            return actions::reference_to_string(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
+                        ErrorType::AddIndentation => {
+                            return actions::add_indentation(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
+                        ErrorType::StartsWithNumber => {
+                            return actions::starts_with_number(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
+                        }
+                        ErrorType::WrongLanguageLevel => {
+                            return actions::add_language_level(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            );
                         }
                     }
                 }
@@ -710,6 +795,8 @@ fn main() {
         .unwrap();
     runtime.block_on(server_main());
 }
+
+/// Start the backend LSP server
 async fn server_main() {
     std::env::set_var("RUST_BACKTRACE", "1");
 

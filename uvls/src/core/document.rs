@@ -1,12 +1,15 @@
+//! File update logic
+
 use ropey::Rope;
 use std::time::SystemTime;
 use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Tree};
 
-//update the document text using text deltas form the editor
-//for some insane reason lsp uses utf16 code points as offsets
-//so we have to transform utf16->bytes for tree-sitter
+/// update the document text using text deltas form the editor
+///
+/// for some insane reason lsp uses utf16 code points as offsets
+/// so we have to transform utf16->bytes for tree-sitter
 pub fn update_text(
     source: &mut Rope,
     tree: Option<&mut Tree>,
@@ -95,7 +98,7 @@ impl Draft {
         }
     }
 }
-//A document can be owned by the operating system or opened in the editor
+/// A document can be owned by the operating system or opened in the editor
 #[derive(Clone, PartialEq, Eq, Copy, Debug)]
 pub enum DocumentState {
     OwnedByOs(SystemTime),

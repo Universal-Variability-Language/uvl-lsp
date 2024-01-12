@@ -1,3 +1,5 @@
+//! This Module provides basic utility functions for the LSP and SMTSolver (mainly byte offsets und byte ranges)
+
 use crate::core::query::Queries;
 use futures::Future;
 use lazy_static::lazy_static;

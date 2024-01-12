@@ -1,3 +1,5 @@
+//! Turn smt-lib strings to rust. (currently incomplete)
+
 use crate::core::*;
 use nom::{
     branch::alt,

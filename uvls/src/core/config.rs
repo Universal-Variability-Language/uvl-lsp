@@ -1,3 +1,22 @@
+//! Configuration is stored in json files like this
+//! ```
+//! {
+//!     "file":"file.uvl",
+//!     "config":{
+//!           "submodels.subfile":{
+//!               "subfeature":true
+//!           }
+//!           "someFeatures":true,
+//!           "someOtherFeature":1.0,
+//!           "someFeature.attribute1":"test"
+//!     }
+//!
+//! }
+//! ```
+//! This representation is very compact since it avoids rewriting long import prefixes but slightly
+//! more complex than just using the direct raw path to external symbols.
+//! JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
+//! crate for span information and partial parsing so error reporting becomes impossible.
 use crate::core::*;
 use crate::ide::completion::*;
 use ast::*;
@@ -16,39 +35,13 @@ use tower_lsp::lsp_types::*;
 use tree_sitter::{Node, Tree, TreeCursor};
 use ustr::Ustr;
 
-//Configuration is stored in json files like this
-//{
-//    "file":"file.uvl",
-//    "config":{
-//          "submodels.subfile":{
-//              "subfeature":true
-//          }
-//          "someFeatures":true,
-//          "someOtherFeature":1.0,
-//          "someFeature.attribute1":"test"
-//    }
-//
-//}
-//This representation is very compact since it avoids rewriting long import prefixes but slightly
-//more complex than just using the direct raw path to external symbols.
-//JSON parsing is done with tree-sitter and not serde because there currently is no solid serde json
-//crate for span information and partial parsing so error reporting becomes impossible.
-
-// This enum is used for storing a cardinality inside of ConfigEntry
-// EntitiyLvl is only used to serialize cardinality.
+/// This enum is used for storing a cardinality of a feature
+///
+/// EntitiyLvl is only used to serialize cardinality, to achieve a new sub layer for the multiple children features.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub enum CardinalityEntry {
     CardinalityLvl(Vec<Vec<ConfigEntry>>),
     EntitiyLvl(Vec<ConfigEntry>),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum ConfigValue {
-    Bool(bool),
-    Number(f64),
-    String(String),
-    Cardinality(CardinalityEntry),
 }
 
 impl Serialize for CardinalityEntry {
@@ -76,7 +69,25 @@ impl Serialize for CardinalityEntry {
         }
     }
 }
+
+/// This Enum stores the value configured by the user or loaded from a json config File.
+///
+/// Cardinality represents a feature with a set cardinality and results in
+/// a new layer when serializing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum ConfigValue {
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Cardinality(CardinalityEntry),
+}
+
 impl ConfigValue {
+    /// Return the corresponding Type Definition of ConfigValue
+    ///
+    /// # Returns:
+    /// * A value of the `Type` enum. The specific value being returned depends on the ConfigValue
     pub fn ty(&self) -> Type {
         match self {
             Self::Cardinality(..) => Type::Object,
@@ -85,6 +96,7 @@ impl ConfigValue {
             Self::String(..) => Type::String,
         }
     }
+    /// The function `default` returns a `ConfigValue` based on the input `Type`.
     pub fn default(ty: Type) -> ConfigValue {
         match ty {
             Type::Bool => ConfigValue::Bool(false),
@@ -108,9 +120,15 @@ impl Display for ConfigValue {
     }
 }
 
+/// This Enum is used for Serialization and Deserialization of a Config
+///
+/// - Value represents a specific configuration of a feature/attribute
+/// - Import corresponds to a new File and is also used for cardinality
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfigEntry {
+    /// Value represents a specific configuration of a feature/attribute
     Value(Path, ConfigValue),
+    /// Import corresponds to a new File and is also used for cardinality
     Import(Path, Vec<ConfigEntry>),
 }
 
@@ -141,7 +159,7 @@ impl Serialize for ConfigEntry {
     }
 }
 
-// This is necesarry for rust compiler
+// This is necessary for rust compiler
 impl<'de> Deserialize<'de> for ConfigEntry {
     fn deserialize<D>(_deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -166,6 +184,7 @@ impl ConfigEntry {
     }
 }
 
+/// This defines a config for the corresponding file
 #[derive(Debug, Clone)]
 pub struct FileConfig {
     pub file: FileID,
@@ -213,7 +232,7 @@ impl<'a> Visitor<'a> for State<'a> {
     }
 }
 
-//Prase a configuration object
+/// Prase a configuration object
 fn opt_configs(state: &mut State) -> Vec<ConfigEntry> {
     let mut acc = Vec::new();
     visit_siblings(state, |state| {
@@ -400,7 +419,7 @@ pub fn parse_json(tree: Tree, source: Rope, uri: Url, timestamp: Instant) -> Con
         source,
     }
 }
-//find the path of the object containing node(ignores arrays)
+/// find the path of the object containing node(ignores arrays)
 fn json_path<'a>(mut node: Node, rope: &'a Rope) -> Vec<String> {
     let mut ctx = Vec::new();
     while let Some(p) = node.parent() {
@@ -418,7 +437,7 @@ fn json_path<'a>(mut node: Node, rope: &'a Rope) -> Vec<String> {
     ctx.reverse();
     ctx
 }
-//select the nearest object containing pos
+/// select the nearest object containing pos
 fn selected_json_object<'a>(tree: &'a Tree, pos: &Position, source: &Rope) -> Option<Node<'a>> {
     let offset = byte_offset(pos, source);
     let mut node = tree
@@ -447,7 +466,7 @@ fn find_selected_json_key<'a>(
     selected_json_object(tree, pos, source).and_then(|obj| find_json_key(obj, source, key))
 }
 
-//Try to extract the json value under key from node,
+/// Try to extract the json value under key from node,
 fn find_json_key<'a>(mut root: Node<'a>, source: &Rope, key: &[Ustr]) -> Option<Node<'a>> {
     for k in key {
         let mut cursor = root.walk();
@@ -620,6 +639,8 @@ pub fn estimate_env_json<'a>(
         None
     }
 }
+
+/// This function helps define the context for a completion.
 pub fn completion_query(source: &Rope, tree: &Tree, src_pos: &Position) -> Option<CompletionQuery> {
     use compact_str::CompactString;
     let pos = Position {

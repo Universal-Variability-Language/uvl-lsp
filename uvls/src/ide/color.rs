@@ -7,11 +7,11 @@ use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tree_sitter::{Node, QueryCursor, Tree};
 use ustr::Ustr;
-//Syntax highlight happens in here
-//we mainly use tree-sitter queries to extract token and serialize them
-//according to the lsp spec
-//TODO make use of incremental parsing and updates
-//this is fast enough for medium sized files but sinks at huge files
+/// Syntax highlight happens in here
+/// we mainly use tree-sitter queries to extract token and serialize them
+/// according to the lsp spec
+/// TODO make use of incremental parsing and updates
+/// this is fast enough for medium sized files but sinks at huge files
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbsToken {

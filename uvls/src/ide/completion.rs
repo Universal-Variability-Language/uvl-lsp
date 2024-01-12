@@ -11,20 +11,20 @@ use tokio::time::Instant;
 use tower_lsp::lsp_types::*;
 use tree_sitter::{Node, Point, Tree};
 use ustr::Ustr;
-/*
- * All things completion related happen in here, the process is roughly as follows:
- * 1. Find the current context using the latest draft and editor position
- * 2. Find good completions in this context
- *
- * The completion context includes:
- *  - Meta information on the cursor position eg. Are we currently in a path or an empty line etc.
- *  - The semantic context eg. do we need a constraint or a number
- *  - A optional path prefix and suffix. The suffix is used as a weight for completions using the jaro
- *    winkler distance, the prefix is a filter restricting possible completions.
- *
- *  To weigh completions we use a simple weight function with hand picked weights for parameters
- *  like length or type correctness
- * */
+///
+/// All things completion related happen in here, the process is roughly as follows:
+/// 1. Find the current context using the latest draft and editor position
+/// 2. Find good completions in this context
+///
+/// The completion context includes:
+///  - Meta information on the cursor position eg. Are we currently in a path or an empty line etc.
+///  - The semantic context eg. do we need a constraint or a number
+///  - A optional path prefix and suffix. The suffix is used as a weight for completions using the jaro
+///    winkler distance, the prefix is a filter restricting possible completions.
+///
+///  To weigh completions we use a simple weight function with hand picked weights for parameters
+///  like length or type correctness
+///
 static MAX_N: usize = 30;
 static W_TYPE: f32 = 2.;
 static W_LEN: f32 = 3.0;
@@ -1135,16 +1135,46 @@ fn completion_symbol(
                                                              //search perfix under a secondary prefix
 
     for i in snapshot.resolve(origin, &query.prefix) {
-        //Find all possible continuations for the
-        //search prefix
+        //Find all possible continuations for the search prefix
         match &i.sym {
             Symbol::Root => {
                 let _ = modules.insert(i.file, vec![]);
             }
             Symbol::Dir(..) => {
                 let file = snapshot.file(i.file);
+                let prefix = &[];
                 file.visit_named_children(i.sym, true, |im_sym, im_prefix| match im_sym {
-                    Symbol::Dir(..) => true,
+                    Symbol::Dir(..) => {
+                        for imported_files in file.imports().iter() {
+                            if imported_files
+                                .path
+                                .names
+                                .contains(im_prefix.last().unwrap())
+                            {
+                                let index = imported_files
+                                    .path
+                                    .names
+                                    .iter()
+                                    .position(|&r| r.eq(im_prefix.last().unwrap()))
+                                    .unwrap();
+                                let text = make_path(
+                                    prefix
+                                        .iter()
+                                        .chain(imported_files.path.names.get(index + 1)),
+                                );
+                                let ty = file.type_of(im_sym).unwrap();
+                                top.push(CompletionOpt::new(
+                                    ty.into(),
+                                    imported_files.path.names.get(index + 1).unwrap().clone(),
+                                    text.clone(),
+                                    prefix.len() + index,
+                                    TextOP::Put(text),
+                                    query,
+                                ))
+                            }
+                        }
+                        true
+                    }
                     Symbol::Import(..) => {
                         if let Some((_, tgt)) =
                             snapshot.fs().imports(i.file).find(|k| k.0 == im_sym)
@@ -1420,7 +1450,7 @@ pub fn compute_completions(
             &snapshot,
         ),
     };
-    info!("Stat completion in  {:?} {:#?}", origin, ctx);
+    info!("Stat completion in {:?} {:#?}", origin, ctx);
     if let (Some(ctx), Some(origin)) = (ctx, origin) {
         let (mut top, is_incomplete) =
             compute_completions_impl(snapshot.clone(), draft, pos.clone(), &ctx, origin);

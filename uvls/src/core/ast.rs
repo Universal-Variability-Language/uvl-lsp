@@ -1,3 +1,12 @@
+//! Easy to work with AST parsing and util.
+//!
+//! The AST is stored as an ECS like structure
+//! This allows fast queries over all features groups etc.
+//! Features, Attributes, Imports and Directories are stored in a typed radix tree.
+//! The radix tree is represented via a map (sym0,name,ty) -> sym1
+//! where ty is the type of sym1. Using this representation lowers total
+//! memory consumption by a nice 20%
+
 use crate::core::*;
 use check::ErrorInfo;
 use hashbrown::HashMap;
@@ -18,13 +27,7 @@ mod transform;
 mod visitor;
 pub use def::*;
 pub use visitor::*;
-//Easy to work with AST parsing and util.
-//The AST is stored as an ECS like structure
-//This allows fast queries over all features groups etc.
-//Features, Attributes, Imports and Directories are stored in a typed radix tree.
-//The radix tree is represented via a map (sym0,name,ty) -> sym1
-//where ty is the type of sym1. Using this representation lowers total
-//memory consumption by a nice 20%
+
 pub fn uri_to_path(uri: &Url) -> Option<Vec<Ustr>> {
     let mut p = uri.to_file_path().ok()?;
     p.set_extension("");
@@ -47,7 +50,7 @@ where
     }
 }
 
-//1->N parent child relation
+/// 1->N parent child relation
 #[derive(Default, Debug, Clone)]
 struct TreeMap {
     children: HashMap<Symbol, Vec<Symbol>>,
@@ -59,7 +62,7 @@ impl TreeMap {
         self.parent.insert(child, parent);
     }
 }
-//Ast container each symbol kind lives in its own vector
+/// Ast container each symbol kind lives in its own vector
 #[derive(Clone, Debug, Default)]
 struct Ast {
     keywords: Vec<Keyword>,
@@ -90,7 +93,7 @@ impl Ast {
             _ => unimplemented!(),
         }
     }
-    //call f for each child under sym and prefix
+    /// call f for each child under sym and prefix
     fn lookup<F: FnMut(Symbol)>(&self, sym: Symbol, prefix: Ustr, mut f: F) {
         match sym {
             Symbol::Root => {
@@ -143,7 +146,7 @@ impl Ast {
     fn lsp_range(&self, sym: Symbol, source: &Rope) -> Option<tower_lsp::lsp_types::Range> {
         self.span(sym).and_then(|s| lsp_range(s, source))
     }
-    //source range for a symbol if there is any
+    /// source range for a symbol if there is any
     fn span(&self, sym: Symbol) -> Option<Span> {
         match sym {
             Symbol::Feature(i) => Some(self.features[i].name.span.clone()),
@@ -171,7 +174,7 @@ impl Ast {
             .into_iter()
             .flat_map(|v| v.iter().cloned())
     }
-    //utility iterators over different elements of interest
+    /// utility iterators over different elements of interest
     fn all_imports(&self) -> impl Iterator<Item = Symbol> + DoubleEndedIterator {
         (0..self.import.len()).map(Symbol::Import)
     }
@@ -217,7 +220,7 @@ impl Ast {
     fn all_lang_lvls(&self) -> impl Iterator<Item = Symbol> {
         (0..self.includes.len()).map(Symbol::LangLvl)
     }
-    //Search a symbol by byte offset in O(N)
+    /// Search a symbol by byte offset in O(N)
     fn find(&self, offset: usize) -> Option<Symbol> {
         self.all_imports()
             .chain(self.all_features())
@@ -250,7 +253,7 @@ impl Ast {
         return relatives;
     }
 }
-//Combines the AST with metadata, this is also a public interface to the AST.
+/// Combines the AST with metadata, this is also a public interface to the AST.
 #[derive(Clone, Debug)]
 pub struct AstDocument {
     ast: Ast,
@@ -270,7 +273,7 @@ impl AstDocument {
             self.ast.structure.parent.get(&sym).cloned()
         }
     }
-    //parent feature of an attribute
+    /// parent feature of an attribute
     pub fn scope(&self, mut sym: Symbol) -> Symbol {
         while let Some(p) = self.parent(sym, true) {
             match sym {
@@ -285,7 +288,7 @@ impl AstDocument {
     pub fn name(&self, sym: Symbol) -> Option<Ustr> {
         self.ast.name(sym)
     }
-    //iterators over diffrent symbole types in the tree
+    /// iterators over diffrent symbole types in the tree
     pub fn all_lang_lvls(&self) -> impl Iterator<Item = Symbol> {
         self.ast.all_lang_lvls()
     }
@@ -396,8 +399,8 @@ impl AstDocument {
             _ => 0,
         }
     }
-    //Find all symboles under root with prefix path.
-    //Search branches can be aborted with a filter
+    /// Find all symboles under root with prefix path.
+    /// Search branches can be aborted with a filter
     pub fn lookup<'a, F: Fn(Symbol) -> bool + 'a>(
         &'a self,
         root: Symbol,
@@ -417,7 +420,7 @@ impl AstDocument {
             })
         })
     }
-    //Find imports for any prefix of path
+    /// Find imports for any prefix of path
     pub fn lookup_import<'a>(
         &'a self,
         path: &'a [Ustr],
@@ -441,7 +444,7 @@ impl AstDocument {
             }
         })
     }
-    //Also track the binding for path, each segment of path has some symbole bound to it
+    /// Also track the binding for path, each segment of path has some symbole bound to it
     pub fn lookup_with_binding<'a, F: Fn(Symbol) -> bool + 'a>(
         &'a self,
         root: Symbol,
@@ -461,7 +464,7 @@ impl AstDocument {
             })
         })
     }
-    // returns all Symbols with same name, used for cardinality resolving
+    /// returns all Symbols with same name, used for cardinality resolving
     pub fn get_all_entities(&self, path: &[Ustr]) -> Vec<Symbol> {
         let ustr_path = Ustr::from(path.iter().map(|s| s.to_string()).join(".").as_str());
         let mut res = vec![];
@@ -510,7 +513,7 @@ impl AstDocument {
         res
     }
 
-    //prefix of sym from root
+    /// prefix of sym from root
     pub fn prefix(&self, mut sym: Symbol) -> Vec<Ustr> {
         if matches!(sym, Symbol::Import(..)) {
             return self.ast.import_prefix(sym).into();
@@ -551,7 +554,7 @@ impl AstDocument {
     pub fn find(&self, offset: usize) -> Option<Symbol> {
         self.ast.find(offset)
     }
-    //All children under root, when merge_root_features sub features are ignored
+    /// All children under root, when merge_root_features sub features are ignored
     pub fn visit_named_children<F: FnMut(Symbol, &[Ustr]) -> bool>(
         &self,
         root: Symbol,
@@ -560,7 +563,7 @@ impl AstDocument {
     ) {
         self.visit_named_children_depth(root, merge_root_features, |sym, prefix, _| f(sym, prefix))
     }
-    //Iterate all named symbole under root and track their prefix from root
+    /// Iterate all named symbole under root and track their prefix from root
     pub fn visit_named_children_depth<F: FnMut(Symbol, &[Ustr], usize) -> bool>(
         &self,
         root: Symbol,
@@ -576,6 +579,17 @@ impl AstDocument {
                 if cur != root {
                     prefix.push(name);
                     explore = f(cur, &prefix, depth);
+                } else {
+                    match root {
+                        Symbol::Dir(..) => match cur {
+                            Symbol::Dir(..) => {
+                                prefix.push(name);
+                                explore = f(cur, &prefix, depth);
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    }
                 }
             }
             if explore {
@@ -612,7 +626,7 @@ impl AstDocument {
     pub fn find_all_of(&self, name: Ustr) -> Vec<Symbol> {
         self.ast.find_all_of(Symbol::Root, name)
     }
-    //Iterate all named symbole under root
+    /// Iterate all named symbole under root
     pub fn visit_children_depth<F: FnMut(Symbol, u32) -> bool>(
         &self,
         root: Symbol,
@@ -645,7 +659,7 @@ impl AstDocument {
             }
         }
     }
-    //Iterate all attributes under root, and track theire associated feature
+    /// Iterate all attributes under root, and track theire associated feature
     pub fn visit_attributes<'a, F: FnMut(Symbol, Symbol, &[Ustr])>(&self, root: Symbol, mut f: F) {
         assert!(matches!(root, Symbol::Feature(..) | Symbol::Root));
         let mut owner = root;
