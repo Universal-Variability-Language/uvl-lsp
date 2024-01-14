@@ -1,16 +1,18 @@
 include
-    Arithmetic.feature-cardinality
-    
+    Boolean.group-cardinality
+    Type
+
 features
     x
         mandatory
-            z {Integer}            e {String}        
+            z {Integer}            
+            e {String}        
         optional
-            String aa
-
+            String aa {String}
             bb
 constraints
-    len(aa) > 5 
-    bb
+    
+    z => e
+
 
     

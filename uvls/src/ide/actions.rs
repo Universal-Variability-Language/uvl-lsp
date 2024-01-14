@@ -407,10 +407,9 @@ pub fn drop_constraint(
         let start_byte = byte_offset(&diagnostic.range.start, &source);
         let mut end_byte = byte_offset(&diagnostic.range.end, &source);
 
-        while source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\n"
-            && end_byte < source.len_chars()
+        while end_byte < source.len_chars()
+            && source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\r"
         {
-            info! {"end byte: {:?}", source.slice(end_byte - 1..end_byte).as_str().unwrap()}
             end_byte += 1;
         }
 
@@ -426,14 +425,14 @@ pub fn drop_constraint(
             .replace("\n", "")
             .replace("\r", "");
         let code_action_drop = CodeAction {
-            title: format!("drop {:?}", name),
+            title: format!("drop constraint: {:?}", name),
             kind: Some(CodeActionKind::QUICKFIX),
             edit: Some(WorkspaceEdit {
                 changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
                     params.text_document.uri.clone(),
                     vec![TextEdit {
                         range: new_range,
-                        new_text: "\n".to_string(),
+                        new_text: "".to_string(),
                     }],
                 )])),
                 document_changes: None,
@@ -505,7 +504,7 @@ pub fn add_type_as_attribute(
         let mut end_byte = byte_offset(&diagnostic.range.end, &source);
 
         while end_byte < source.len_chars()
-            && source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\n"
+            && source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\r"
         {
             end_byte += 1;
         }
@@ -527,7 +526,6 @@ pub fn add_type_as_attribute(
             name = name.replace("]{", "] {");
         }
 
-        info!("source: {:?}", source);
         let parts: Vec<&str> = name.split_whitespace().collect();
 
         //create one part for cardinality
@@ -602,11 +600,10 @@ pub fn add_type_as_attribute(
             );
 
             result = format!(
-                "{}{} {} {}",
+                "{}{} {}",
                 grouped_parts.get(1).unwrap(),
                 grouped_parts.get(2).unwrap(),
                 new_attributes,
-                "/n"
             )
             .to_string();
         }
