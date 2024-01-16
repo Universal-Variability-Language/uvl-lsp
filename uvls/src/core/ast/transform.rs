@@ -892,8 +892,6 @@ fn opt_equation(node: Node) -> Option<EquationOP> {
 }
 
 fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
-    info!("first ---------sind in op-constraint");
-
     let span = state.node().byte_range();
     state.goto_named();
     match state.kind() {
@@ -920,7 +918,6 @@ fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
                     state.goto_field("lhs");
                     let lhs = opt_constraint(state)?;
                     state.goto_field("op");
-                    info!("sind in op-constraint logic");
                     check_langlvls(state, LanguageLevel::Boolean(vec![]), true);
                     state.goto_field("rhs");
                     let rhs = opt_constraint(state)?;
@@ -933,7 +930,6 @@ fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
                     state.goto_field("lhs");
                     let lhs = opt_numeric(state)?;
                     state.goto_field("op");
-                    info!("sind in op-constraint equation");
                     check_langlvls(state, LanguageLevel::Arithmetic(vec![]), true);
                     state.goto_field("rhs");
                     let rhs = opt_numeric(state)?;
