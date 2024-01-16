@@ -283,7 +283,6 @@ pub fn wrong_language_level_constraint(
         Ok(Some(v)) => result.append(v.to_owned().as_mut()),
         _ => (),
     }
-
     return Ok(Some(result));
 }
 
@@ -570,6 +569,7 @@ pub fn add_type_as_attribute(
         // 1 = Feature name
         // 2 = cardinality
         // 3 = attributes
+        // 4 = default value of current type
         let mut grouped_parts: Vec<&str> = Vec::new();
         grouped_parts.push(parts.get(0).unwrap());
         grouped_parts.push(parts.get(1).unwrap());
@@ -579,13 +579,21 @@ pub fn add_type_as_attribute(
             &spaced_cardinality_string
         });
         grouped_parts.push(&attributes_string);
+        match grouped_parts.get(0).unwrap() {
+            &"Boolean" => grouped_parts.insert(4, " true"),
+            &"String" => grouped_parts.insert(4, " ''"),
+            &"Integer" => grouped_parts.insert(4, " 0"),
+            &"Real" => grouped_parts.insert(4, " 0.0"),
+            _ => info!("unknown type"),
+        };
 
         //the result replaces the current line. here for no attributes
         let mut result: String = format!(
-            "{}{} {{{}}}",
+            "{}{} {{{}{}}}",
             grouped_parts.get(1).unwrap(),
             grouped_parts.get(2).unwrap(),
-            grouped_parts.get(0).unwrap()
+            grouped_parts.get(0).unwrap(),
+            grouped_parts.get(4).unwrap()
         )
         .to_string();
 
@@ -594,9 +602,10 @@ pub fn add_type_as_attribute(
             let attributes = grouped_parts.get(3).unwrap().to_string();
             let attribute_without_bracket = &attributes[0..attributes.len() - 1];
             let new_attributes = format!(
-                "{}, {}}}",
+                "{}, {}{}}}",
                 attribute_without_bracket,
-                grouped_parts.get(0).unwrap()
+                grouped_parts.get(0).unwrap(),
+                grouped_parts.get(4).unwrap()
             );
 
             result = format!(
