@@ -245,44 +245,52 @@ pub fn starts_with_number(
     }
 }
 
-/// Checks all possible types of quickfixes for the wrong/missing language_level
+/// Checks all possible types of quickfixes for the wrong/missing language_level in features
 pub fn wrong_language_level(
     params: CodeActionParams,
     diagnostic: Diagnostic,
     snapshot: std::result::Result<Option<(Draft, Arc<RootGraph>)>, tower_lsp::jsonrpc::Error>,
 ) -> Result<Option<CodeActionResponse>> {
     let mut result: Vec<CodeActionOrCommand> = vec![];
+    // adds the missing language level
     match add_language_level(params.clone(), diagnostic.clone(), snapshot.clone()) {
         Ok(Some(v)) => result.append(v.to_owned().as_mut()),
         _ => (),
     }
+    // the wrong feature type will be deleted
     match drop_feature(params.clone(), diagnostic.clone(), snapshot.clone()) {
         Ok(Some(v)) => result.append(v.to_owned().as_mut()),
         _ => (),
     }
+    // adds the feature type as an attribute
     match add_type_as_attribute(params.clone(), diagnostic.clone(), snapshot.clone()) {
         Ok(Some(v)) => result.append(v.to_owned().as_mut()),
         _ => (),
     }
 
+    // result set that is returned
     return Ok(Some(result));
 }
 
+/// Checks all possible types of quickfixes for the wrong/missing language_level in constraints
 pub fn wrong_language_level_constraint(
     params: CodeActionParams,
     diagnostic: Diagnostic,
     snapshot: std::result::Result<Option<(Draft, Arc<RootGraph>)>, tower_lsp::jsonrpc::Error>,
 ) -> Result<Option<CodeActionResponse>> {
     let mut result: Vec<CodeActionOrCommand> = vec![];
-    info! {"in wrong_language_level_constraint"}
+    // adds the missing language level
     match add_language_level(params.clone(), diagnostic.clone(), snapshot.clone()) {
         Ok(Some(v)) => result.append(v.to_owned().as_mut()),
         _ => (),
     }
+    // the incorrect restriction is completely deleted
     match drop_constraint(params.clone(), diagnostic.clone(), snapshot.clone()) {
         Ok(Some(v)) => result.append(v.to_owned().as_mut()),
         _ => (),
     }
+
+    // result set that is returned
     return Ok(Some(result));
 }
 
@@ -368,6 +376,7 @@ pub fn add_language_level(
             }
         };
 
+        // assemble the corresponding code_action as a solution
         let code_action_add_include = CodeAction {
             title: format!("add {:?} to includes", new_include),
             kind: Some(CodeActionKind::QUICKFIX),
@@ -387,6 +396,7 @@ pub fn add_language_level(
             ..Default::default()
         };
 
+        // result set that is returned
         let result = vec![CodeActionOrCommand::CodeAction(
             code_action_add_include.clone(),
         )];
@@ -396,6 +406,7 @@ pub fn add_language_level(
         return Ok(None);
     }
 }
+
 /// Adds the quickfix to completely delete the corresponding constraint
 pub fn drop_constraint(
     params: CodeActionParams,
@@ -406,24 +417,27 @@ pub fn drop_constraint(
         let start_byte = byte_offset(&diagnostic.range.start, &source);
         let mut end_byte = byte_offset(&diagnostic.range.end, &source);
 
+        // Find the end position at the end of the respective line and create the new range
         while end_byte < source.len_chars()
             && source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\r"
         {
             end_byte += 1;
         }
-
         let new_range: Range = Range {
             start: (diagnostic.range.start),
             end: (byte_to_line_col(end_byte, &source)),
         };
 
+        // Output name for quickfix / text of the complete line
         let name = source
             .slice(start_byte..end_byte)
             .as_str()
             .unwrap()
             .replace("\n", "")
             .replace("\r", "");
-        let code_action_drop = CodeAction {
+
+        // assemble the corresponding code_action as a solution
+        let code_action_drop_constraint = CodeAction {
             title: format!("drop constraint: {:?}", name),
             kind: Some(CodeActionKind::QUICKFIX),
             edit: Some(WorkspaceEdit {
@@ -441,8 +455,10 @@ pub fn drop_constraint(
             diagnostics: Some(vec![diagnostic.clone()]),
             ..Default::default()
         };
+
+        // result set that is returned
         return Ok(Some(vec![CodeActionOrCommand::CodeAction(
-            code_action_drop,
+            code_action_drop_constraint,
         )]));
     } else {
         return Ok(None);
@@ -459,6 +475,7 @@ pub fn drop_feature(
         let start_byte = byte_offset(&diagnostic.range.start, &source);
         let end_byte = byte_offset(&diagnostic.range.end, &source);
 
+        // Name of feature including type
         let name = source
             .slice(start_byte..end_byte)
             .as_str()
@@ -466,7 +483,9 @@ pub fn drop_feature(
             .replace("\n", "")
             .replace("\r", "");
         let parts: Vec<&str> = name.split_whitespace().collect();
-        let code_action_drop = CodeAction {
+
+        // assemble the corresponding code_action as a solution
+        let code_action_drop_feature = CodeAction {
             title: format!("drop {:?}", parts.first().unwrap().to_string()),
             kind: Some(CodeActionKind::QUICKFIX),
             edit: Some(WorkspaceEdit {
@@ -484,8 +503,10 @@ pub fn drop_feature(
             diagnostics: Some(vec![diagnostic.clone()]),
             ..Default::default()
         };
+
+        // result set that is returned
         return Ok(Some(vec![CodeActionOrCommand::CodeAction(
-            code_action_drop,
+            code_action_drop_feature,
         )]));
     } else {
         return Ok(None);
@@ -502,17 +523,18 @@ pub fn add_type_as_attribute(
         let start_byte = byte_offset(&diagnostic.range.start, &source);
         let mut end_byte = byte_offset(&diagnostic.range.end, &source);
 
+        // Find the end position at the end of the respective line and create the new range
         while end_byte < source.len_chars()
             && source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\r"
         {
             end_byte += 1;
         }
-
         let new_range: Range = Range {
             start: (diagnostic.range.start),
             end: (byte_to_line_col(end_byte, &source)),
         };
 
+        // text of the complete line
         let mut name = source
             .slice(start_byte..end_byte)
             .as_str()
@@ -520,14 +542,15 @@ pub fn add_type_as_attribute(
             .replace("\n", "")
             .replace("\r", "");
 
-        //split cardinality string and attribute string
+        // split cardinality string and attribute string if available
         if name.contains("]{") {
             name = name.replace("]{", "] {");
         }
 
+        // splitting the name into parts
         let parts: Vec<&str> = name.split_whitespace().collect();
 
-        //create one part for cardinality
+        // create one part for cardinality
         let mut has_cardinality = false;
         let mut cardinality_string: String = String::new();
 
@@ -564,7 +587,7 @@ pub fn add_type_as_attribute(
             }
         }
 
-        //create grouped parts
+        // create grouped parts
         // 0 = Current Type
         // 1 = Feature name
         // 2 = cardinality
@@ -579,6 +602,8 @@ pub fn add_type_as_attribute(
             &spaced_cardinality_string
         });
         grouped_parts.push(&attributes_string);
+
+        // adds the default values ​​for the corresponding types
         match grouped_parts.get(0).unwrap() {
             &"Boolean" => grouped_parts.insert(4, " true"),
             &"String" => grouped_parts.insert(4, " ''"),
@@ -587,7 +612,8 @@ pub fn add_type_as_attribute(
             _ => info!("unknown type"),
         };
 
-        //the result replaces the current line. here for no attributes
+        // the result replaces the current line.
+        // here for no attributes
         let mut result: String = format!(
             "{}{} {{{}{}}}",
             grouped_parts.get(1).unwrap(),
@@ -617,6 +643,7 @@ pub fn add_type_as_attribute(
             .to_string();
         }
 
+        // assemble the corresponding code_action as a solution
         let code_action_add_type_as_attribute = CodeAction {
             title: format!(
                 "convert {:?} to attribute",
@@ -638,6 +665,8 @@ pub fn add_type_as_attribute(
             diagnostics: Some(vec![diagnostic.clone()]),
             ..Default::default()
         };
+
+        // result set that is returned
         return Ok(Some(vec![CodeActionOrCommand::CodeAction(
             code_action_add_type_as_attribute,
         )]));
