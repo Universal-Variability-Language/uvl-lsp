@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::fmt::format;
 use std::sync::Arc;
 
 use crate::core::*;
+use nom::Compare;
 use regex::Regex;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -642,6 +644,54 @@ pub fn add_type_as_attribute(
             )
             .to_string();
         }
+        ///////////////////// constraint edit
+        info!("source: {:#?}", source);
+
+        // text of the complete line
+        let mut constraints = source.slice(end_byte..source.len_chars()).as_str().unwrap();
+        info!("constraints: {:#?}", constraints);
+
+        let mut x = vec![TextEdit {
+            range: new_range,
+            new_text: result.clone(),
+        }];
+
+        let allowed_prefix_suffix = vec![" ", ">", "<", "=", "(", ")"];
+        // Find the end position at the end of the respective line and create the new range
+        while end_byte + grouped_parts.get(1).unwrap().len() + 1 < source.len_chars() {
+            let part = source
+                .slice(end_byte..end_byte + grouped_parts.get(1).unwrap().len())
+                .as_str()
+                .unwrap();
+
+            if part.contains(grouped_parts.get(1).unwrap().to_owned())
+                && allowed_prefix_suffix
+                    .contains(&source.slice(end_byte - 1..end_byte).as_str().unwrap())
+                && allowed_prefix_suffix.contains(
+                    &source
+                        .slice(
+                            end_byte + grouped_parts.get(1).unwrap().len()
+                                ..grouped_parts.get(1).unwrap().len() + 1,
+                        )
+                        .as_str()
+                        .unwrap(),
+                )
+            {
+                let constraint_range: Range = Range {
+                    start: (byte_to_line_col(end_byte, &source)),
+                    end: (byte_to_line_col(
+                        end_byte + grouped_parts.get(1).unwrap().len(),
+                        &source,
+                    )),
+                };
+                let res = format!("{}.{}", grouped_parts[1], grouped_parts[0]);
+                x.push(TextEdit {
+                    range: constraint_range,
+                    new_text: res,
+                });
+            }
+            end_byte += 1;
+        }
 
         // assemble the corresponding code_action as a solution
         let code_action_add_type_as_attribute = CodeAction {
@@ -653,10 +703,7 @@ pub fn add_type_as_attribute(
             edit: Some(WorkspaceEdit {
                 changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
                     params.text_document.uri.clone(),
-                    vec![TextEdit {
-                        range: new_range,
-                        new_text: result,
-                    }],
+                    x,
                 )])),
                 document_changes: None,
                 change_annotations: None,
