@@ -42,7 +42,7 @@ walkdir = "2"
 tree-sitter-uvl = { path = "../tree-sitter-uvl" }
 tree-sitter-json = { git = "https://github.com/tree-sitter/tree-sitter-json" }
 hashbrown = "0.14.3"
-regex = "1"
+regex = "1.5"
 axum = { version = "0.6.6", features = ["ws"] }
 dioxus = { version = "*" }
 dioxus-liveview = { version = "*", features = ["axum"] }

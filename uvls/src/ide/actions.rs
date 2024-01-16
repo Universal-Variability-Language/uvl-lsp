@@ -1,9 +1,7 @@
 use std::collections::HashMap;
-use std::fmt::format;
 use std::sync::Arc;
 
 use crate::core::*;
-use nom::Compare;
 use regex::Regex;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -531,7 +529,7 @@ pub fn add_type_as_attribute(
         {
             end_byte += 1;
         }
-        let new_range: Range = Range {
+        let new_range_feature: Range = Range {
             start: (diagnostic.range.start),
             end: (byte_to_line_col(end_byte, &source)),
         };
@@ -616,7 +614,7 @@ pub fn add_type_as_attribute(
 
         // the result replaces the current line.
         // here for no attributes
-        let mut result: String = format!(
+        let mut result_feature_with_attribute: String = format!(
             "{}{} {{{}{}}}",
             grouped_parts.get(1).unwrap(),
             grouped_parts.get(2).unwrap(),
@@ -636,7 +634,7 @@ pub fn add_type_as_attribute(
                 grouped_parts.get(4).unwrap()
             );
 
-            result = format!(
+            result_feature_with_attribute = format!(
                 "{}{} {}",
                 grouped_parts.get(1).unwrap(),
                 grouped_parts.get(2).unwrap(),
@@ -644,19 +642,33 @@ pub fn add_type_as_attribute(
             )
             .to_string();
         }
-        ///////////////////// constraint edit
-        info!("source: {:#?}", source);
 
-        // text of the complete line
-        let mut constraints = source.slice(end_byte..source.len_chars()).as_str().unwrap();
-        info!("constraints: {:#?}", constraints);
-
-        let mut x = vec![TextEdit {
-            range: new_range,
-            new_text: result.clone(),
+        // Vector containing all strings to replace for the corresponding range
+        let mut text_edit_vector = vec![TextEdit {
+            range: new_range_feature,
+            new_text: result_feature_with_attribute,
         }];
 
+        // all constraints if available
+        let mut constraints = source.slice(end_byte..source.len_chars()).as_str().unwrap();
+
+        let regex_pattern = r"(?s)(constraints.*)";
+        let regex = Regex::new(regex_pattern).expect("Failed to create regex");
+
+        if let Some(captures) = regex.captures(constraints) {
+            if let Some(matched_substring) = captures.get(1) {
+                constraints = matched_substring.as_str();
+            }
+        } else {
+            constraints = "";
+        }
+        // constraints-string starts with constraints followed by all constraints or is an empty string
+        info!("---TEST--- constraints: {:#?}", constraints);
+
+        // all allowed characters before and after the feature, so as not to replace all occurrences of the string if they are only substrings of another string
         let allowed_prefix_suffix = vec![" ", ">", "<", "=", "(", ")"];
+
+        //TODO: fix Fehler, um Range richtig zu erhalten und Chars zuvor und danach zu überprüfen
         // Find the end position at the end of the respective line and create the new range
         while end_byte + grouped_parts.get(1).unwrap().len() + 1 < source.len_chars() {
             let part = source
@@ -684,10 +696,11 @@ pub fn add_type_as_attribute(
                         &source,
                     )),
                 };
-                let res = format!("{}.{}", grouped_parts[1], grouped_parts[0]);
-                x.push(TextEdit {
+                let feature_with_attribute_constraint =
+                    format!("{}.{}", grouped_parts[1], grouped_parts[0]);
+                text_edit_vector.push(TextEdit {
                     range: constraint_range,
-                    new_text: res,
+                    new_text: feature_with_attribute_constraint,
                 });
             }
             end_byte += 1;
@@ -703,7 +716,7 @@ pub fn add_type_as_attribute(
             edit: Some(WorkspaceEdit {
                 changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
                     params.text_document.uri.clone(),
-                    x,
+                    text_edit_vector,
                 )])),
                 document_changes: None,
                 change_annotations: None,
