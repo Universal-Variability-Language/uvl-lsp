@@ -649,25 +649,35 @@ pub fn add_type_as_attribute(
             new_text: result_feature_with_attribute,
         }];
 
-        // all constraints if available
-        let mut constraints = source.slice(end_byte..source.len_chars()).as_str().unwrap();
-
-        let regex_pattern = r"(?s)(constraints.*)";
-        let regex = Regex::new(regex_pattern).expect("Failed to create regex");
-
-        if let Some(captures) = regex.captures(constraints) {
-            if let Some(matched_substring) = captures.get(1) {
-                constraints = matched_substring.as_str();
+        // method checks if constraints is available in file
+        if let Some(index_constraints) = find_first_byte("constraints", &source) {
+            // returns a vector with all first bytes of the string
+            let indices = find_all_first_bytes(grouped_parts.get(1).unwrap(), &source);
+            if !indices.is_empty() {
+                // for loop irritates all indices
+                for index in indices {
+                    // Only if the feature occurs in the constraints will it be edited
+                    if (index > index_constraints) {
+                        info!("---TEST--- {:?}", index);
+                        if index < source.len_bytes() {
+                            let char_before_feature = char::from(source.byte(index - 1));
+                            info!("---TEST--- char: {:?}", char_before_feature);
+                            if index + grouped_parts.get(1).unwrap().len() < source.len_bytes() {
+                                let char_after_feature = char::from(
+                                    source.byte(index + grouped_parts.get(1).unwrap().len()),
+                                );
+                                info!("---TEST--- char: {:?}", char_after_feature);
+                            }
+                        }
+                    }
+                }
             }
-        } else {
-            constraints = "";
         }
-        // constraints-string starts with constraints followed by all constraints or is an empty string
-        info!("---TEST--- constraints: {:#?}", constraints);
 
         // all allowed characters before and after the feature, so as not to replace all occurrences of the string if they are only substrings of another string
-        let allowed_prefix_suffix = vec![" ", ">", "<", "=", "(", ")"];
+        let allowed_prefix_suffix = vec![' ', '>', '<', '=', '(', ')', '\r'];
 
+        /*
         //TODO: fix Fehler, um Range richtig zu erhalten und Chars zuvor und danach zu überprüfen
         // Find the end position at the end of the respective line and create the new range
         while end_byte + grouped_parts.get(1).unwrap().len() + 1 < source.len_chars() {
@@ -705,6 +715,7 @@ pub fn add_type_as_attribute(
             }
             end_byte += 1;
         }
+        */
 
         // assemble the corresponding code_action as a solution
         let code_action_add_type_as_attribute = CodeAction {
