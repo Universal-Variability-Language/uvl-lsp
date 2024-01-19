@@ -649,6 +649,9 @@ pub fn add_type_as_attribute(
             new_text: result_feature_with_attribute,
         }];
 
+        // all allowed characters before and after the feature, so as not to replace all occurrences of the string if they are only substrings of another string
+        let allowed_prefix_suffix = vec![' ', '>', '<', '=', '(', ')', '\r'];
+
         // method checks if constraints is available in file
         if let Some(index_constraints) = find_first_byte("constraints", &source) {
             // returns a vector with all first bytes of the string
@@ -657,65 +660,36 @@ pub fn add_type_as_attribute(
                 // for loop irritates all indices
                 for index in indices {
                     // Only if the feature occurs in the constraints will it be edited
-                    if (index > index_constraints) {
-                        info!("---TEST--- {:?}", index);
-                        if index < source.len_bytes() {
-                            let char_before_feature = char::from(source.byte(index - 1));
-                            info!("---TEST--- char: {:?}", char_before_feature);
-                            if index + grouped_parts.get(1).unwrap().len() < source.len_bytes() {
-                                let char_after_feature = char::from(
-                                    source.byte(index + grouped_parts.get(1).unwrap().len()),
-                                );
-                                info!("---TEST--- char: {:?}", char_after_feature);
-                            }
+                    if index > index_constraints && index < source.len_bytes() {
+                        let char_before_feature = char::from(source.byte(index - 1));
+                        let mut char_after_feature: char = ' ';
+                        if index + grouped_parts.get(1).unwrap().len() < source.len_bytes() {
+                            char_after_feature = char::from(
+                                source.byte(index + grouped_parts.get(1).unwrap().len()),
+                            );
+                        }
+                        // If the character before and after matches the permitted characters, the string is replaced in the attributes
+                        if allowed_prefix_suffix.contains(&char_before_feature)
+                            && allowed_prefix_suffix.contains(&char_after_feature)
+                        {
+                            let constraint_range: Range = Range {
+                                start: byte_to_line_col(index, &source),
+                                end: byte_to_line_col(
+                                    index + grouped_parts.get(1).unwrap().len(),
+                                    &source,
+                                ),
+                            };
+                            let feature_with_attribute_constraint =
+                                format!("{}.{}", grouped_parts[1], grouped_parts[0]);
+                            text_edit_vector.push(TextEdit {
+                                range: constraint_range,
+                                new_text: feature_with_attribute_constraint,
+                            });
                         }
                     }
                 }
             }
         }
-
-        // all allowed characters before and after the feature, so as not to replace all occurrences of the string if they are only substrings of another string
-        let allowed_prefix_suffix = vec![' ', '>', '<', '=', '(', ')', '\r'];
-
-        /*
-        //TODO: fix Fehler, um Range richtig zu erhalten und Chars zuvor und danach zu überprüfen
-        // Find the end position at the end of the respective line and create the new range
-        while end_byte + grouped_parts.get(1).unwrap().len() + 1 < source.len_chars() {
-            let part = source
-                .slice(end_byte..end_byte + grouped_parts.get(1).unwrap().len())
-                .as_str()
-                .unwrap();
-
-            if part.contains(grouped_parts.get(1).unwrap().to_owned())
-                && allowed_prefix_suffix
-                    .contains(&source.slice(end_byte - 1..end_byte).as_str().unwrap())
-                && allowed_prefix_suffix.contains(
-                    &source
-                        .slice(
-                            end_byte + grouped_parts.get(1).unwrap().len()
-                                ..grouped_parts.get(1).unwrap().len() + 1,
-                        )
-                        .as_str()
-                        .unwrap(),
-                )
-            {
-                let constraint_range: Range = Range {
-                    start: (byte_to_line_col(end_byte, &source)),
-                    end: (byte_to_line_col(
-                        end_byte + grouped_parts.get(1).unwrap().len(),
-                        &source,
-                    )),
-                };
-                let feature_with_attribute_constraint =
-                    format!("{}.{}", grouped_parts[1], grouped_parts[0]);
-                text_edit_vector.push(TextEdit {
-                    range: constraint_range,
-                    new_text: feature_with_attribute_constraint,
-                });
-            }
-            end_byte += 1;
-        }
-        */
 
         // assemble the corresponding code_action as a solution
         let code_action_add_type_as_attribute = CodeAction {
