@@ -451,7 +451,7 @@ pub fn drop_constraint(
         return Ok(None);
     }
 }
-
+/// Adds the quickfix to roll out sum() functions
 pub fn convert_sum_constraint(
     params: CodeActionParams,
     diagnostic: Diagnostic,
@@ -544,7 +544,7 @@ pub fn convert_sum_constraint(
             let result = constraint.replacen(&cons, res.as_str(), 1);
 
             let code_action_add_type_as_attribute = CodeAction {
-                title: format!("Enroll sum() function"),
+                title: format!("Roll out sum() function"),
                 kind: Some(CodeActionKind::QUICKFIX),
                 edit: Some(WorkspaceEdit {
                     changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
