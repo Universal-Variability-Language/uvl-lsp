@@ -274,7 +274,6 @@ pub fn wrong_language_level_constraint(
     snapshot: std::result::Result<Option<(Draft, Arc<RootGraph>)>, tower_lsp::jsonrpc::Error>,
 ) -> Result<Option<CodeActionResponse>> {
     let mut result: Vec<CodeActionOrCommand> = vec![];
-    info! {"in wrong_language_level_constraint"}
     match add_language_level(params.clone(), diagnostic.clone(), snapshot.clone()) {
         Ok(Some(v)) => result.append(v.to_owned().as_mut()),
         _ => (),
@@ -460,21 +459,7 @@ pub fn convert_sum_constraint(
 ) -> Result<Option<CodeActionResponse>> {
     if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot {
         let start_byte = byte_offset(&diagnostic.range.start, &source);
-        let mut end_byte = byte_offset(&diagnostic.range.end, &source);
-
-        info!("source: {:?}", source);
-
-        while end_byte < source.len_chars()
-            && source.slice(end_byte - 1..end_byte).as_str().unwrap() != "\r"
-        {
-            end_byte += 1;
-        }
-
-        let new_range: Range = Range {
-            start: (diagnostic.range.start),
-            end: (byte_to_line_col(end_byte, &source)),
-        };
-
+        let end_byte = byte_offset(&diagnostic.range.end, &source);
         let constraint = source
             .slice(start_byte..end_byte)
             .as_str()
@@ -482,64 +467,106 @@ pub fn convert_sum_constraint(
             .replace("\n", "")
             .replace("\r", "")
             .to_string();
+        //quickfix is only neccessary if it is a sum() function
+        if constraint.contains("sum(") {
+            // find the attribute name
+            let constraint_parts: Vec<&str> = constraint.split_whitespace().collect();
+            let start_bytes = constraint_parts[0].find("(").unwrap_or(0) + 1;
+            let end_bytes = constraint_parts[0]
+                .find(")")
+                .unwrap_or(constraint_parts[0].len());
+            let attribute = &constraint_parts[0][start_bytes..end_bytes];
 
-        let constraint_parts: Vec<&str> = constraint.split_whitespace().collect();
+            // find all occurances of the attribute
+            let mut res = String::new();
+            let mut attribute_range_start_byte = byte_offset(&Position::new(0, 0), &source);
+            let mut attribute_range_end_byte = attribute_range_start_byte;
+            let mut is_not_constraints = true;
+            let types = ["Integer", "String", "Real", "Boolean"];
 
-        let start_bytes = constraint_parts[0].find("(").unwrap_or(0) + 1;
-        let end_bytes = constraint_parts[0]
-            .find(")")
-            .unwrap_or(constraint_parts[0].len());
-        let attribute = &constraint_parts[0][start_bytes..end_bytes];
+            //check for attribute line by line
+            while attribute_range_end_byte < source.len_chars() && is_not_constraints {
+                attribute_range_end_byte += 1;
+                attribute_range_start_byte = attribute_range_end_byte;
+                while source
+                    .slice(attribute_range_end_byte - 1..attribute_range_end_byte)
+                    .as_str()
+                    .unwrap()
+                    != "\r"
+                    && attribute_range_end_byte < source.len_chars()
+                {
+                    attribute_range_end_byte += 1;
+                }
 
-        let source_string = source.slice(0..source.len_chars()).as_str().unwrap();
-        let source_parts: Vec<&str> = source_string.split_whitespace().collect();
-
-        let mut res = String::new();
-        for (index, element) in source_parts.iter().enumerate() {
-            if element.contains("constraints") {
-                break;
-            }
-            if element.contains(&attribute) {
-                if res.is_empty() {
-                    res.push_str(source_parts.get(index - 1).unwrap());
-                    res.push_str(".");
-                    res.push_str(attribute);
-                } else {
-                    res.push_str(" + ");
-                    res.push_str(source_parts.get(index - 1).unwrap());
-                    res.push_str(".");
-                    res.push_str(attribute);
+                let source_string = source
+                    .slice(attribute_range_start_byte..attribute_range_end_byte)
+                    .as_str()
+                    .unwrap();
+                let source_parts: Vec<&str> = source_string.split_whitespace().collect();
+                //stop checking for attribute if the constraint section is reached
+                for element in source_parts.iter() {
+                    if element.contains("constraints") && source_parts.len() == 1 {
+                        let is_constraint_key = source
+                            .slice(attribute_range_start_byte..attribute_range_start_byte + 11)
+                            .as_str()
+                            .unwrap();
+                        if is_constraint_key == "constraints" {
+                            is_not_constraints = false;
+                            break;
+                        }
+                    }
+                    // append feature to sum if it contains the attribute
+                    if element.contains(&attribute) {
+                        if res.is_empty() {
+                            //if feature has type the feature name is in index 1
+                            if types.contains(source_parts.get(0).unwrap()) {
+                                res.push_str(source_parts.get(1).unwrap());
+                            } else {
+                                res.push_str(source_parts.get(0).unwrap());
+                            }
+                            res.push_str(".");
+                            res.push_str(attribute);
+                        } else {
+                            res.push_str(" + ");
+                            if types.contains(source_parts.get(0).unwrap()) {
+                                res.push_str(source_parts.get(1).unwrap());
+                            } else {
+                                res.push_str(source_parts.get(0).unwrap());
+                            }
+                            res.push_str(".");
+                            res.push_str(attribute);
+                        }
+                    }
                 }
             }
+            res = format!("({})", res);
+            let cons = format!("sum({})", attribute);
+            let result = constraint.replacen(&cons, res.as_str(), 1);
+
+            let code_action_add_type_as_attribute = CodeAction {
+                title: format!("Enroll sum() function"),
+                kind: Some(CodeActionKind::QUICKFIX),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
+                        params.text_document.uri.clone(),
+                        vec![TextEdit {
+                            range: diagnostic.range,
+                            new_text: result,
+                        }],
+                    )])),
+                    document_changes: None,
+                    change_annotations: None,
+                }),
+                is_preferred: Some(true),
+                diagnostics: Some(vec![diagnostic.clone()]),
+                ..Default::default()
+            };
+            return Ok(Some(vec![CodeActionOrCommand::CodeAction(
+                code_action_add_type_as_attribute,
+            )]));
+        } else {
+            return Ok(None);
         }
-        info!("------re: {:?}", res);
-        res = format!("({})", res);
-        let cons = format!("sum({})", attribute);
-        let result = constraint.replacen(&cons, res.as_str(), 1);
-
-        info!("------result: {:?}", result);
-
-        let code_action_add_type_as_attribute = CodeAction {
-            title: format!("convert sum() to Core "),
-            kind: Some(CodeActionKind::QUICKFIX),
-            edit: Some(WorkspaceEdit {
-                changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
-                    params.text_document.uri.clone(),
-                    vec![TextEdit {
-                        range: new_range,
-                        new_text: result,
-                    }],
-                )])),
-                document_changes: None,
-                change_annotations: None,
-            }),
-            is_preferred: Some(true),
-            diagnostics: Some(vec![diagnostic.clone()]),
-            ..Default::default()
-        };
-        return Ok(Some(vec![CodeActionOrCommand::CodeAction(
-            code_action_add_type_as_attribute,
-        )]));
     } else {
         return Ok(None);
     }
