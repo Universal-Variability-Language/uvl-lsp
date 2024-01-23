@@ -300,7 +300,7 @@ pub fn add_language_level(
     diagnostic: Diagnostic,
     snapshot: std::result::Result<Option<(Draft, Arc<RootGraph>)>, tower_lsp::jsonrpc::Error>,
 ) -> Result<Option<CodeActionResponse>> {
-    if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot.clone() {
+    if let Ok(Some((Draft::UVL { source, .. }, ..))) = snapshot {
         let reg_sub_lvl = Regex::new(r"\[.*\]").unwrap(); // get position of include
         let reg_sub = Regex::new(r"^[^\(]*").unwrap(); // get position of include
         let reg_indent = Regex::new(r"^[^(n\\)]*").unwrap(); // get position of include
