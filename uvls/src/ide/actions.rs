@@ -467,8 +467,8 @@ pub fn convert_sum_constraint(
             .replace("\n", "")
             .replace("\r", "")
             .to_string();
-        //quickfix is only neccessary if it is a sum() function
-        if constraint.contains("sum(") {
+        //quickfix is only neccessary if it is a sum() or avg() function
+        if constraint.contains("sum(") || constraint.contains("avg(") {
             // find the attribute name
             let constraint_parts: Vec<&str> = constraint.split_whitespace().collect();
             let start_bytes = constraint_parts[0].find("(").unwrap_or(0) + 1;
@@ -483,6 +483,7 @@ pub fn convert_sum_constraint(
             let mut attribute_range_end_byte = attribute_range_start_byte;
             let mut is_not_constraints = true;
             let types = ["Integer", "String", "Real", "Boolean"];
+            let mut attribute_counter = 0;
 
             //check for attribute line by line
             while attribute_range_end_byte < source.len_chars() && is_not_constraints {
@@ -526,6 +527,7 @@ pub fn convert_sum_constraint(
                             }
                             res.push_str(".");
                             res.push_str(attribute);
+                            attribute_counter += 1;
                         } else {
                             res.push_str(" + ");
                             if types.contains(source_parts.get(0).unwrap()) {
@@ -535,16 +537,24 @@ pub fn convert_sum_constraint(
                             }
                             res.push_str(".");
                             res.push_str(attribute);
+                            attribute_counter += 1;
                         }
                     }
                 }
             }
             res = format!("({})", res);
-            let cons = format!("sum({})", attribute);
-            let result = constraint.replacen(&cons, res.as_str(), 1);
+            let mut cons = format!("sum({})", attribute);
+            let mut result = constraint.replacen(&cons, res.as_str(), 1);
+            let mut title = format!("Roll out sum() function");
+            if constraint.contains("avg(") {
+                cons = format!("avg({})", attribute);
+                res = format!("({} / {})", res, attribute_counter);
+                result = constraint.replacen(&cons, res.as_str(), 1);
+                title = format!("Roll out avg() function");
+            }
 
             let code_action_add_type_as_attribute = CodeAction {
-                title: format!("Roll out sum() function"),
+                title: title,
                 kind: Some(CodeActionKind::QUICKFIX),
                 edit: Some(WorkspaceEdit {
                     changes: Some(HashMap::<Url, Vec<TextEdit>>::from([(
