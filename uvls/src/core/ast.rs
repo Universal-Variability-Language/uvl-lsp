@@ -579,6 +579,17 @@ impl AstDocument {
                 if cur != root {
                     prefix.push(name);
                     explore = f(cur, &prefix, depth);
+                } else {
+                    match root {
+                        Symbol::Dir(..) => match cur {
+                            Symbol::Dir(..) => {
+                                prefix.push(name);
+                                explore = f(cur, &prefix, depth);
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    }
                 }
             }
             if explore {
