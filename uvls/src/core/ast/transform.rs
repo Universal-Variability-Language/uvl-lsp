@@ -597,7 +597,7 @@ fn opt_function_args(state: &mut VisitorState) -> Option<Vec<Path>> {
     })
 }
 
-fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
+fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel, is_constraint: bool) {
     if state.ast.includes.is_empty() {
         // no includes means, that implicitly everything is included
         return ();
@@ -690,14 +690,25 @@ fn check_langlvls(state: &mut VisitorState, searched_lang_lvl: LanguageLevel) {
             LanguageLevelType::Any,
         ),
     } {
-        state.push_error_with_type(
-            10,
-            format!(
-                "Operation does not correspond includes. Please include {:?}",
-                searched_lang_lvl
-            ),
-            ErrorType::WrongLanguageLevel,
-        )
+        if is_constraint {
+            state.push_error_with_type(
+                10,
+                format!(
+                    "Operation does not correspond includes. Please include {:?} or convert to the included language level.",
+                    searched_lang_lvl
+                ),
+                ErrorType::WrongLanguageLevelConstraint,
+            )
+        } else {
+            state.push_error_with_type(
+                10,
+                format!(
+                    "Operation does not correspond includes. Please include {:?} or convert to the included language level.",
+                    searched_lang_lvl
+                ),
+                ErrorType::WrongLanguageLevel,
+            )
+        }
     }
 }
 
@@ -789,7 +800,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
                     state.goto_field("lhs");
                     let lhs = opt_numeric(state)?;
                     state.goto_field("op");
-                    check_langlvls(state, LanguageLevel::Arithmetic(vec![]));
+                    check_langlvls(state, LanguageLevel::Arithmetic(vec![]), false);
                     state.goto_field("rhs");
                     let rhs = opt_numeric(state)?;
                     Some(Expr::Binary {
@@ -813,6 +824,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
                 check_langlvls(
                     state,
                     LanguageLevel::Arithmetic(vec![LanguageLevelArithmetic::Aggregate]),
+                    true,
                 );
                 opt_aggregate(state)
             }
@@ -820,6 +832,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
                 check_langlvls(
                     state,
                     LanguageLevel::Type(vec![LanguageLevelType::StringConstraints]),
+                    true,
                 );
                 if state.child_by_name("tail").is_some() {
                     state.push_error(10, "tailing comma not allowed");
@@ -843,6 +856,7 @@ fn opt_numeric(state: &mut VisitorState) -> Option<ExprDecl> {
                 check_langlvls(
                     state,
                     LanguageLevel::Type(vec![LanguageLevelType::NumericConstraints]),
+                    true,
                 );
                 opt_integer(state)
             }
@@ -878,6 +892,8 @@ fn opt_equation(node: Node) -> Option<EquationOP> {
 }
 
 fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
+    info!("first ---------sind in op-constraint");
+
     let span = state.node().byte_range();
     state.goto_named();
     match state.kind() {
@@ -904,7 +920,8 @@ fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
                     state.goto_field("lhs");
                     let lhs = opt_constraint(state)?;
                     state.goto_field("op");
-                    check_langlvls(state, LanguageLevel::Boolean(vec![]));
+                    info!("sind in op-constraint logic");
+                    check_langlvls(state, LanguageLevel::Boolean(vec![]), true);
                     state.goto_field("rhs");
                     let rhs = opt_constraint(state)?;
                     Some(Constraint::Logic {
@@ -916,7 +933,8 @@ fn opt_constraint(state: &mut VisitorState) -> Option<ConstraintDecl> {
                     state.goto_field("lhs");
                     let lhs = opt_numeric(state)?;
                     state.goto_field("op");
-                    check_langlvls(state, LanguageLevel::Arithmetic(vec![]));
+                    info!("sind in op-constraint equation");
+                    check_langlvls(state, LanguageLevel::Arithmetic(vec![]), true);
                     state.goto_field("rhs");
                     let rhs = opt_numeric(state)?;
                     Some(Constraint::Equation {
@@ -1080,6 +1098,7 @@ fn visit_feature(
                 check_langlvls(
                     state,
                     LanguageLevel::Arithmetic(vec![LanguageLevelArithmetic::FeatureCardinality]),
+                    false,
                 );
                 opt_cardinality(n, state)
             })
@@ -1191,7 +1210,7 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
             visit_feature(state, parent, name, Type::Bool, *duplicate);
         }
         "typed_feature" => {
-            check_langlvls(state, LanguageLevel::Type(vec![]));
+            check_langlvls(state, LanguageLevel::Type(vec![]), false);
             let (name, ty) = visit_children(state, |state| {
                 state.goto_field("type");
                 let ty = match &*state.slice_raw(state.node().byte_range()) {
@@ -1235,6 +1254,7 @@ fn visit_blk_decl(state: &mut VisitorState, parent: Symbol, duplicate: &bool) {
             check_langlvls(
                 state,
                 LanguageLevel::Boolean(vec![LanguageLevelBoolean::GroupCardinality]),
+                false,
             );
             let card = opt_cardinality(state.node(), state).unwrap_or(Cardinality::Fixed);
             visit_group(state, parent, GroupMode::Cardinality(card), duplicate);

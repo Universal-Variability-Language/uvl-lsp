@@ -732,9 +732,9 @@ impl LanguageServer for Backend {
         }
     }
 
+    /// Checks if there is a quick fix for the current diagnostic message
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         for diagnostic in params.clone().context.diagnostics {
-            // Checks if there is a quick fix for the current diagnostic message
             match diagnostic.clone().data {
                 Some(serde_json::value::Value::Number(number)) => {
                     match ErrorType::from_u32(number.as_u64().unwrap_or(0) as u32) {
@@ -768,11 +768,18 @@ impl LanguageServer for Backend {
                             )
                         }
                         ErrorType::WrongLanguageLevel => {
-                            return actions::add_language_level(
+                            return actions::wrong_language_level(
                                 params.clone(),
                                 diagnostic,
                                 self.snapshot(&params.text_document.uri, false).await,
-                            );
+                            )
+                        }
+                        ErrorType::WrongLanguageLevelConstraint => {
+                            return actions::wrong_language_level_constraint(
+                                params.clone(),
+                                diagnostic,
+                                self.snapshot(&params.text_document.uri, false).await,
+                            )
                         }
                     }
                 }
