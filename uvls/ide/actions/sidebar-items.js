@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["add_indentation","add_language_level","reference_to_string","rename_dash","starts_with_number","surround_with_double_quotes"]};

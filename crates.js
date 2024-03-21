@@ -1,0 +1,1 @@
+window.ALL_CRATES = ["tree_sitter_uvl","uvls"];

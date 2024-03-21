@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["FileID","RootGraph","RootSymbol"],"type":["AstFiles","ConfigFiles","Snapshot"]};
