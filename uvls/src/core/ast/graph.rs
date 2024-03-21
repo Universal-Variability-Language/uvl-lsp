@@ -87,7 +87,7 @@ impl<'a> VisitorGraph<'a> {
     /// Generate Graph Code:
 
     fn begin(&mut self) {
-        self.dot.push_str(&"digraph FeatureModel {\nrankdir=\"TB\"\nnewrank=true\nnode [style=filled fontname=\"Arial Unicode MS, Arial\"];\n\n".to_string());
+        self.dot.push_str(&"digraph FeatureModel {\nrankdir=\"TB\"\nnewrank=true\nbgcolor=\"#1e1e1e\"\nedge [color=white]\nnode [style=filled fontcolor=\"white\" fontname=\"Arial Unicode MS, Arial\"];\n\n".to_string());
     }
 
     fn add_feature(&mut self, feature: GraphNode) {
@@ -168,8 +168,8 @@ impl<'a> VisitorGraph<'a> {
 
     fn begin_constraints(&mut self) {
         self.dot.push_str(&"\n\nsubgraph cluster_constraints{
-    label=\"Constraints\"
-    constraints [shape=\"box\" color=\"white\" label=<<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" cellborder=\"0\">
+    label=\"Constraints\" color=\"white\" fontcolor=\"white\"
+    constraints [shape=\"box\" color=\"#1e1e1e\" label=<<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" cellborder=\"0\">
     "
         .to_string());
     }
@@ -751,7 +751,7 @@ pub fn visit_root(source: Rope, tree: Tree, uri: Url) -> Graph {
 
 // Constants for Graph Drawing:
 
-const FEATURE_COLOR: &str = "#CCCCFD";
+const FEATURE_COLOR: &str = "#ABACEA";
 const FEATURE_ABSTRACT_COLOR: &str = "#F2F2FF";
 
 // Defined by https://graphviz.org/docs/attr-types/arrowType/

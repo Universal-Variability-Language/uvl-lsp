@@ -2,7 +2,7 @@
   "name": "uvls-code",
   "displayName": "UVLS - Universal Variability Language Server",
   "description": "VSCode frontend for UVLS",
-  "version": "0.0.11",
+  "version": "0.4.0",
   "publisher": "caradhras",
   "icon": "assets/uvl-logo.PNG",
   "engines": {

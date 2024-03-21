@@ -39,9 +39,9 @@ log-panics = { version = "2.1.0", features = ["with-backtrace"] }
 tokio-util = "0.7.4"
 serde_json = "1.0"
 walkdir = "2"
-tree-sitter-uvl = { path = "../tree-sitter-uvl" }
-tree-sitter-json = { git = "https://github.com/tree-sitter/tree-sitter-json" }
-hashbrown = "0.13.2"
+hashbrown = "0.14.3"
+tree-sitter-uvl = {path="../tree-sitter-uvl"}
+tree-sitter-json = {git="https://github.com/tree-sitter/tree-sitter-json", rev = "c5a9a9af069de3fe0ef5fa2fa001b6a2e44d75b2"}
 regex = "1"
 axum = { version = "0.6.6", features = ["ws"] }
 dioxus = { version = "*" }
