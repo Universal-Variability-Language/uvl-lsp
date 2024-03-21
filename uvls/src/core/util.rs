@@ -106,6 +106,51 @@ pub fn byte_to_line_col(byte: usize, source: &Rope) -> Position {
     }
 }
 
+pub fn find_first_byte(target_str: &str, source: &Rope) -> Option<usize> {
+    let target_bytes = target_str.as_bytes();
+
+    for (index, _byte) in source.bytes().enumerate() {
+        if index + target_bytes.len() > source.len_bytes() {
+            break; // Avoid index out of bounds
+        }
+
+        let slice = &source.slice(index..index + target_bytes.len());
+        if slice.bytes().eq(target_bytes.iter().copied()) {
+            return Some(index);
+        }
+    }
+
+    None
+}
+
+pub fn find_all_first_bytes(target_str: &str, source: &Rope) -> Vec<usize> {
+    let target_bytes = target_str.as_bytes();
+    let mut indices = Vec::new();
+
+    let mut index = 0;
+    while index < source.len_bytes() {
+        if let Some(byte_index) = source
+            .slice(index..)
+            .bytes()
+            .position(|b| b == target_bytes[0])
+        {
+            let real_index = byte_index + index;
+            let slice = &source.slice(real_index..real_index + target_bytes.len());
+
+            if slice.bytes().eq(target_bytes.iter().copied()) {
+                indices.push(real_index);
+                index = real_index + 1;
+            } else {
+                index = real_index + 1;
+            }
+        } else {
+            break;
+        }
+    }
+
+    indices
+}
+
 pub fn containing_blk(mut node: Node) -> Option<Node> {
     node = node.parent()?;
     while node.kind() != "blk" {
