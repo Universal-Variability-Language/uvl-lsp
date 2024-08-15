@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["TextObjectKind"],"fn":["attribute_prefix","find_definitions","find_references","find_references_symboles","find_text_object","find_text_object_impl","goto_definition","rename","reverse_resolve","whole_expr"],"struct":["TextObject"]};

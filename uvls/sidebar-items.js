@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["load_all_blocking","load_blocking","main","server_main","shutdown_error"],"mod":["core","ide","smt","webview"],"struct":["Backend","Settings"]};

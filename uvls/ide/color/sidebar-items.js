@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ColorUpdate"],"fn":["fast_lsp_range","modifier_bitset","modifiers","token_index","token_types"],"struct":["AbsToken","FileState","State"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["PARSER_JSON","PARSER_UVL"],"fn":["move_span","parse","parse_json","parse_lang_lvl","parse_lang_lvl_path","parse_name","parse_or_lang_lvl","parse_path"],"trait":["SymbolSlice"]};
