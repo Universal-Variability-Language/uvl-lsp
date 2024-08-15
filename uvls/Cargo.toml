@@ -40,8 +40,8 @@ tree-sitter-json = {git="https://github.com/tree-sitter/tree-sitter-json", rev =
 hashbrown = "0.13.2"
 regex = "1"
 axum = {version = "0.6.6", features = ["ws"]}
-dioxus = { version = "*" }
-dioxus-liveview = { version = "*", features = ["axum"] }
+dioxus = { version = "=0.4.3" }
+dioxus-liveview = { version = "=0.4.3", features = ["axum"] }
 serde = "1.0.152"
 enumflags2 = "0.7.5"
 get-port = "4.0.0"
