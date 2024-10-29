@@ -377,11 +377,11 @@ fn FileEntry(cx: Scope, node: UIEntry, leaf: bool, sym: ModuleSymbol, tag: u8) -
                                 ui_task.send(UIAction::ToggleEntry(*sym,*tag))
                             },
                             if node.open{
-                                rsx!{Icon{icon:Icon::Collapse}}
+                                rsx!{Icon{icon:Icon::Expand}}
 
                             }
                             else{
-                                rsx!{Icon{icon:Icon::Expand}}
+                                rsx!{Icon{icon:Icon::Collapse}}
 
                             }
                         }
