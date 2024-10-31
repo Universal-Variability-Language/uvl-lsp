@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["InlayEvent","InlaySource"],"fn":["generate","inlay_handler"],"struct":["InlayHandler","InlayRequest"]};

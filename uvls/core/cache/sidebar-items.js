@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FSEdge","FSNode"],"fn":["find_root_files"],"struct":["Cache","FileSystem","LinkedAstDocument"]};

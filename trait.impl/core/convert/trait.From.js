@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["uvls",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.82.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;&amp;[Ustr]&gt; for <a class=\"struct\" href=\"uvls/ide/completion/struct.ModulePath.html\" title=\"struct uvls::ide::completion::ModulePath\">ModulePath</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.82.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;<a class=\"enum\" href=\"uvls/core/ast/def/enum.Type.html\" title=\"enum uvls::core::ast::def::Type\">Type</a>&gt; for <a class=\"enum\" href=\"uvls/ide/completion/enum.CompletionKind.html\" title=\"enum uvls::ide::completion::CompletionKind\">CompletionKind</a>"],["impl&lt;'__enum_kinds1&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.82.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;&amp;'__enum_kinds1 <a class=\"enum\" href=\"uvls/core/ast/def/enum.Symbol.html\" title=\"enum uvls::core::ast::def::Symbol\">Symbol</a>&gt; for <a class=\"enum\" href=\"uvls/core/ast/def/enum.SymbolKind.html\" title=\"enum uvls::core::ast::def::SymbolKind\">SymbolKind</a>"],["impl&lt;'__enum_kinds1&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.82.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;<a class=\"enum\" href=\"uvls/core/ast/def/enum.Symbol.html\" title=\"enum uvls::core::ast::def::Symbol\">Symbol</a>&gt; for <a class=\"enum\" href=\"uvls/core/ast/def/enum.SymbolKind.html\" title=\"enum uvls::core::ast::def::SymbolKind\">SymbolKind</a>"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[1591]}

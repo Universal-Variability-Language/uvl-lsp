@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["byte_offset","char_offset","containing_blk","create_new_uvl","header_kind","is_config","lsp_position","lsp_range","maybe_cancel","node_range","node_source"],"struct":["CancelledError","ParseConstants","TS"],"type":["Result"]};

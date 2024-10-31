@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ResolveState"],"fn":["commit_expr","common_prefix","estimate_types","gather_expr_options","resolve","resolve_attributes","resolve_attributes_with_feature","resolve_constraint","resolve_file","resolve_with_bind","select_type"],"struct":["TypeResolveContext"],"trait":["AstContainer"],"type":["RefMap"]};

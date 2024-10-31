@@ -1,0 +1,53 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="LSP json-rpc interface with tower, system initialization etc."><title>uvls - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../static.files/rustdoc-492a78a4a87dcc01.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="uvls" data-themes="" data-resource-suffix="" data-rustdoc-version="1.82.0 (f6e511eec 2024-10-15)" data-channel="1.82.0" data-search-js="search-a99f1315e7cc5121.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-921df33f47b8780c.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-3b12f09e550e0385.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../uvls/index.html">uvls</a><span class="version">0.1.7</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section><ul class="block"><li><a href="#modules">Modules</a></li><li><a href="#structs">Structs</a></li><li><a href="#functions">Functions</a></li></ul></section></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <a class="mod" href="#">uvls</a><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><span class="out-of-band"><a class="src" href="../src/uvls/main.rs.html#1-850">source</a> · <button id="toggle-all-docs" title="collapse all docs">[<span>&#x2212;</span>]</button></span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>LSP json-rpc interface with tower, system initialization etc.</p>
+<p>The server is written as a asynchronous tokio application. The following list shows the different subsystems of the server:</p>
+<ul>
+<li>LSP lifecycle
+<ul>
+<li>main.rs - LSP json-rpc interface with tower, system initialization etc.</li>
+<li>core/cache.rs - Find files control what files need to be relinked</li>
+<li>core/document.rs - File update logic</li>
+<li>core/pipeline.rs - Pipeline: multi-stage compiler, it provides access to files in various compilation stages. Constists of multiple subsystems like: green tree parsing, linking, error reporting, smt checking etc.</li>
+<li>core/semantic.rs - Contains a central struct RootGraph. This struct includes the latest linked uvl and config files, it can be thought of as a snapshot of all related documents. It can be accessed through the pipeline.</li>
+</ul>
+</li>
+<li>Basic UVL language support
+<ul>
+<li>green tree parsing (tree-sitter):
+<ul>
+<li>core/parse.rs</li>
+<li>core/query.rs</li>
+</ul>
+</li>
+<li>green tree to red tree(AST ECS) transformer
+<ul>
+<li>core/ast/def.rs - Common AST types.</li>
+<li>core/ast/transform.rs - The transformer implementation</li>
+<li>core/ast/visitor.rs - Util functions and traits for the transformer</li>
+<li>core/ast.rs - AstDocument: main interface to the AST ECS.</li>
+</ul>
+</li>
+<li>name resolution and type checking
+<ul>
+<li>core/resolve.rs - resolve_file: Type resolving for an AstDocument, resolve_*: nameresultion under various conditions.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>SMT
+<ul>
+<li>core/module.rs: Module is a uvl instance containing all sub instances of an arbitrary root file.</li>
+<li>smt/parse.rs: Turn smt-lib strings to rust. (currently incomplete)</li>
+<li>smt/smt_lib.rs: SMTModule: A smt-lib module equivalent to some UVL source module. uvl2smt: Turn some uvl module into a SMTModule.</li>
+<li>smt/smt.rs: SmtSolver: Z3 process interface(over stdio). check_handler: Runs smt-analysis on new files when the Rootgraph changes. web_view_handler runs smt-analysis on configurations.</li>
+</ul>
+</li>
+<li>Configuration:
+<ul>
+<li>core/config.rs: Common config parsing and lifecycle utils.</li>
+<li>webview.rs: Config Webview “backend” (both backend and frontend run on the server have a look at)</li>
+<li>webview/frontend: Config Webview “frontend”.</li>
+</ul>
+</li>
+<li>IDE features like completion etc. are all in the ide module.</li>
+</ul>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="mod" href="core/index.html" title="mod uvls::core">core</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">This Module Represents the UVL Language Server (LSP) Logic</div></li><li><div class="item-name"><a class="mod" href="ide/index.html" title="mod uvls::ide">ide</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">This Module handles IDE Specific Logic (eg. Highlights, auto completion, code actions)</div></li><li><div class="item-name"><a class="mod" href="smt/index.html" title="mod uvls::smt">smt</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">Implements the semantic analysis using Z3</div></li><li><div class="item-name"><a class="mod" href="webview/index.html" title="mod uvls::webview">webview</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">This web interface allows simple configuration of uvl models within the sever.</div></li></ul><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="struct" href="struct.Backend.html" title="struct uvls::Backend">Backend</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">The LSP</div></li><li><div class="item-name"><a class="struct" href="struct.Settings.html" title="struct uvls::Settings">Settings</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">Settings for some client config.</div></li></ul><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="fn" href="fn.load_all_blocking.html" title="fn uvls::load_all_blocking">load_<wbr>all_<wbr>blocking</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">load all files under given a path</div></li><li><div class="item-name"><a class="fn" href="fn.load_blocking.html" title="fn uvls::load_blocking">load_<wbr>blocking</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">load a file, this is tricky because the editor can also load it at the same time</div></li><li><div class="item-name"><a class="fn" href="fn.main.html" title="fn uvls::main">main</a><span title="Restricted Visibility">&nbsp;🔒</span> </div></li><li><div class="item-name"><a class="fn" href="fn.server_main.html" title="fn uvls::server_main">server_<wbr>main</a><span title="Restricted Visibility">&nbsp;🔒</span> </div><div class="desc docblock-short">Start the backend LSP server</div></li><li><div class="item-name"><a class="fn" href="fn.shutdown_error.html" title="fn uvls::shutdown_error">shutdown_<wbr>error</a><span title="Restricted Visibility">&nbsp;🔒</span> </div></li></ul></section></div></main></body></html>
